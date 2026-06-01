@@ -396,5 +396,16 @@ export async function startKiln(
     });
   });
 
+  // 11. Register /sw.js service worker endpoint if enabled
+  if ((config as any).serviceWorker?.enabled) {
+    const { generateServiceWorker } = await import('./sw-template.js');
+    const swContent = generateServiceWorker((config as any).serviceWorker);
+    adapter.registerPage('/sw.js', [], async (_req, res) => {
+      res.headers['content-type'] = 'application/javascript; charset=utf-8';
+      res.headers['cache-control'] = 'no-cache';
+      res.html(swContent);
+    });
+  }
+
   return manifest;
 }
