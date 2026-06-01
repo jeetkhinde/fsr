@@ -25,7 +25,10 @@ export async function loadHooks(appRoot: string): Promise<KilnHooks> {
 }
 
 export const serverHooks = (hooks: KilnHooks) => (app: Elysia) => {
-  if (hooks.onRequest) app.onRequest(hooks.onRequest);
-  if (hooks.onError) app.onError(hooks.onError);
-  return app;
+  let plugin = new Elysia({ name: 'kiln-server-hooks' });
+  if (hooks.onRequest) plugin = plugin.onRequest(hooks.onRequest);
+  if (hooks.onError) plugin = plugin.onError(hooks.onError);
+  if (hooks.onStart) plugin = plugin.onStart(hooks.onStart);
+  if (hooks.onStop) plugin = plugin.onStop(hooks.onStop);
+  return app.use(plugin);
 };
