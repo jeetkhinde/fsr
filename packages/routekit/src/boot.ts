@@ -1,13 +1,8 @@
-import { createRequire } from 'module';
 import * as path from 'path';
 import { pathToFileURL, fileURLToPath } from 'url';
 import { KILN_LIVE_CLIENT_SCRIPT } from './live-client-script.js';
 
-const appRequire = createRequire(path.resolve(process.cwd(), 'package.json'));
-const ReactDOMServer = appRequire('react-dom/server');
-
 import { discoverRoutes } from './discover.js';
-import { composeLayoutChain } from './layout-chain.js';
 import { extractPageOptions, extractLiveFields } from './page-options.js';
 import type { PageRoute, LayoutNode } from './manifest.js';
 import type {
@@ -140,6 +135,7 @@ export function buildPageHandler(
     // 5. Parallel load: all layout loads + page load
     let pageProps: any = {};
     const layoutPropsArr: any[] = new Array(layoutEntries.length).fill({});
+    let aborted = false;
 
     await Promise.all([
       // Page load
@@ -150,6 +146,7 @@ export function buildPageHandler(
           } catch (err: any) {
             if (err.type === 'Redirect') {
               res.redirect(err.message, err.status);
+              aborted = true;
               return;
             }
             throw err;
@@ -168,9 +165,10 @@ export function buildPageHandler(
       }),
     ]);
 
+    if (aborted) return;
+
     // 6. Bake all segments in parallel
     const pageComponent = module.default;
-    const layoutComponents = layoutEntries.map(({ module: lMod }) => lMod.default);
 
     const [pageBaked, ...layoutBaked] = await Promise.all([
       bakeSegment(pageComponent, pageProps, false),
@@ -283,7 +281,7 @@ export async function startKiln(
     }
 
     // Prebake at startup for pages with hasEntries && promoteAfter === 0
-    if (page.hasEntries && options.promoteAfter === 0 && typeof mod.entries === 'function') {
+    if (page.hasEntries && page.promoteAfter === 0 && typeof mod.entries === 'function') {
       Promise.resolve().then(async () => {
         try {
           const entries: Record<string, string>[] = await mod.entries();

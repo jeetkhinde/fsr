@@ -24,7 +24,7 @@ export function getActiveConnectionsCount(): number {
 export interface FsrHubStreamOptions {
   route: string;
   slots: string[];
-  watcher: FsrWatcher;
+  watcher?: FsrWatcher;
   config?: FsrHubConfig;
 }
 
@@ -33,13 +33,18 @@ export async function* fsrHubStream(
 ): AsyncGenerator<SSEEvent, void, unknown> {
   const { route, slots, watcher, config = defaultHubConfig } = options;
 
+  if (!watcher) {
+    yield { event: 'error', data: 'FSR watcher not configured' };
+    return;
+  }
+
   // Check connection counter
   if (activeConnectionsCount >= config.maxConnections) {
     throw new Error('SERVICE_UNAVAILABLE: FSR connection limit reached');
   }
 
   activeConnectionsCount++;
-  
+
   const emitter = watcher.getEmitter();
   const queue: SlotPatch[] = [];
   let resolveNext: ((value: void) => void) | null = null;
@@ -129,8 +134,11 @@ export async function* fsrHubStream(
 export async function fsrSnapshotHandler(
   route: string,
   slots: string[],
-  store: FsrStore
+  store: FsrStore | null | undefined
 ): Promise<Record<string, any>> {
+  if (!store) {
+    return {};
+  }
   const matchingSlots = await store.fetchSlotsForSnapshot(route, slots);
   const result: Record<string, any> = {};
 
