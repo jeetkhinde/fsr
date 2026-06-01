@@ -1,5 +1,5 @@
-import { LiveProp } from '@fsr/core';
-import type { LiveFieldMeta } from '@fsr/core';
+import { LiveProp } from '@kiln/core';
+import type { LiveFieldMeta } from '@kiln/core';
 
 export interface PageOptions {
   promoteAfter?: number;

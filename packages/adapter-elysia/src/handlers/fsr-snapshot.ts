@@ -1,5 +1,5 @@
-import type { PilcrowRequest, PilcrowResponse } from '@fsr/core';
+import type { KilnRequest, KilnResponse } from '@kiln/core';
 
-export async function handleFsrSnapshot(req: PilcrowRequest, res: PilcrowResponse) {
+export async function handleFsrSnapshot(req: KilnRequest, res: KilnResponse) {
   res.json({ snapshot: {} });
 }

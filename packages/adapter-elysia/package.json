@@ -1,7 +1,7 @@
 {
-  "name": "@fsr/adapter-elysia",
+  "name": "@kiln/adapter-elysia",
   "version": "0.1.0",
-  "description": "Elysia adapter for Pilcrow.js",
+  "description": "Elysia adapter for Kiln.js",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -16,13 +16,12 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@fsr/core": "workspace:*",
+    "@kiln/core": "workspace:*",
     "elysia": "^1.0.0",
     "elysia-compress": "^1.2.1"
   },
   "devDependencies": {
     "typescript": "^5.4.5",
-    "@types/node": "^20.12.7",
-    "@elysiajs/node": "^1.1.11"
+    "@types/node": "^20.12.7"
   }
 }

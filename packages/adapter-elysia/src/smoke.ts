@@ -1,5 +1,5 @@
 import { ElysiaAdapter } from './adapter.js';
-import type { PilcrowRequest, PilcrowResponse } from '@fsr/core';
+import type { KilnRequest, KilnResponse } from '@kiln/core';
 
 async function main() {
   console.log('Starting smoke test...');
@@ -11,11 +11,11 @@ async function main() {
     compression: false,
   });
 
-  adapter.registerPage('/', [], async (req: PilcrowRequest, res: PilcrowResponse) => {
+  adapter.registerPage('/', [], async (req: KilnRequest, res: KilnResponse) => {
     res.html('<html><body><h1>Hello from ElysiaAdapter</h1></body></html>');
   });
 
-  adapter.registerAction('/action', async (req: PilcrowRequest, res: PilcrowResponse) => {
+  adapter.registerAction('/action', async (req: KilnRequest, res: KilnResponse) => {
     res.json({ success: true, method: req.method });
   });
 

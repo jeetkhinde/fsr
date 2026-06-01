@@ -1,7 +1,7 @@
 import { createRequire } from 'module';
 import * as path from 'path';
 import { pathToFileURL, fileURLToPath } from 'url';
-import { PILCROW_LIVE_CLIENT_SCRIPT } from './live-client-script.js';
+import { KILN_LIVE_CLIENT_SCRIPT } from './live-client-script.js';
 
 const appRequire = createRequire(path.resolve(process.cwd(), 'package.json'));
 const React = appRequire('react');
@@ -12,13 +12,13 @@ import { composeLayoutChain } from './layout-chain.js';
 import { extractPageOptions, extractLiveFields } from './page-options.js';
 import type { PageRoute, LayoutNode } from './manifest.js';
 import type {
-  PilcrowRequest,
-  PilcrowResponse,
-  PilcrowConfig,
+  KilnRequest,
+  KilnResponse,
+  KilnConfig,
   ServerAdapter,
-} from '@fsr/core';
+} from '@kiln/core';
 
-const FSR_SCRIPT_TAG = '<script src="/_pilcrow/live.js" defer></script>';
+const FSR_SCRIPT_TAG = '<script src="/_kiln/live.js" defer></script>';
 
 /** Insert the FSR client script tag before </head>, or append if no </head>. */
 export function injectFsrScriptTag(html: string): string {
@@ -33,10 +33,10 @@ export function buildPageHandler(
   module: any,
   pageMeta: PageRoute,
   layouts: LayoutNode[],
-  config: PilcrowConfig,
+  config: KilnConfig,
   hasFsr = false
 ) {
-  return async (req: PilcrowRequest, res: PilcrowResponse) => {
+  return async (req: KilnRequest, res: KilnResponse) => {
     // 1. Execute page load if it exists
     let props: any = {};
     if (typeof module.load === 'function') {
@@ -87,7 +87,7 @@ export function buildPageHandler(
 }
 
 export function buildActionHandler(actions: Record<string, any>) {
-  return async (req: PilcrowRequest, res: PilcrowResponse) => {
+  return async (req: KilnRequest, res: KilnResponse) => {
     let actionName = '';
     for (const key of Object.keys(req.query)) {
       if (key.startsWith('/')) {
@@ -116,9 +116,9 @@ export function buildActionHandler(actions: Record<string, any>) {
   };
 }
 
-export async function startPilcrow(
+export async function startKiln(
   adapter: ServerAdapter,
-  config: PilcrowConfig,
+  config: KilnConfig,
   pagesDir: string,
   fsr?: { store: any; watcher: any }
 ) {
@@ -146,29 +146,29 @@ export async function startPilcrow(
     }
   }
 
-  // 4. Serve Silcrow browser runtime from @fsr/client (always)
+  // 4. Serve Silcrow browser runtime from @kiln/client (always)
   try {
-    const silcrowPath = fileURLToPath(import.meta.resolve('@fsr/client/silcrow.js'));
+    const silcrowPath = fileURLToPath(import.meta.resolve('@kiln/client/silcrow.js'));
     adapter.registerAsset('/_silcrow/silcrow.js', silcrowPath);
   } catch {
-    // @fsr/client not installed — silcrow.js unavailable
+    // @kiln/client not installed — silcrow.js unavailable
   }
 
   // 5. Serve FSR live client script when FSR is active
   if (fsr) {
-    adapter.registerPage('/_pilcrow/live.js', [], async (_req, res) => {
+    adapter.registerPage('/_kiln/live.js', [], async (_req, res) => {
       res.headers['content-type'] = 'application/javascript; charset=utf-8';
-      res.html(PILCROW_LIVE_CLIENT_SCRIPT);
+      res.html(KILN_LIVE_CLIENT_SCRIPT);
     });
   }
 
   // 6. Register FSR SSE hubs
   if (fsr) {
     const { store, watcher } = fsr;
-    adapter.registerSSE('/__pilcrow/fsr', async (req, res) => {
+    adapter.registerSSE('/__kiln/fsr', async (req, res) => {
       const route = req.query.route || '';
       const slots = (req.query.slots || '').split(',').filter(Boolean);
-      const { fsrHubStream } = await import('@fsr/engine' as any);
+      const { fsrHubStream } = await import('@kiln/engine' as any);
       const stream = fsrHubStream({
         route,
         slots,
@@ -182,15 +182,15 @@ export async function startPilcrow(
       res.sse(stream);
     });
 
-    adapter.registerSSE('/__pilcrow/fsr/snapshot', async (req, res) => {
+    adapter.registerSSE('/__kiln/fsr/snapshot', async (req, res) => {
       const route = req.query.route || '';
       const slots = (req.query.slots || '').split(',').filter(Boolean);
-      const { fsrSnapshotHandler } = await import('@fsr/engine' as any);
+      const { fsrSnapshotHandler } = await import('@kiln/engine' as any);
       const snapshot = await fsrSnapshotHandler(route, slots, store);
       res.json(snapshot);
     });
   } else {
-    adapter.registerSSE('/__pilcrow/fsr', async (req, res) => {
+    adapter.registerSSE('/__kiln/fsr', async (req, res) => {
       res.sse({
         async *[Symbol.asyncIterator]() {
           yield { event: 'ping', data: 'hello' };
@@ -199,7 +199,7 @@ export async function startPilcrow(
     });
   }
 
-  adapter.registerSSE('/__pilcrow/live/*', async (req, res) => {
+  adapter.registerSSE('/__kiln/live/*', async (req, res) => {
     res.sse({
       async *[Symbol.asyncIterator]() {
         yield { event: 'ping', data: 'hello' };

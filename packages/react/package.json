@@ -1,7 +1,7 @@
 {
-  "name": "@fsr/react",
+  "name": "@kiln/react",
   "version": "0.1.0",
-  "description": "React integration for Pilcrow.js and Silcrow",
+  "description": "React integration for Kiln.js and Silcrow",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

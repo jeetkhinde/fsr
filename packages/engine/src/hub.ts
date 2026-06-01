@@ -1,6 +1,6 @@
 import { FsrStore } from './store.js';
 import { FsrWatcher, SlotPatch } from './watcher.js';
-import { SSEEvent } from '@fsr/core';
+import { SSEEvent } from '@kiln/core';
 
 export interface FsrHubConfig {
   maxConnections: number;

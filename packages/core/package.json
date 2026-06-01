@@ -1,7 +1,7 @@
 {
-  "name": "@fsr/core",
+  "name": "@kiln/core",
   "version": "0.1.0",
-  "description": "Core primitives and types for Pilcrow.js",
+  "description": "Core primitives and types for Kiln.js",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

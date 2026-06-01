@@ -2,7 +2,7 @@ import { LiveProp } from './live-prop.js';
 
 // ── Request/Response abstractions (framework-agnostic) ──
 
-export interface PilcrowRequest {
+export interface KilnRequest {
   path: string;
   method: string;
   params: Record<string, string>;
@@ -22,7 +22,7 @@ export interface SSEEvent {
   retry?: number;
 }
 
-export interface PilcrowResponse {
+export interface KilnResponse {
   status: number;
   headers: Record<string, string>;
   body?: string | unknown | AsyncIterable<SSEEvent>;
@@ -51,19 +51,19 @@ export interface ServerAdapter {
   registerPage(
     pattern: string,
     layouts: string[],
-    handler: (req: PilcrowRequest, res: PilcrowResponse) => Promise<void>
+    handler: (req: KilnRequest, res: KilnResponse) => Promise<void>
   ): void;
 
   /** Register a POST action route */
   registerAction(
     pattern: string,
-    handler: (req: PilcrowRequest, res: PilcrowResponse) => Promise<void>
+    handler: (req: KilnRequest, res: KilnResponse) => Promise<void>
   ): void;
 
   /** Register an SSE endpoint */
   registerSSE(
     pattern: string,
-    handler: (req: PilcrowRequest, res: PilcrowResponse) => Promise<void>
+    handler: (req: KilnRequest, res: KilnResponse) => Promise<void>
   ): void;
 
   /** Register a static asset route */
@@ -81,12 +81,12 @@ export interface ServerAdapter {
 export type LoadResult = Record<string, any | LiveProp<any>>;
 
 export interface ActionHandler {
-  (req: PilcrowRequest): Promise<any> | any;
+  (req: KilnRequest): Promise<any> | any;
 }
 
 export interface PageDefinition {
   promoteAfter?: number;
-  load?: (req: PilcrowRequest) => Promise<LoadResult> | LoadResult;
+  load?: (req: KilnRequest) => Promise<LoadResult> | LoadResult;
   actions?: Record<string, ActionHandler>;
   default: any; // React Component
 }

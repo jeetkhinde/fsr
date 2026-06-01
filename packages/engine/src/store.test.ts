@@ -1,32 +1,34 @@
 import assert from 'node:assert/strict';
-import pg from 'pg';
-import { drizzle } from 'drizzle-orm/node-postgres';
+import { SQL, RedisClient } from 'bun';
+import { drizzle } from 'drizzle-orm/bun-sql';
 import { FsrStore } from './store.js';
 import { RedisCache } from './cache.js';
-import { Redis } from 'ioredis';
 
 async function runTests() {
   console.log('Running FsrStore and RedisCache integration tests...');
 
-  const pgConnectionString = 'postgresql://localhost:5432/pilcrowjs_test';
+  const pgConnectionString = 'postgresql://localhost:5432/kilnjs_test';
   const redisUrl = 'redis://127.0.0.1:6379';
 
-  const pool = new pg.Pool({ connectionString: pgConnectionString });
-  const db = drizzle(pool);
+  const bunSql = new SQL(pgConnectionString);
+  const db = drizzle(bunSql);
   const store = new FsrStore(db);
+  store.withPool(bunSql);
   const redisCache = new RedisCache(redisUrl);
   store.withRedis(redisCache);
 
   // Setup sub client for Redis pub/sub verification
-  const subClient = new Redis(redisUrl);
+  const subClient = new RedisClient(redisUrl);
   const receivedPubSub: string[] = [];
-  await subClient.subscribe('pilcrow:invalidate', 'pilcrow:patch');
-  subClient.on('message', (channel, message) => {
-    receivedPubSub.push(`${channel}:${message}`);
+  await subClient.subscribe('kiln:invalidate', (_msg: string) => {
+    receivedPubSub.push(`kiln:invalidate:${_msg}`);
+  });
+  await subClient.subscribe('kiln:patch', (_msg: string) => {
+    receivedPubSub.push(`kiln:patch:${_msg}`);
   });
 
   // Clean table before starting tests
-  await pool.query('DELETE FROM pilcrow_fsr');
+  await bunSql.unsafe('DELETE FROM kiln_fsr');
 
   try {
     // 1. ensureRouteRow and basic checks
@@ -43,7 +45,7 @@ async function runTests() {
     console.log('Testing incrementHit...');
     let hitStatus = await store.incrementHit('/test-route-1');
     assert.equal(hitStatus, 'Normal');
-    
+
     // Check hit_count is 1
     let rows = await store.fetchAllForInspect();
     assert.equal(rows[0].hitCount, 1);
@@ -84,15 +86,13 @@ async function runTests() {
     assert.equal(slotRow.version, 1);
 
     // Let's verify Redis pub/sub received the invalidation message
-    // Wait briefly for pub/sub to register
     await new Promise(resolve => setTimeout(resolve, 100));
-    assert.ok(receivedPubSub.some(msg => msg.startsWith('pilcrow:invalidate:')));
-    const invalidateMsg = receivedPubSub.find(msg => msg.startsWith('pilcrow:invalidate:'))!;
+    assert.ok(receivedPubSub.some(msg => msg.startsWith('kiln:invalidate:')));
+    const invalidateMsg = receivedPubSub.find(msg => msg.startsWith('kiln:invalidate:'))!;
     assert.ok(invalidateMsg.includes('/test-route-1'));
     assert.ok(invalidateMsg.includes('dep_key_x'));
 
     // Fetch stale slots
-    // Note: since it's just invalidated, last_patched_at is NULL, so fetchStaleSlots should fetch it
     console.log('Testing fetchStaleSlots...');
     let stale = await store.fetchStaleSlots();
     assert.equal(stale.length, 1);
@@ -105,7 +105,7 @@ async function runTests() {
     console.log('Testing markFresh...');
     await store.markFresh('/test-route-1', 'slot_a');
     stale = await store.fetchStaleSlots();
-    assert.equal(stale.length, 0); // No longer stale
+    assert.equal(stale.length, 0);
 
     // 5. getPromotedPaths & setBakedPaths
     console.log('Testing setBakedPaths and getPromotedPaths...');
@@ -147,10 +147,9 @@ async function runTests() {
     const cachedJson = await redisCache.getJson('/test-route-1');
     assert.deepEqual(cachedJson, { score: 100 });
 
-    // Publish patch
     await redisCache.publishPatch({ route: '/test-route-1', slot: 'slot_a', value: 'hello' });
     await new Promise(resolve => setTimeout(resolve, 100));
-    assert.ok(receivedPubSub.some(msg => msg.startsWith('pilcrow:patch:')));
+    assert.ok(receivedPubSub.some(msg => msg.startsWith('kiln:patch:')));
 
     // 9. tombstone & isTombstoned
     console.log('Testing tombstone...');
@@ -158,11 +157,9 @@ async function runTests() {
     await store.tombstone('/test-route-1');
     assert.equal(await store.isTombstoned('/test-route-1'), true);
 
-    // Check database rows are updated
     rows = await store.fetchAllForInspect();
-    assert.equal(rows.every(r => r.stale === false), true); // all stale set to false on tombstone
+    assert.equal(rows.every(r => r.stale === false), true);
 
-    // Verify Redis keys deleted
     const clearedHtml = await redisCache.getHtml('/test-route-1');
     assert.equal(clearedHtml, null);
     const clearedSlots = await redisCache.getSlots('/test-route-1');
@@ -172,11 +169,10 @@ async function runTests() {
 
     console.log('🎉 FsrStore and RedisCache integration tests PASSED!');
   } finally {
-    // Clean up
-    await pool.query('DELETE FROM pilcrow_fsr');
-    await pool.end();
+    await bunSql.unsafe('DELETE FROM kiln_fsr');
+    bunSql.close();
     await redisCache.disconnect();
-    await subClient.quit();
+    subClient.close();
   }
 }
 

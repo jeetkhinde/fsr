@@ -1,4 +1,4 @@
-import type { LiveFieldMeta } from '@fsr/core';
+import type { LiveFieldMeta } from '@kiln/core';
 
 export interface PageRoute {
   pattern: string;

@@ -1,9 +1,9 @@
-import { startPilcrow } from '@fsr/routekit';
-import { ElysiaAdapter } from '@fsr/adapter-elysia';
-import { FsrStore, FsrWatcher, startDbNotificationPipeline } from '@fsr/engine';
+import { startKiln } from '@kiln/routekit';
+import { ElysiaAdapter } from '@kiln/adapter-elysia';
+import { FsrStore, FsrWatcher, startDbNotificationPipeline } from '@kiln/engine';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
-import config from '../pilcrow.config.js';
+import config from '../kiln.config.js';
 
 async function main() {
   const adapter = new ElysiaAdapter();
@@ -31,7 +31,7 @@ async function main() {
     console.log('FSR baking engine and watcher successfully initialized.');
   }
 
-  await startPilcrow(adapter, config, './pages', fsr);
+  await startKiln(adapter, config, './pages', fsr);
 
   const port = config.port || config.web?.port || 3000;
   await adapter.listen(port, () => {

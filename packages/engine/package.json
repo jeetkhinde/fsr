@@ -1,7 +1,7 @@
 {
-  "name": "@fsr/engine",
+  "name": "@kiln/engine",
   "version": "0.1.0",
-  "description": "Hypermedia State Revalidation (FSR) baking engine for Pilcrow.js",
+  "description": "Hypermedia State Revalidation (FSR) baking engine for Kiln.js",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -16,9 +16,8 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@fsr/core": "workspace:*",
+    "@kiln/core": "workspace:*",
     "drizzle-orm": "^0.30.9",
-    "ioredis": "^5.4.1",
     "pg": "^8.11.5",
     "rxjs": "^7.8.1"
   },

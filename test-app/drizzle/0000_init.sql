@@ -1,5 +1,5 @@
--- Create pilcrow_fsr table
-CREATE TABLE IF NOT EXISTS pilcrow_fsr (
+-- Create kiln_fsr table
+CREATE TABLE IF NOT EXISTS kiln_fsr (
   route TEXT NOT NULL,
   slot TEXT NOT NULL DEFAULT '',
   query TEXT,
@@ -17,14 +17,14 @@ CREATE TABLE IF NOT EXISTS pilcrow_fsr (
   column_name TEXT,
   last_hit TIMESTAMP,
   last_patched_at TIMESTAMP,
-  CONSTRAINT pilcrow_fsr_pkey PRIMARY KEY (route, slot)
+  CONSTRAINT kiln_fsr_pkey PRIMARY KEY (route, slot)
 );
 
 -- Invalidation function & trigger utility
-CREATE OR REPLACE FUNCTION pilcrow_notify_change() RETURNS trigger AS $$
+CREATE OR REPLACE FUNCTION kiln_notify_change() RETURNS trigger AS $$
 BEGIN
   PERFORM pg_notify(
-    'pilcrow_invalidate',
+    'kiln_invalidate',
     json_build_object('depKey', TG_ARGV[0], 'id', NEW.id)::text
   );
   RETURN NEW;

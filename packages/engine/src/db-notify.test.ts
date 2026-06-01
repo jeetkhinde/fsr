@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import pg from 'pg';
-import { drizzle } from 'drizzle-orm/node-postgres';
+import { SQL } from 'bun';
+import { drizzle } from 'drizzle-orm/bun-sql';
 import { FsrStore } from './store.js';
 import { FsrWatcher, WatcherConfig } from './watcher.js';
 import { startDbNotificationPipeline } from './db-notify.js';
@@ -8,23 +9,26 @@ import { startDbNotificationPipeline } from './db-notify.js';
 async function runTests() {
   console.log('Running FSR DB Notification Pipeline tests...');
 
-  const pgConnectionString = 'postgresql://localhost:5432/pilcrowjs_test';
+  const pgConnectionString = 'postgresql://localhost:5432/kilnjs_test';
 
-  const pool = new pg.Pool({ connectionString: pgConnectionString });
-  const db = drizzle(pool);
+  // Bun.sql for FsrStore; pg.Pool for test setup and LISTEN/NOTIFY trigger queries
+  const bunSql = new SQL(pgConnectionString);
+  const db = drizzle(bunSql);
   const store = new FsrStore(db);
+  store.withPool(bunSql);
+  const pool = new pg.Pool({ connectionString: pgConnectionString });
 
   // Clean table
-  await pool.query('DELETE FROM pilcrow_fsr');
+  await pool.query('DELETE FROM kiln_fsr');
   await pool.query('DROP TABLE IF EXISTS notify_test_dummy CASCADE');
   await pool.query('CREATE TABLE notify_test_dummy (id integer primary key, val text)');
   
   // Create postgres notify function
   await pool.query(`
-    CREATE OR REPLACE FUNCTION pilcrow_notify_change() RETURNS trigger AS $$
+    CREATE OR REPLACE FUNCTION kiln_notify_change() RETURNS trigger AS $$
     BEGIN
       PERFORM pg_notify(
-        'pilcrow_invalidate',
+        'kiln_invalidate',
         json_build_object('depKey', TG_ARGV[0], 'id', NEW.id)::text
       );
       RETURN NEW;
@@ -36,7 +40,7 @@ async function runTests() {
   await pool.query(`
     CREATE TRIGGER notify_test_dummy_trigger
     AFTER INSERT OR UPDATE ON notify_test_dummy
-    FOR EACH ROW EXECUTE FUNCTION pilcrow_notify_change('notify_test_dummy');
+    FOR EACH ROW EXECUTE FUNCTION kiln_notify_change('notify_test_dummy');
   `);
 
   const route = '/test-notify-route';
@@ -81,11 +85,12 @@ async function runTests() {
 
     console.log('🎉 FSR DB Notification Pipeline tests PASSED!');
   } finally {
-    await pool.query('DELETE FROM pilcrow_fsr');
+    await pool.query('DELETE FROM kiln_fsr');
     await pool.query('DROP TABLE IF EXISTS notify_test_dummy CASCADE');
     await pool.end();
     await notifyClient.end();
     await watcher.stop();
+    bunSql.close();
   }
 }
 

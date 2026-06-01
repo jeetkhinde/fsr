@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import pg from 'pg';
+import { SQL } from 'bun';
 import fs from 'node:fs/promises';
-import { drizzle } from 'drizzle-orm/node-postgres';
+import { drizzle } from 'drizzle-orm/bun-sql';
 import { FsrStore } from './store.js';
 import { RedisCache } from './cache.js';
 import { FsrWatcher, WatcherConfig, SlotPatch } from './watcher.js';
@@ -9,21 +9,21 @@ import { FsrWatcher, WatcherConfig, SlotPatch } from './watcher.js';
 async function runTests() {
   console.log('Running FsrWatcher integration tests...');
 
-  const pgConnectionString = 'postgresql://localhost:5432/pilcrowjs_test';
+  const pgConnectionString = 'postgresql://localhost:5432/kilnjs_test';
   const redisUrl = 'redis://127.0.0.1:6379';
 
-  const pool = new pg.Pool({ connectionString: pgConnectionString });
-  const db = drizzle(pool);
+  const bunSql = new SQL(pgConnectionString);
+  const db = drizzle(bunSql);
   const store = new FsrStore(db);
+  store.withPool(bunSql);
   const redis = new RedisCache(redisUrl);
   store.withRedis(redis);
 
   // Clean table
-  await pool.query('DELETE FROM pilcrow_fsr');
+  await bunSql.unsafe('DELETE FROM kiln_fsr');
 
-  // Let's create dummy test table in postgres if it doesn't exist
-  await pool.query('CREATE TABLE IF NOT EXISTS watcher_test_dummy (id integer primary key, val text)');
-  await pool.query('INSERT INTO watcher_test_dummy (id, val) VALUES (1, \'original_val\') ON CONFLICT (id) DO UPDATE SET val = \'original_val\'');
+  await bunSql.unsafe('CREATE TABLE IF NOT EXISTS watcher_test_dummy (id integer primary key, val text)');
+  await bunSql.unsafe("INSERT INTO watcher_test_dummy (id, val) VALUES (1, 'original_val') ON CONFLICT (id) DO UPDATE SET val = 'original_val'");
 
   // Temporary files for baking test
   const tempHtmlPath = './temp_test_page.html';
@@ -120,7 +120,7 @@ async function runTests() {
 
     // 4. Test database change propagates and updates again
     console.log('Verifying value update re-execution...');
-    await pool.query('UPDATE watcher_test_dummy SET val = \'updated_val\' WHERE id = 1');
+    await bunSql.unsafe('UPDATE watcher_test_dummy SET val = \'updated_val\' WHERE id = 1');
     await store.invalidateDepKey('watcher_dep_key');
 
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -162,7 +162,7 @@ async function runTests() {
     await watcher.stop();
 
     // Update route's last_hit to be far in the past to trigger eviction
-    await pool.query('UPDATE pilcrow_fsr SET last_hit = now() - interval \'10 seconds\' WHERE route = $1 AND slot = \'\'', [route]);
+    await bunSql.unsafe('UPDATE kiln_fsr SET last_hit = now() - interval \'10 seconds\' WHERE route = $1 AND slot = \'\'', [route]);
 
     // Manually run idle eviction logic
     const evicted = await store.evictIdleRoutes(5); // 5s threshold
@@ -195,9 +195,9 @@ async function runTests() {
     console.log('🎉 FsrWatcher integration tests PASSED!');
   } finally {
     // Cleanup
-    await pool.query('DELETE FROM pilcrow_fsr');
-    await pool.query('DROP TABLE IF EXISTS watcher_test_dummy');
-    await pool.end();
+    await bunSql.unsafe('DELETE FROM kiln_fsr');
+    await bunSql.unsafe('DROP TABLE IF EXISTS watcher_test_dummy');
+    bunSql.close();
     await redis.disconnect();
     
     await fs.unlink(tempHtmlPath).catch(() => {});

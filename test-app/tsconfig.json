@@ -12,5 +12,5 @@
     "outDir": "./dist",
     "rootDir": "."
   },
-  "include": ["src/**/*", "pages/**/*", "api/**/*", "pilcrow.config.ts"]
+  "include": ["src/**/*", "pages/**/*", "api/**/*", "kiln.config.ts"]
 }

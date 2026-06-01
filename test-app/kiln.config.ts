@@ -1,4 +1,4 @@
-import { defineConfig } from '@fsr/core';
+import { defineConfig } from '@kiln/core';
 
 export default defineConfig({
   port: 3000,

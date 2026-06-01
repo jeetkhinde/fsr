@@ -7,17 +7,17 @@ import {
   useSilcrowPrefetch,
   useSilcrowRoute,
   useSilcrowAction,
-  usePilcrowNamedAction,
+  useKilnNamedAction,
   useSilcrowResource,
   useSilcrowForm,
   useSilcrowMutation,
-  PilcrowReactProvider,
-  resolvePilcrowAction,
+  KilnReactProvider,
+  resolveKilnAction,
 } from "./hooks.js";
 import { submitSilcrow, silcrowSubmitHandler } from "./submit.js";
 
 async function runTests() {
-  console.log("Running @pilcrowjs/react hooks and helpers tests...");
+  console.log("Running @kilnjs/react hooks and helpers tests...");
 
   // Mock global window/Silcrow
   const subscribeCalls: any[] = [];
@@ -166,28 +166,28 @@ async function runTests() {
     console.log("✅ useSilcrowAction renders initial action state");
   }
 
-  // 9. resolvePilcrowAction
+  // 9. resolveKilnAction
   {
-    assert.equal(resolvePilcrowAction("sub", "/base"), "/base?/sub");
-    assert.equal(resolvePilcrowAction("sub", "/base?a=1"), "/base?a=1&/sub");
-    assert.equal(resolvePilcrowAction("/absolute", "/base"), "/absolute");
-    assert.equal(resolvePilcrowAction("?/named", "/base"), "?/named");
-    console.log("✅ resolvePilcrowAction resolves relative/absolute named actions");
+    assert.equal(resolveKilnAction("sub", "/base"), "/base?/sub");
+    assert.equal(resolveKilnAction("sub", "/base?a=1"), "/base?a=1&/sub");
+    assert.equal(resolveKilnAction("/absolute", "/base"), "/absolute");
+    assert.equal(resolveKilnAction("?/named", "/base"), "?/named");
+    console.log("✅ resolveKilnAction resolves relative/absolute named actions");
   }
 
-  // 10. usePilcrowNamedAction
+  // 10. useKilnNamedAction
   {
     function TestNamedAction() {
-      const [state] = usePilcrowNamedAction<any>("testAction", { val: "named-initial" });
+      const [state] = useKilnNamedAction<any>("testAction", { val: "named-initial" });
       return <span>{state.val}</span>;
     }
     const html = renderToStaticMarkup(
-      <PilcrowReactProvider value={{ actionBase: "/context-base" }}>
+      <KilnReactProvider value={{ actionBase: "/context-base" }}>
         <TestNamedAction />
-      </PilcrowReactProvider>
+      </KilnReactProvider>
     );
     assert.equal(html, "<span>named-initial</span>");
-    console.log("✅ usePilcrowNamedAction resolves actionBase from context");
+    console.log("✅ useKilnNamedAction resolves actionBase from context");
   }
 
   // 11. useSilcrowForm
@@ -260,7 +260,7 @@ async function runTests() {
     console.log("✅ useSilcrowMutation executes mutation callbacks and submits successfully");
   }
 
-  console.log("🎉 All @pilcrowjs/react tests passed!");
+  console.log("🎉 All @kilnjs/react tests passed!");
 }
 
 runTests().catch((err) => {

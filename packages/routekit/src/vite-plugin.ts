@@ -1,13 +1,13 @@
 import type { Plugin } from 'vite';
 
-export interface PilcrowVitePluginOptions {
+export interface KilnVitePluginOptions {
   pagesDir: string;
   onRoutesChanged?: () => void | Promise<void>;
 }
 
-export function pilcrowVitePlugin(options: PilcrowVitePluginOptions): Plugin {
+export function kilnVitePlugin(options: KilnVitePluginOptions): Plugin {
   return {
-    name: 'vite-plugin-pilcrow',
+    name: 'vite-plugin-kiln',
     configureServer(server) {
       const handleFileChange = async (filePath: string) => {
         if (filePath.startsWith(options.pagesDir)) {

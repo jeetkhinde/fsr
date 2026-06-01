@@ -1,39 +1,19 @@
 import { Elysia, sse, file } from 'elysia';
-import type { ServerAdapter, PilcrowRequest, PilcrowResponse, MiddlewareConfig, SSEEvent } from '@fsr/core';
+import type { ServerAdapter, KilnRequest, KilnResponse, MiddlewareConfig, SSEEvent } from '@kiln/core';
 import { wrapRequest, ElysiaResponseImpl, handleElysiaResponse } from './context.js';
 import { csrf, timeout, compression, layoutIntercept } from './middleware/index.js';
-import { createRequire } from 'module';
-
-const requireFn = typeof require !== 'undefined' ? require : createRequire(import.meta.url);
-
 export class ElysiaAdapter implements ServerAdapter {
   public app: Elysia;
 
   constructor(options?: { elysia?: Elysia; bodyLimitBytes?: number }) {
     const limitBytes = options?.bodyLimitBytes ?? 2 * 1024 * 1024;
-
-    if (options?.elysia) {
-      this.app = options.elysia;
-    } else {
-      // @ts-ignore
-      if (typeof Bun === 'undefined') {
-        try {
-          const { node } = requireFn('@elysiajs/node');
-          this.app = new Elysia({ adapter: node() });
-        } catch (e) {
-          console.warn('Failed to load @elysiajs/node adapter, falling back to default:', e);
-          this.app = new Elysia();
-        }
-      } else {
-        this.app = new Elysia({ serve: { maxRequestBodySize: limitBytes } });
-      }
-    }
+    this.app = options?.elysia ?? new Elysia({ serve: { maxRequestBodySize: limitBytes } });
   }
 
   registerPage(
     pattern: string,
     layouts: string[],
-    handler: (req: PilcrowRequest, res: PilcrowResponse) => Promise<void>
+    handler: (req: KilnRequest, res: KilnResponse) => Promise<void>
   ): void {
     this.app.get(pattern, async (ctx) => {
       const req = wrapRequest(ctx);
@@ -45,7 +25,7 @@ export class ElysiaAdapter implements ServerAdapter {
 
   registerAction(
     pattern: string,
-    handler: (req: PilcrowRequest, res: PilcrowResponse) => Promise<void>
+    handler: (req: KilnRequest, res: KilnResponse) => Promise<void>
   ): void {
     this.app.post(pattern, async (ctx) => {
       const req = wrapRequest(ctx);
@@ -57,7 +37,7 @@ export class ElysiaAdapter implements ServerAdapter {
 
   registerSSE(
     pattern: string,
-    handler: (req: PilcrowRequest, res: PilcrowResponse) => Promise<void>
+    handler: (req: KilnRequest, res: KilnResponse) => Promise<void>
   ): void {
     this.app.get(pattern, async function* (ctx: any) {
       const req = wrapRequest(ctx);

@@ -1,4 +1,4 @@
-import { Redis } from 'ioredis';
+import { RedisClient } from 'bun';
 
 export interface InvalidatePayload {
   route: string;
@@ -13,11 +13,11 @@ export interface PatchPayload {
 }
 
 export class RedisCache {
-  private client: Redis;
+  private client: RedisClient;
   private artifactTtlSecs = 0;
 
   constructor(url: string) {
-    this.client = new Redis(url);
+    this.client = new RedisClient(url);
   }
 
   withArtifactTtl(ttlSecs: number): this {
@@ -25,20 +25,20 @@ export class RedisCache {
     return this;
   }
 
-  getClient(): Redis {
+  getClient(): RedisClient {
     return this.client;
   }
 
   private htmlKey(route: string): string {
-    return `pilcrow:html:${route}`;
+    return `kiln:html:${route}`;
   }
 
   private slotKey(route: string): string {
-    return `pilcrow:slot:${route}`;
+    return `kiln:slot:${route}`;
   }
 
   private jsonKey(route: string): string {
-    return `pilcrow:json:${route}`;
+    return `kiln:json:${route}`;
   }
 
   async getHtml(route: string): Promise<string | null> {
@@ -48,7 +48,10 @@ export class RedisCache {
   async setHtml(route: string, html: string): Promise<void> {
     const key = this.htmlKey(route);
     if (this.artifactTtlSecs > 0) {
-      await this.client.set(key, html, 'EX', this.artifactTtlSecs);
+      await Promise.all([
+        this.client.set(key, html),
+        this.client.expire(key, this.artifactTtlSecs),
+      ]);
     } else {
       await this.client.set(key, html);
     }
@@ -57,24 +60,28 @@ export class RedisCache {
   async patchSlot(route: string, slot: string, value: string): Promise<void> {
     const key = this.slotKey(route);
     if (this.artifactTtlSecs > 0) {
-      await this.client.pipeline()
-        .hset(key, slot, value)
-        .expire(key, this.artifactTtlSecs)
-        .exec();
+      await Promise.all([
+        this.client.send('HSET', [key, slot, value]),
+        this.client.expire(key, this.artifactTtlSecs),
+      ]);
     } else {
-      await this.client.hset(key, slot, value);
+      await this.client.send('HSET', [key, slot, value]);
     }
   }
 
   async getSlots(route: string): Promise<Record<string, string>> {
-    return this.client.hgetall(this.slotKey(route));
+    const result = await this.client.send('HGETALL', [this.slotKey(route)]);
+    return (result as Record<string, string>) || {};
   }
 
   async setJson(route: string, json: any): Promise<void> {
     const key = this.jsonKey(route);
     const value = typeof json === 'string' ? json : JSON.stringify(json);
     if (this.artifactTtlSecs > 0) {
-      await this.client.set(key, value, 'EX', this.artifactTtlSecs);
+      await Promise.all([
+        this.client.set(key, value),
+        this.client.expire(key, this.artifactTtlSecs),
+      ]);
     } else {
       await this.client.set(key, value);
     }
@@ -91,20 +98,18 @@ export class RedisCache {
   }
 
   async publishInvalidate(payload: InvalidatePayload): Promise<void> {
-    const msg = JSON.stringify(payload);
-    await this.client.publish('pilcrow:invalidate', msg);
+    await this.client.publish('kiln:invalidate', JSON.stringify(payload));
   }
 
   async publishPatch(payload: PatchPayload): Promise<void> {
-    const msg = JSON.stringify(payload);
-    await this.client.publish('pilcrow:patch', msg);
+    await this.client.publish('kiln:patch', JSON.stringify(payload));
   }
 
   async deleteRouteKeys(route: string): Promise<void> {
-    await this.client.del(this.htmlKey(route), this.slotKey(route), this.jsonKey(route));
+    await this.client.send('DEL', [this.htmlKey(route), this.slotKey(route), this.jsonKey(route)]);
   }
 
   async disconnect(): Promise<void> {
-    await this.client.quit();
+    this.client.close();
   }
 }

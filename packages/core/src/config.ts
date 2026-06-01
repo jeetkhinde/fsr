@@ -81,7 +81,7 @@ export interface CacheConfig {
   dir?: string;
 }
 
-export interface PilcrowConfig {
+export interface KilnConfig {
   web: WebConfig;
   backend: BackendConfig;
   cache: CacheConfig;
@@ -96,7 +96,7 @@ export interface PilcrowConfig {
   apiDir?: string;
 }
 
-export const DEFAULT_CONFIG: PilcrowConfig = {
+export const DEFAULT_CONFIG: KilnConfig = {
   web: {
     host: '127.0.0.1',
     port: 3000,
@@ -123,7 +123,7 @@ export const DEFAULT_CONFIG: PilcrowConfig = {
   },
   images: {
     enabled: false,
-    cacheDir: '.pilcrow-image-cache',
+    cacheDir: '.kiln-image-cache',
     domains: [],
     maxWidth: 3840,
     maxHeight: 2160,
@@ -164,7 +164,7 @@ export type DeepPartial<T> = {
   [P in keyof T]?: T[P] extends object ? DeepPartial<T[P]> : T[P];
 };
 
-export function defineConfig(config: DeepPartial<PilcrowConfig>): PilcrowConfig {
+export function defineConfig(config: DeepPartial<KilnConfig>): KilnConfig {
   const merged = { ...DEFAULT_CONFIG };
   
   if (config.web) merged.web = { ...DEFAULT_CONFIG.web, ...config.web } as any;
@@ -189,24 +189,24 @@ export function defineConfig(config: DeepPartial<PilcrowConfig>): PilcrowConfig 
   return merged;
 }
 
-export function loadConfigFromEnv(baseConfig: PilcrowConfig): PilcrowConfig {
+export function loadConfigFromEnv(baseConfig: KilnConfig): KilnConfig {
   const config = { ...baseConfig };
   
-  if (process.env.PILCROW_WEB_HOST) {
-    config.web.host = process.env.PILCROW_WEB_HOST;
+  if (process.env.KILN_WEB_HOST) {
+    config.web.host = process.env.KILN_WEB_HOST;
   }
-  if (process.env.PILCROW_WEB_PORT) {
-    const port = parseInt(process.env.PILCROW_WEB_PORT, 10);
+  if (process.env.KILN_WEB_PORT) {
+    const port = parseInt(process.env.KILN_WEB_PORT, 10);
     if (!isNaN(port)) config.web.port = port;
   }
-  if (process.env.PILCROW_BACKEND_URL) {
-    config.web.backendUrl = process.env.PILCROW_BACKEND_URL;
+  if (process.env.KILN_BACKEND_URL) {
+    config.web.backendUrl = process.env.KILN_BACKEND_URL;
   }
-  if (process.env.PILCROW_BACKEND_HOST) {
-    config.backend.host = process.env.PILCROW_BACKEND_HOST;
+  if (process.env.KILN_BACKEND_HOST) {
+    config.backend.host = process.env.KILN_BACKEND_HOST;
   }
-  if (process.env.PILCROW_BACKEND_PORT) {
-    const port = parseInt(process.env.PILCROW_BACKEND_PORT, 10);
+  if (process.env.KILN_BACKEND_PORT) {
+    const port = parseInt(process.env.KILN_BACKEND_PORT, 10);
     if (!isNaN(port)) config.backend.port = port;
   }
   

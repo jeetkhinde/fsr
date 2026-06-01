@@ -10,10 +10,10 @@ export async function startDbNotificationPipeline(
   const client = new pg.Client({ connectionString });
   await client.connect();
 
-  await client.query('LISTEN pilcrow_invalidate');
+  await client.query('LISTEN kiln_invalidate');
 
   client.on('notification', async (msg) => {
-    if (msg.channel === 'pilcrow_invalidate' && msg.payload) {
+    if (msg.channel === 'kiln_invalidate' && msg.payload) {
       try {
         const payload = JSON.parse(msg.payload);
         const { depKey, id } = payload;

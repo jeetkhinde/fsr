@@ -1,5 +1,5 @@
 import * as path from 'path';
-import fg from 'fast-glob';
+import { Glob } from 'bun';
 import type { RouteManifest, PageRoute, LayoutNode } from './manifest.js';
 
 export interface RawDiscoveredFile {
@@ -46,26 +46,25 @@ export function pathToPattern(relativePath: string): string {
 }
 
 export async function walkDir(dir: string): Promise<RawDiscoveredFile[]> {
-  let relPaths: string[];
+  const glob = new Glob('**/*.{tsx,ts,jsx,js,html}');
+  const results: RawDiscoveredFile[] = [];
   try {
-    relPaths = await fg('**/*.{tsx,ts,jsx,js,html}', {
-      cwd: dir,
-      ignore: ['node_modules/**', '.git/**', 'dist/**'],
-      onlyFiles: true,
-    });
+    for await (const relPath of glob.scan({ cwd: dir, onlyFiles: true })) {
+      if (relPath.startsWith('node_modules/') || relPath.startsWith('.git/') || relPath.startsWith('dist/')) {
+        continue;
+      }
+      const dirRel = path.dirname(relPath);
+      results.push({
+        filePath: path.join(dir, relPath),
+        relativePath: relPath,
+        dirRelativePath: dirRel === '.' ? '' : dirRel,
+        fileName: path.basename(relPath),
+      });
+    }
   } catch {
     return [];
   }
-
-  return relPaths.map((relPath) => {
-    const dirRel = path.dirname(relPath);
-    return {
-      filePath: path.join(dir, relPath),
-      relativePath: relPath,
-      dirRelativePath: dirRel === '.' ? '' : dirRel,
-      fileName: path.basename(relPath),
-    };
-  });
+  return results;
 }
 
 function getLayoutsForPage(

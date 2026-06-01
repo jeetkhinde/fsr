@@ -10,11 +10,11 @@ export const packageJson = (name: string) => `{
     "db:push": "drizzle-kit push:pg"
   },
   "dependencies": {
-    "@fsr/core": "workspace:*",
-    "@fsr/react": "workspace:*",
-    "@fsr/adapter-elysia": "workspace:*",
-    "@fsr/engine": "workspace:*",
-    "@fsr/routekit": "workspace:*",
+    "@kiln/core": "workspace:*",
+    "@kiln/react": "workspace:*",
+    "@kiln/adapter-elysia": "workspace:*",
+    "@kiln/engine": "workspace:*",
+    "@kiln/routekit": "workspace:*",
     "elysia": "^1.0.12",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -23,7 +23,7 @@ export const packageJson = (name: string) => `{
     "ioredis": "^5.4.1"
   },
   "devDependencies": {
-    "@fsr/cli": "workspace:*",
+    "@kiln/cli": "workspace:*",
     "typescript": "^5.4.5",
     "vite": "^5.2.11",
     "@vitejs/plugin-react": "^4.2.1",
@@ -54,7 +54,7 @@ export const tsconfigJson = `{
 }
 `;
 
-export const fsrConfig = `import { defineConfig } from '@fsr/core';
+export const fsrConfig = `import { defineConfig } from '@kiln/core';
 
 export default defineConfig({
   port: 3000,
@@ -93,7 +93,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 `;
 
 export const indexPage = `import React from 'react';
-import { useSilcrowForm } from '@fsr/react';
+import { useSilcrowForm } from '@kiln/react';
 
 export default function IndexPage() {
   const form = useSilcrowForm('submit');
@@ -218,9 +218,9 @@ END;
 $$ LANGUAGE plpgsql;
 `;
 
-export const mainRunner = `import { startFsr } from '@fsr/routekit';
-import { ElysiaAdapter } from '@fsr/adapter-elysia';
-import { FsrStore, FsrWatcher, startDbNotificationPipeline } from '@fsr/engine';
+export const mainRunner = `import { startFsr } from '@kiln/routekit';
+import { ElysiaAdapter } from '@kiln/adapter-elysia';
+import { FsrStore, FsrWatcher, startDbNotificationPipeline } from '@kiln/engine';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
 import config from '../fsr.config.js';

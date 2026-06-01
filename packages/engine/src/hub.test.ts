@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import pg from 'pg';
-import { drizzle } from 'drizzle-orm/node-postgres';
+import { SQL } from 'bun';
+import { drizzle } from 'drizzle-orm/bun-sql';
 import { FsrStore } from './store.js';
 import { FsrWatcher, WatcherConfig } from './watcher.js';
 import { fsrHubStream, fsrSnapshotHandler, getActiveConnectionsCount } from './hub.js';
@@ -8,15 +8,16 @@ import { fsrHubStream, fsrSnapshotHandler, getActiveConnectionsCount } from './h
 async function runTests() {
   console.log('Running FSR SSE Hub and Snapshot tests...');
 
-  const pgConnectionString = 'postgresql://localhost:5432/pilcrowjs_test';
+  const pgConnectionString = 'postgresql://localhost:5432/kilnjs_test';
 
-  const pool = new pg.Pool({ connectionString: pgConnectionString });
-  const db = drizzle(pool);
+  const bunSql = new SQL(pgConnectionString);
+  const db = drizzle(bunSql);
   const store = new FsrStore(db);
+  store.withPool(bunSql);
 
-  await pool.query('DELETE FROM pilcrow_fsr');
-  await pool.query('CREATE TABLE IF NOT EXISTS hub_test_dummy (id integer primary key, val text)');
-  await pool.query('INSERT INTO hub_test_dummy (id, val) VALUES (1, \'val_1\'), (2, \'val_2\') ON CONFLICT (id) DO UPDATE SET val = EXCLUDED.val');
+  await bunSql.unsafe('DELETE FROM kiln_fsr');
+  await bunSql.unsafe('CREATE TABLE IF NOT EXISTS hub_test_dummy (id integer primary key, val text)');
+  await bunSql.unsafe("INSERT INTO hub_test_dummy (id, val) VALUES (1, 'val_1'), (2, 'val_2') ON CONFLICT (id) DO UPDATE SET val = EXCLUDED.val");
 
   const route = '/test-hub-route';
   await store.ensureRouteRow(route, 1);
@@ -151,9 +152,9 @@ async function runTests() {
 
     console.log('🎉 FSR SSE Hub and Snapshot tests PASSED!');
   } finally {
-    await pool.query('DELETE FROM pilcrow_fsr');
-    await pool.query('DROP TABLE IF EXISTS hub_test_dummy');
-    await pool.end();
+    await bunSql.unsafe('DELETE FROM kiln_fsr');
+    await bunSql.unsafe('DROP TABLE IF EXISTS hub_test_dummy');
+    bunSql.close();
   }
 }
 

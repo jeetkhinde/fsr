@@ -1,6 +1,6 @@
 import { pgTable, text, jsonb, boolean, integer, timestamp, primaryKey } from 'drizzle-orm/pg-core';
 
-export const pilcrowFsr = pgTable('pilcrow_fsr', {
+export const pilcrowFsr = pgTable('kiln_fsr', {
   route: text('route').notNull(),
   slot: text('slot').notNull().default(''),
   query: text('query'),

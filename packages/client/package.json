@@ -1,5 +1,5 @@
 {
-  "name": "@fsr/client",
+  "name": "@kiln/client",
   "version": "0.1.0",
   "description": "Browser runtime for FSR.js (Silcrow hypermedia client)",
   "type": "module",

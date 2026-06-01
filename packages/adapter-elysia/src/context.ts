@@ -1,6 +1,6 @@
-import type { PilcrowRequest, PilcrowResponse, SSEEvent } from '@fsr/core';
+import type { KilnRequest, KilnResponse, SSEEvent } from '@kiln/core';
 
-export function wrapRequest(ctx: any): PilcrowRequest {
+export function wrapRequest(ctx: any): KilnRequest {
   const req = ctx.request as Request;
   const isEnhanced = req.headers.get('silcrow-target') !== null;
   const layoutsPresent = (req.headers.get('x-ps-present') || '')
@@ -43,7 +43,7 @@ export function wrapRequest(ctx: any): PilcrowRequest {
   };
 }
 
-export class ElysiaResponseImpl implements PilcrowResponse {
+export class ElysiaResponseImpl implements KilnResponse {
   public status = 200;
   public headers: Record<string, string> = {};
   public body?: any;

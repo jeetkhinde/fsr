@@ -18,20 +18,20 @@ import {
   submitSilcrow,
 } from "./submit.js";
 
-export type PilcrowReactContextValue = {
+export type KilnReactContextValue = {
   actionBase?: string;
 };
 
-export const PilcrowReactContext = createContext<PilcrowReactContextValue>({});
+export const KilnReactContext = createContext<KilnReactContextValue>({});
 
-export function PilcrowReactProvider({
+export function KilnReactProvider({
   value,
   children,
 }: {
-  value: PilcrowReactContextValue;
+  value: KilnReactContextValue;
   children: ReactNode;
 }) {
-  return createElement(PilcrowReactContext.Provider, { value }, children);
+  return createElement(KilnReactContext.Provider, { value }, children);
 }
 
 function appendActionName(base: string, name: string): string {
@@ -43,7 +43,7 @@ function appendActionName(base: string, name: string): string {
   return `${cleanBase}${separator}/${encodeURIComponent(name)}`;
 }
 
-export function resolvePilcrowAction(name: string, base?: string): string {
+export function resolveKilnAction(name: string, base?: string): string {
   return appendActionName(base ?? "", name);
 }
 
@@ -108,15 +108,15 @@ export function useSilcrowAction<State>(
 }
 
 /**
- * React 19 action wrapper that resolves a Pilcrow page/fragment named action.
+ * React 19 action wrapper that resolves a Kiln page/fragment named action.
  */
-export function usePilcrowNamedAction<State>(
+export function useKilnNamedAction<State>(
   name: string,
   initialState = { ok: true } as State,
   options?: SilcrowActionOptions & { base?: string },
 ) {
-  const context = useContext(PilcrowReactContext);
-  const url = resolvePilcrowAction(name, options?.base ?? context.actionBase);
+  const context = useContext(KilnReactContext);
+  const url = resolveKilnAction(name, options?.base ?? context.actionBase);
   return useSilcrowAction<State>(url, initialState, options);
 }
 

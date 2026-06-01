@@ -1,5 +1,5 @@
 {
-  "name": "fsr-monorepo",
+  "name": "kiln-monorepo",
   "private": true,
   "scripts": {
     "build": "bun run --filter '*' build",

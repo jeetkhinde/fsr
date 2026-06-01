@@ -1,7 +1,7 @@
 {
-  "name": "create-fsr",
+  "name": "create-kiln",
   "version": "0.1.0",
-  "description": "Scaffolding CLI for Pilcrow.js apps",
+  "description": "Scaffolding CLI for Kiln.js apps",
   "type": "module",
   "main": "./dist/cli.js",
   "bin": {

@@ -82,7 +82,7 @@ export function submitSilcrow<T>(
 /**
  * Create an async submit callback for React Hook Form or other form libraries.
  *
- * Silcrow/Pilcrow stays responsible for transport; the form library owns
+ * Silcrow/Kiln stays responsible for transport; the form library owns
  * validation, dirty/touched state, focus, arrays, and nested fields.
  */
 export function silcrowSubmitHandler<Result = unknown, Values = object>(

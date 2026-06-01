@@ -1,5 +1,4 @@
 import { sql } from 'drizzle-orm';
-import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 export type HitStatus = 'Tombstoned' | 'JustPromoted' | 'Normal';
 
@@ -39,7 +38,7 @@ export class FsrStore {
   private pool: any = null;
 
   constructor(
-    private db: NodePgDatabase<any>,
+    private db: any,
     private globalDebounceSecs = 0,
     private redis: any = null
   ) {}
@@ -61,7 +60,7 @@ export class FsrStore {
 
   async ensureRouteRow(route: string, promoteAfter?: number): Promise<void> {
     await this.db.execute(sql`
-      INSERT INTO pilcrow_fsr (route, slot, promote_after)
+      INSERT INTO kiln_fsr (route, slot, promote_after)
       VALUES (${route}, '', ${promoteAfter ?? null})
       ON CONFLICT (route, slot) DO NOTHING
     `);
@@ -77,7 +76,7 @@ export class FsrStore {
     columnName?: string
   ): Promise<void> {
     await this.db.execute(sql`
-      INSERT INTO pilcrow_fsr
+      INSERT INTO kiln_fsr
         (route, slot, query, query_params, depends_on, debounce_secs, column_name)
       VALUES (
         ${route}, 
@@ -99,7 +98,7 @@ export class FsrStore {
 
   async incrementHit(route: string): Promise<HitStatus> {
     const res = await this.db.execute(sql`
-      UPDATE pilcrow_fsr
+      UPDATE kiln_fsr
       SET hit_count  = hit_count + 1,
           last_hit   = now(),
           promoted   = CASE
@@ -116,7 +115,7 @@ export class FsrStore {
     const row = res.rows[0] as any;
     if (!row) {
       const checkRes = await this.db.execute(sql`
-        SELECT tombstoned FROM pilcrow_fsr WHERE route = ${route} AND slot = '' LIMIT 1
+        SELECT tombstoned FROM kiln_fsr WHERE route = ${route} AND slot = '' LIMIT 1
       `);
       const checkRow = checkRes.rows[0] as any;
       if (checkRow && checkRow.tombstoned) {
@@ -134,7 +133,7 @@ export class FsrStore {
 
   async tombstone(route: string): Promise<void> {
     const res = await this.db.execute(sql`
-      UPDATE pilcrow_fsr
+      UPDATE kiln_fsr
       SET tombstoned = TRUE, promoted = FALSE, stale = FALSE
       WHERE route = ${route}
       RETURNING slot, html_path as "htmlPath", json_path as "jsonPath"
@@ -163,7 +162,7 @@ export class FsrStore {
 
   async isTombstoned(route: string): Promise<boolean> {
     const res = await this.db.execute(sql`
-      SELECT tombstoned FROM pilcrow_fsr WHERE route = ${route} AND slot = ''
+      SELECT tombstoned FROM kiln_fsr WHERE route = ${route} AND slot = ''
     `);
     const row = res.rows[0] as any;
     return row ? !!row.tombstoned : false;
@@ -171,7 +170,7 @@ export class FsrStore {
 
   async invalidateDepKey(depKey: string): Promise<string[]> {
     const res = await this.db.execute(sql`
-      UPDATE pilcrow_fsr
+      UPDATE kiln_fsr
       SET stale = TRUE, version = version + 1
       WHERE ${depKey} = ANY(depends_on)
         AND slot != ''
@@ -196,7 +195,7 @@ export class FsrStore {
 
   async invalidateRoute(route: string): Promise<void> {
     await this.db.execute(sql`
-      UPDATE pilcrow_fsr
+      UPDATE kiln_fsr
       SET stale = TRUE, version = version + 1
       WHERE route = ${route} AND slot != ''
     `);
@@ -215,8 +214,8 @@ export class FsrStore {
       SELECT s.route, s.slot, s.query, s.query_params as "queryParams", s.depends_on as "dependsOn", 
              r.promoted, s.debounce_secs as "debounceSecs", r.html_path as "htmlPath", 
              r.json_path as "jsonPath", s.column_name as "columnName"
-      FROM pilcrow_fsr s
-      JOIN pilcrow_fsr r ON s.route = r.route AND r.slot = ''
+      FROM kiln_fsr s
+      JOIN kiln_fsr r ON s.route = r.route AND r.slot = ''
       WHERE s.stale = TRUE AND s.slot != ''
         AND (
           COALESCE(s.debounce_secs, ${this.globalDebounceSecs}) = 0
@@ -242,7 +241,7 @@ export class FsrStore {
   async getPromotedPaths(route: string): Promise<{ htmlPath: string | null; jsonPath: string | null } | null> {
     const res = await this.db.execute(sql`
       SELECT html_path as "htmlPath", json_path as "jsonPath"
-      FROM pilcrow_fsr
+      FROM kiln_fsr
       WHERE route = ${route} AND slot = '' AND promoted = TRUE
     `);
     const row = res.rows[0] as any;
@@ -251,7 +250,7 @@ export class FsrStore {
 
   async setBakedPaths(route: string, htmlPath: string, jsonPath: string | null): Promise<void> {
     await this.db.execute(sql`
-      UPDATE pilcrow_fsr
+      UPDATE kiln_fsr
       SET html_path = ${htmlPath}, json_path = ${jsonPath}
       WHERE route = ${route} AND slot = ''
     `);
@@ -259,7 +258,7 @@ export class FsrStore {
 
   async evictIdleRoutes(thresholdSecs: number): Promise<EvictedRoute[]> {
     const res = await this.db.execute(sql`
-      UPDATE pilcrow_fsr
+      UPDATE kiln_fsr
       SET promoted = FALSE, hit_count = 0
       WHERE slot = ''
         AND promoted = TRUE
@@ -276,7 +275,7 @@ export class FsrStore {
 
   async markFresh(route: string, slot: string): Promise<void> {
     await this.db.execute(sql`
-      UPDATE pilcrow_fsr SET stale = FALSE, version = version + 1, last_patched_at = NOW() WHERE route = ${route} AND slot = ${slot}
+      UPDATE kiln_fsr SET stale = FALSE, version = version + 1, last_patched_at = NOW() WHERE route = ${route} AND slot = ${slot}
     `);
   }
 
@@ -287,8 +286,8 @@ export class FsrStore {
         SELECT s.route, s.slot, s.query, s.query_params as "queryParams", s.depends_on as "dependsOn", 
                r.promoted, s.debounce_secs as "debounceSecs", r.html_path as "htmlPath", 
                r.json_path as "jsonPath", s.column_name as "columnName"
-        FROM pilcrow_fsr s
-        JOIN pilcrow_fsr r ON s.route = r.route AND r.slot = ''
+        FROM kiln_fsr s
+        JOIN kiln_fsr r ON s.route = r.route AND r.slot = ''
         WHERE s.route = ${route} AND s.slot != ''
         ORDER BY s.slot
       `);
@@ -297,8 +296,8 @@ export class FsrStore {
         SELECT s.route, s.slot, s.query, s.query_params as "queryParams", s.depends_on as "dependsOn", 
                r.promoted, s.debounce_secs as "debounceSecs", r.html_path as "htmlPath", 
                r.json_path as "jsonPath", s.column_name as "columnName"
-        FROM pilcrow_fsr s
-        JOIN pilcrow_fsr r ON s.route = r.route AND r.slot = ''
+        FROM kiln_fsr s
+        JOIN kiln_fsr r ON s.route = r.route AND r.slot = ''
         WHERE s.route = ${route} AND s.slot != '' AND s.slot = ANY(ARRAY(SELECT jsonb_array_elements_text(${JSON.stringify(slots)}::jsonb)))
         ORDER BY s.slot
       `);
@@ -323,7 +322,7 @@ export class FsrStore {
       SELECT route, slot, depends_on as "dependsOn", stale, version, hit_count as "hitCount",
              promoted, html_path as "htmlPath", json_path as "jsonPath",
              to_char(last_hit AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS UTC') AS "lastHit"
-      FROM pilcrow_fsr
+      FROM kiln_fsr
       ORDER BY route, slot
     `);
     return res.rows.map((r: any) => ({
@@ -342,11 +341,11 @@ export class FsrStore {
 
   async reExecuteQuery(slot: StaleSlot): Promise<any> {
     if (!slot.query) return null;
-    const client = this.pool ?? (this.db as any).$client ?? (this.db as any).session?.client;
-    if (!client) throw new Error('FsrStore: no pg pool — call .withPool(pool) after construction');
+    const client = this.pool;
+    if (!client) throw new Error('FsrStore: no Bun.sql client — call .withPool(sql) after construction');
     const params = Array.isArray(slot.queryParams) ? slot.queryParams : [];
-    const res = await client.query(slot.query, params);
-    const row = res.rows[0];
+    const rows = await client.unsafe(slot.query, params);
+    const row = rows[0];
     if (!row) return null;
     const colKey = slot.columnName || slot.slot;
     return row[colKey] !== undefined ? row[colKey] : null;

@@ -138,24 +138,8 @@ export class FsrWatcher {
       while (!signal.aborted) {
         try {
           if (!this.redis) break;
-          subClient = this.redis.getClient().duplicate();
-          
-          await subClient.subscribe('pilcrow:invalidate');
-          console.log('FSR watcher: subscribed to pilcrow:invalidate');
+          subClient = await this.redis.getClient().duplicate();
 
-          const handleMessage = async (channel: string, _message: string) => {
-            if (channel === 'pilcrow:invalidate') {
-              try {
-                await this.watcherTickRedis();
-              } catch (err: any) {
-                console.error('FSR watcher: tick failed after invalidation event:', err.message);
-              }
-            }
-          };
-
-          subClient.on('message', handleMessage);
-
-          // Spawn a reconciliation tick timer (runs every 60 seconds as a fallback check)
           const reconciliationInterval = setInterval(async () => {
             try {
               await this.watcherTickRedis();
@@ -164,32 +148,41 @@ export class FsrWatcher {
             }
           }, 60000);
 
-          signal.addEventListener('abort', () => {
-            clearInterval(reconciliationInterval);
-            subClient?.quit().catch(() => {});
-          });
-
-          // Wait until aborted or connection closes
           await new Promise<void>((_, reject) => {
-            subClient.on('end', () => reject(new Error('Redis connection closed')));
-            signal.addEventListener('abort', () => reject(new Error('Aborted')));
+            subClient.onclose = (err?: Error) => {
+              clearInterval(reconciliationInterval);
+              reject(err ?? new Error('Redis connection closed'));
+            };
+
+            signal.addEventListener('abort', () => {
+              clearInterval(reconciliationInterval);
+              subClient?.close();
+              reject(new Error('Aborted'));
+            });
+
+            subClient.subscribe('kiln:invalidate', async (_message: string) => {
+              try {
+                await this.watcherTickRedis();
+              } catch (err: any) {
+                console.error('FSR watcher: tick failed after invalidation event:', err.message);
+              }
+            }).then(() => {
+              console.log('FSR watcher: subscribed to kiln:invalidate');
+            }).catch(reject);
           });
 
         } catch (err: any) {
           if (signal.aborted) break;
           console.warn('FSR watcher: Redis connection dropped or failed. Switching to poll fallback...', err.message);
-          // Polling fallback while disconnected
           try {
             await this.watcherTickRedis();
           } catch (e: any) {
             console.error('FSR watcher: fallback tick failed:', e.message);
           }
-          // Wait fallback interval before attempting reconnection
           await new Promise(resolve => setTimeout(resolve, Math.max(100, this.config.pollIntervalMs)));
         } finally {
-          if (subClient) {
-            subClient.quit().catch(() => {});
-          }
+          if (subClient) subClient.close();
+          subClient = null;
         }
       }
     };
