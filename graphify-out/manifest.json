@@ -1,214 +1,214 @@
 {
-  "/Users/jagjeet/Development/workspace/fsr/test-app/pilcrow.config.ts": {
-    "mtime": 1780273077.1922429,
-    "hash": "39445d0230a827752665fe45b2e3158e"
+  "/Users/jagjeet/Development/workspace/fsr/test-app/kiln.config.ts": {
+    "mtime": 1780278539.7433167,
+    "hash": "d4b8684739954b3d6cceb04b8840b3fd"
   },
   "/Users/jagjeet/Development/workspace/fsr/test-app/drizzle.config.ts": {
-    "mtime": 1780267921.0,
+    "mtime": 1780278539.7440383,
     "hash": "8d81ce4d2f8fedaf5cdb82691305e925"
   },
   "/Users/jagjeet/Development/workspace/fsr/test-app/db/schema.ts": {
-    "mtime": 1780267921.0,
-    "hash": "eb8dbd0796c0762d0a4ddc57f8d59814"
+    "mtime": 1780278539.7445588,
+    "hash": "4696b3485d3a9d0d124a21d1b2394395"
   },
   "/Users/jagjeet/Development/workspace/fsr/test-app/api/health.ts": {
-    "mtime": 1780267921.0,
+    "mtime": 1780278539.7453604,
     "hash": "2491e635f5011dcd2e5cabadcb55793c"
   },
   "/Users/jagjeet/Development/workspace/fsr/test-app/pages/index.tsx": {
-    "mtime": 1780267921.0,
-    "hash": "bb26f770a0557a1bd5518b525dccf28b"
+    "mtime": 1780278681.8737864,
+    "hash": "6dbf7adac31ffcdbabfb278fc28d8dc5"
   },
   "/Users/jagjeet/Development/workspace/fsr/test-app/pages/_layout.tsx": {
-    "mtime": 1780267921.0,
-    "hash": "a8ba1f651e020cf2177083696be0ec07"
+    "mtime": 1780278518.505067,
+    "hash": "db48aaf63c3e0b837b81cb2177a8157b"
   },
   "/Users/jagjeet/Development/workspace/fsr/test-app/src/main.ts": {
-    "mtime": 1780273077.192588,
-    "hash": "fbee7c61fca89a0e01413db3d95a268d"
+    "mtime": 1780278681.8782127,
+    "hash": "119b579246b864b8c5fe7dcc0c19f611"
   },
   "/Users/jagjeet/Development/workspace/fsr/test-app/drizzle/0000_init.sql": {
-    "mtime": 1780267921.0,
-    "hash": "5f9331bbf8110ec28760c6a4e8859384"
+    "mtime": 1780278539.747921,
+    "hash": "970426855a18476d69d999469179c84c"
   },
-  "/Users/jagjeet/Development/workspace/fsr/packages/create-fsr/src/cli.ts": {
-    "mtime": 1780273092.0183384,
+  "/Users/jagjeet/Development/workspace/fsr/packages/create-kiln/src/cli.ts": {
+    "mtime": 1780278539.7497706,
     "hash": "559dd65004829b25a1a6f197a8c2c0a1"
   },
-  "/Users/jagjeet/Development/workspace/fsr/packages/create-fsr/src/templates.ts": {
-    "mtime": 1780273092.0192437,
-    "hash": "a2fa48a7bd2dcc7ec382ab4d7cf59e75"
+  "/Users/jagjeet/Development/workspace/fsr/packages/create-kiln/src/templates.ts": {
+    "mtime": 1780278539.7512844,
+    "hash": "9c0828c17623cde71b8b4ed1ff585975"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/core/src/errors.ts": {
-    "mtime": 1780263993.0,
+    "mtime": 1780278539.7533302,
     "hash": "398d2f910e28b882b4e4b2536e3b7e96"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/core/src/live-prop.ts": {
-    "mtime": 1780264024.0,
+    "mtime": 1780278539.7540646,
     "hash": "25685be44cb7a02ab90104883625e7f6"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/core/src/types.ts": {
-    "mtime": 1780264035.0,
-    "hash": "a5336edca009fb85c45ae1e63509bc53"
+    "mtime": 1780278539.754965,
+    "hash": "a9c83dabbea81d2e7c0004b9cf184819"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/core/src/index.ts": {
-    "mtime": 1780264038.0,
+    "mtime": 1780278539.755554,
     "hash": "abe65578b31921ed4d8ac4f4af94c47d"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/core/src/config.ts": {
-    "mtime": 1780267890.0,
-    "hash": "d8a59c481ab19edb92bc222510527741"
+    "mtime": 1780278655.9952335,
+    "hash": "dda1af8f6b651a198415e3e46310ccce"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/adapter-elysia/src/smoke.ts": {
-    "mtime": 1780273077.1936038,
-    "hash": "45e80970fc439798712ae6010b40deb0"
+    "mtime": 1780278539.7578464,
+    "hash": "c9e5c5a7d4555002d0c1d9e43bfa6fa7"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/adapter-elysia/src/context.ts": {
-    "mtime": 1780276597.7856188,
-    "hash": "706b16861faeca96f2ed8b47958d90ad"
+    "mtime": 1780278539.75882,
+    "hash": "c09f45af9f3b3c4a28dc9d5a4c08e95e"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/adapter-elysia/src/adapter.ts": {
-    "mtime": 1780276573.4133928,
-    "hash": "e76d1a3da53e785cf0396031518253d6"
+    "mtime": 1780278539.7599187,
+    "hash": "b284615ea33f43433dc8166d10fec5db"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/adapter-elysia/src/index.ts": {
-    "mtime": 1780264353.0,
+    "mtime": 1780278539.7607238,
     "hash": "b9572aab72d8e3d239933d3d8d8a1f48"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/adapter-elysia/src/middleware/layout-intercept.ts": {
-    "mtime": 1780264318.0,
+    "mtime": 1780278539.8086734,
     "hash": "8abb683b186cc00469b5ae60d276f9c5"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/adapter-elysia/src/middleware/timeout.ts": {
-    "mtime": 1780264374.0,
+    "mtime": 1780278539.8093014,
     "hash": "550c4a331612616a7064c1e63af42b62"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/adapter-elysia/src/middleware/compression.ts": {
-    "mtime": 1780272502.0,
+    "mtime": 1780278539.809849,
     "hash": "500f0978a269746539b9b35da3a99d54"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/adapter-elysia/src/middleware/index.ts": {
-    "mtime": 1780276395.444545,
+    "mtime": 1780278539.8104737,
     "hash": "ef0efeafe288d3e9fc294550a9f91b11"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/adapter-elysia/src/middleware/csrf.ts": {
-    "mtime": 1780264305.0,
+    "mtime": 1780278539.8111491,
     "hash": "cc8f118d5679c0d01d089b9874b396c0"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/adapter-elysia/src/handlers/live-hub.ts": {
-    "mtime": 1780273077.1956432,
-    "hash": "213f1a8f8717e4e2250ec7f4542aaaf7"
+    "mtime": 1780278539.8118794,
+    "hash": "73ad3e016151a7032c133395c57c0e5e"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/adapter-elysia/src/handlers/fsr-hub.ts": {
-    "mtime": 1780273077.19531,
-    "hash": "8976d9b025aab41bfb6bdd6b5ed6d568"
+    "mtime": 1780278539.8124657,
+    "hash": "8eac94b8bc9f3b21ca9af6523ff07094"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/adapter-elysia/src/handlers/fsr-snapshot.ts": {
-    "mtime": 1780273077.1946745,
-    "hash": "bc24362821949bf0baa3ce31e6b63f61"
+    "mtime": 1780278539.8129363,
+    "hash": "8c6df501982ca92452f266e8a9cff03f"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/adapter-elysia/src/handlers/action.ts": {
-    "mtime": 1780273077.1959708,
-    "hash": "715c6d31673a214d7c6d1384630cc233"
+    "mtime": 1780278539.8135712,
+    "hash": "f4234afdc37f7035a513734b5a2ae9c8"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/adapter-elysia/src/handlers/page.ts": {
-    "mtime": 1780273077.194986,
-    "hash": "5ed7568683de98a768079269ed9a94de"
+    "mtime": 1780278656.000267,
+    "hash": "b2158469ee38a5bd35f3d2018a743911"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/routekit/src/live-client-script.ts": {
-    "mtime": 1780272539.0,
-    "hash": "946d132ec9d0f3026da4c7e02941f864"
+    "mtime": 1780278681.8534877,
+    "hash": "23de478ec17ada94523a4c519551ce32"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/routekit/src/page-options.ts": {
-    "mtime": 1780273077.1966813,
-    "hash": "81c5699a4a400c146761d0bcd8d181a4"
+    "mtime": 1780278539.7624567,
+    "hash": "b17a4e7b6ed29c6380c1c4bf28b70b2a"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/routekit/src/layout-chain.ts": {
-    "mtime": 1780272507.0,
+    "mtime": 1780278539.7642832,
     "hash": "1f8067b22cbac92a8b80f6502a048e7e"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/routekit/src/discover.ts": {
-    "mtime": 1780276413.8100188,
-    "hash": "6998e70416fb72a33181f772f11409f2"
+    "mtime": 1780278539.785289,
+    "hash": "a02c8ef602e85654f6fc874dbfb34a61"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/routekit/src/boot.ts": {
-    "mtime": 1780273132.461818,
-    "hash": "b18db89bf6e191f0f35b7984b4b7ff46"
+    "mtime": 1780278539.7873998,
+    "hash": "6a1e400edca0c92608d3ea2dd39d24df"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/routekit/src/manifest.ts": {
-    "mtime": 1780273077.1970105,
-    "hash": "59006bdc284b51dd2bdf560aab9981c0"
+    "mtime": 1780278539.7884228,
+    "hash": "29fefcc8608af0d6cd79e46ca328d87e"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/routekit/src/index.ts": {
-    "mtime": 1780264763.0,
+    "mtime": 1780278539.7890534,
     "hash": "60a328e6857c0cc343f7fd88c7857026"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/routekit/src/live-client.test.ts": {
-    "mtime": 1780270904.0,
-    "hash": "7388153b96f93dc91403106ce8774d8e"
+    "mtime": 1780278656.0430956,
+    "hash": "db441aeb083f5354d6923fb6326753f6"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/routekit/src/vite-plugin.ts": {
-    "mtime": 1780264744.0,
-    "hash": "2ce4618ef7ac53c78493683816798015"
+    "mtime": 1780278656.0050695,
+    "hash": "b1e9cbf5c246feb444e804da0d37af15"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/cli/src/cli.ts": {
-    "mtime": 1780276428.4022481,
-    "hash": "a076bb2d3812c44bb6d02e4416fdd938"
+    "mtime": 1780278539.752313,
+    "hash": "6997b402df149bd8553802976a8a0a16"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/engine/src/schema.ts": {
-    "mtime": 1780264841.0,
-    "hash": "eb8dbd0796c0762d0a4ddc57f8d59814"
+    "mtime": 1780278539.79101,
+    "hash": "4696b3485d3a9d0d124a21d1b2394395"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/engine/src/store.test.ts": {
-    "mtime": 1780265088.0,
-    "hash": "c70b41bf847967f89e10a629f33ff253"
+    "mtime": 1780278656.0239131,
+    "hash": "4e0365385d7a86a238d1d78f48d71c50"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/engine/src/db-notify.ts": {
-    "mtime": 1780265398.0,
-    "hash": "7aaa24c42bd42cc4c6f9bd8bb12feaa0"
+    "mtime": 1780278539.7929616,
+    "hash": "37f14944ce535113a2f4f6f78a9f3480"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/engine/src/watcher.ts": {
-    "mtime": 1780272532.0,
-    "hash": "39be268180caece495f17f9976367fcc"
+    "mtime": 1780278539.7947989,
+    "hash": "82d666439f246a6b7c0ff0ac5e9eaec6"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/engine/src/db-notify.test.ts": {
-    "mtime": 1780265423.0,
-    "hash": "b967d1ff53d45bd9e5d07b9f577172c6"
+    "mtime": 1780278656.0246017,
+    "hash": "0930a372d2d7cedd37e69260bd7d78e4"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/engine/src/watcher.test.ts": {
-    "mtime": 1780265332.0,
-    "hash": "abaaea99118a8b1b3ae097c0e1ee3001"
+    "mtime": 1780278656.0250914,
+    "hash": "1989aa8f37765bfbd2216100e49bbc8d"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/engine/src/baking.ts": {
-    "mtime": 1780264908.0,
+    "mtime": 1780278539.7982175,
     "hash": "9ca89ee57e525520f14681f174febc38"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/engine/src/hub.ts": {
-    "mtime": 1780273077.2001607,
-    "hash": "1105029ac69244ef4c034893f5d13128"
+    "mtime": 1780278539.7992358,
+    "hash": "9b0ad0c81bb761eb5655e46c6802651c"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/engine/src/cache.ts": {
-    "mtime": 1780264931.0,
-    "hash": "df0809acd62cf22b615d019098dadafe"
+    "mtime": 1780278539.8001056,
+    "hash": "77a1fbf1715c873525d729d3f2056d97"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/engine/src/index.ts": {
-    "mtime": 1780265400.0,
+    "mtime": 1780278539.8009195,
     "hash": "22499b157c51a435f78eeb10dc0f61dd"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/engine/src/baking.test.ts": {
-    "mtime": 1780264942.0,
+    "mtime": 1780278656.0257318,
     "hash": "6acadd5b54963d3b80ec4418822f4b05"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/engine/src/store.ts": {
-    "mtime": 1780272520.0,
-    "hash": "e7ebd48f4597885fbc6fbdf10b748850"
+    "mtime": 1780278539.8034592,
+    "hash": "33e14a3a133d3103c3ce7438fb572b25"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/engine/src/hub.test.ts": {
-    "mtime": 1780265366.0,
-    "hash": "d8ed07e231c52824ddb714c3e2234f27"
+    "mtime": 1780278656.0261621,
+    "hash": "108cb4a762b8bab8bb539b4d221e8dde"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/client/build.ts": {
-    "mtime": 1780273110.9479368,
+    "mtime": 1780278539.7486682,
     "hash": "a77344fef834a4d9746e49647d353f4d"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/client/src/silcrow.js": {
@@ -216,24 +216,20 @@
     "hash": "860180c811727dc6b830691d7df97f39"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/react/src/hooks.test.tsx": {
-    "mtime": 1780265556.0,
-    "hash": "afe5684625596bdc71269cf03772d313"
+    "mtime": 1780278656.033541,
+    "hash": "cf79475f5a71d204e3ea788eb46d5451"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/react/src/index.ts": {
-    "mtime": 1780265490.0,
+    "mtime": 1780278539.8055055,
     "hash": "f1b80f8671eba9f0d1a6275906758b7e"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/react/src/hooks.ts": {
-    "mtime": 1780265516.0,
-    "hash": "39f01047303f8f4f5ff46aa279b7529e"
+    "mtime": 1780278681.858565,
+    "hash": "03a7bdae5f13e1ce53faa402a570c092"
   },
   "/Users/jagjeet/Development/workspace/fsr/packages/react/src/submit.ts": {
-    "mtime": 1780265484.0,
-    "hash": "77333b5c97af5f58ee80341211a1fabd"
-  },
-  "/Users/jagjeet/Development/workspace/fsr/QODER.md": {
-    "mtime": 1780275333.0202472,
-    "hash": "f958ec4c7420f4a7ac9aea5567a46ef1"
+    "mtime": 1780278656.0383644,
+    "hash": "4edc344417a29121d00931a5f6f8ecd4"
   },
   "/Users/jagjeet/Development/workspace/fsr/GEMINI.md": {
     "mtime": 1780274878.7511458,
