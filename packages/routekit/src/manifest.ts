@@ -7,18 +7,20 @@ export interface PageRoute {
   layouts: string[];
   promoteAfter?: number;
   liveFields: LiveFieldMeta[];
+  hasEntries: boolean;    // exports entries(): Promise<Record<string,string>[]>
 }
 
 export interface LayoutNode {
   filePath: string;
   relativePath: string;
-  pattern: string; // The URL prefix/pattern this layout applies to
+  pattern: string;
+  hasLoad: boolean;       // exports load(req): Promise<LoadResult>
 }
 
 export interface RouteManifest {
   pages: PageRoute[];
   layouts: LayoutNode[];
-  errorPages: Record<string, string>; // Maps relative directory paths to error page filePaths
-  loadingPages: Record<string, string>; // Maps relative directory paths to loading page filePaths
-  notFoundPages: Record<string, string>; // Maps relative directory paths to 404 page filePaths
+  errorPages: Record<string, string>;
+  loadingPages: Record<string, string>;
+  notFoundPages: Record<string, string>;
 }

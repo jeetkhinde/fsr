@@ -45,12 +45,20 @@ export function pathToPattern(relativePath: string): string {
   return pattern;
 }
 
-export async function walkDir(dir: string): Promise<RawDiscoveredFile[]> {
+export interface DiscoverOptions {
+  ignoreGlobs?: string[];
+}
+
+export async function walkDir(dir: string, opts: DiscoverOptions = {}): Promise<RawDiscoveredFile[]> {
   const glob = new Glob('**/*.{tsx,ts,jsx,js,html}');
+  const ignoreMatchers = (opts.ignoreGlobs ?? []).map(pattern => new Glob(pattern));
   const results: RawDiscoveredFile[] = [];
   try {
     for await (const relPath of glob.scan({ cwd: dir, onlyFiles: true })) {
       if (relPath.startsWith('node_modules/') || relPath.startsWith('.git/') || relPath.startsWith('dist/')) {
+        continue;
+      }
+      if (ignoreMatchers.some(m => m.match(relPath))) {
         continue;
       }
       const dirRel = path.dirname(relPath);
@@ -65,6 +73,16 @@ export async function walkDir(dir: string): Promise<RawDiscoveredFile[]> {
     return [];
   }
   return results;
+}
+
+// Note: named re-exports (export { load } from '...') are not detected.
+async function fileHasExport(filePath: string, pattern: RegExp): Promise<boolean> {
+  try {
+    const content = await Bun.file(filePath).text();
+    return pattern.test(content);
+  } catch {
+    return false;
+  }
 }
 
 function getLayoutsForPage(
@@ -91,8 +109,8 @@ function getLayoutsForPage(
   return layouts;
 }
 
-export async function discoverRoutes(pagesDir: string): Promise<RouteManifest> {
-  const rawFiles = await walkDir(pagesDir);
+export async function discoverRoutes(pagesDir: string, opts: DiscoverOptions = {}): Promise<RouteManifest> {
+  const rawFiles = await walkDir(pagesDir, opts);
   
   const pages: PageRoute[] = [];
   const layouts: LayoutNode[] = [];
@@ -109,10 +127,15 @@ export async function discoverRoutes(pagesDir: string): Promise<RouteManifest> {
 
     if (baseName === '_layout') {
       availableLayouts.set(dirRel, file.filePath);
+      const hasLoad = await fileHasExport(
+        file.filePath,
+        /export\s+(async\s+)?function\s+load\b|export\s+const\s+load\b/
+      );
       layouts.push({
         filePath: file.filePath,
         relativePath: file.relativePath,
         pattern: pathToPattern(dirRel),
+        hasLoad,
       });
     } else if (baseName === '_error') {
       errorPages[dirRel] = file.filePath;
@@ -132,6 +155,10 @@ export async function discoverRoutes(pagesDir: string): Promise<RouteManifest> {
 
     const pattern = pathToPattern(file.relativePath);
     const pageLayouts = getLayoutsForPage(file.relativePath, availableLayouts);
+    const hasEntries = await fileHasExport(
+      file.filePath,
+      /export\s+(async\s+)?function\s+entries\b|export\s+const\s+entries\b/
+    );
 
     pages.push({
       pattern,
@@ -139,6 +166,7 @@ export async function discoverRoutes(pagesDir: string): Promise<RouteManifest> {
       relativePath: file.relativePath,
       layouts: pageLayouts,
       liveFields: [], // Extracted at runtime or build time in Milestone 3.3
+      hasEntries,
     });
   }
 
