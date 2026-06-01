@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "echovault": {
+      "command": "memory",
+      "args": [
+        "mcp"
+      ],
+      "type": "stdio"
+    },
+    "codebase-memory-mcp": {
+      "command": "codebase-memory-mcp",
+      "args": [],
+      "type": "stdio"
+    },
+    "code-review-graph": {
+      "command": "uvx",
+      "args": [
+        "code-review-graph",
+        "serve"
+      ],
+      "cwd": "/Users/jagjeet/Development/workspace/fsr",
+      "type": "stdio"
+    }
+  }
+}

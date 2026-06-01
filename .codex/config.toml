@@ -1,0 +1,14 @@
+[mcp_servers]
+
+[mcp_servers.echovault]
+command = "memory"
+args = ["mcp"]
+
+[mcp_servers.codebase-memory-mcp]
+command = "codebase-memory-mcp"
+args = []
+
+[mcp_servers.code-review-graph]
+command = "uvx"
+args = ["code-review-graph", "serve"]
+cwd = "/Users/jagjeet/Development/workspace/fsr"
