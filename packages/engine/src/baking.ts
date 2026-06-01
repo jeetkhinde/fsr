@@ -78,3 +78,43 @@ function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
+
+import { renderToString } from 'react-dom/server';
+import { createElement } from 'react';
+
+export const OUTLET_TOKEN = '__KILN_OUTLET_7f3a9c4b__';
+
+/**
+ * SSR a page/fragment component in isolation (no layout wrapping).
+ */
+export async function bakeFragment(
+  Component: (props: any) => any,
+  props: Record<string, any>
+): Promise<string> {
+  return renderToString(createElement(Component, props));
+}
+
+/**
+ * SSR a layout component with OUTLET_TOKEN as children.
+ * The token appears verbatim in the output — replace it at assembly time.
+ */
+export async function bakeLayoutFragment(
+  LayoutComponent: (props: any) => any,
+  props: Record<string, any>
+): Promise<string> {
+  return renderToString(createElement(LayoutComponent, props, OUTLET_TOKEN));
+}
+
+/**
+ * Bake both HTML fragment and JSON for a route segment in one pass.
+ */
+export async function bakeSegment(
+  Component: (props: any) => any,
+  props: Record<string, any>,
+  isLayout: boolean
+): Promise<{ html: string; json: string }> {
+  const html = isLayout
+    ? await bakeLayoutFragment(Component, props)
+    : await bakeFragment(Component, props);
+  return { html, json: JSON.stringify(props) };
+}
