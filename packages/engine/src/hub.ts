@@ -1,6 +1,8 @@
 import { FsrStore } from './store.js';
 import { FsrWatcher, SlotPatch } from './watcher.js';
 import { SSEEvent } from '@kiln/core';
+import { KilnCache } from './cache.js';
+import { injectFsrSlots } from './baking.js';
 
 export interface FsrHubConfig {
   maxConnections: number;
@@ -21,17 +23,40 @@ export function getActiveConnectionsCount(): number {
   return activeConnectionsCount;
 }
 
+/**
+ * After a LiveProp patch fires, update both JSON and HTML baked files
+ * so the next cache hit serves fresh data without a DB round-trip.
+ */
+export async function patchBakedFiles(
+  cache: KilnCache,
+  route: string,
+  slot: string,
+  value: unknown
+): Promise<void> {
+  await Promise.allSettled([
+    // Patch JSON: update the field
+    cache.patchJsonField(route, slot, value),
+    // Patch HTML: re-inject the s-live slot
+    cache.getHtml(route).then(html => {
+      if (!html) return;
+      const patched = injectFsrSlots(html, [[slot, value]]);
+      return cache.setHtml(route, patched);
+    }),
+  ]);
+}
+
 export interface FsrHubStreamOptions {
   route: string;
   slots: string[];
   watcher?: FsrWatcher;
   config?: FsrHubConfig;
+  cache?: KilnCache;
 }
 
 export async function* fsrHubStream(
   options: FsrHubStreamOptions
 ): AsyncGenerator<SSEEvent, void, unknown> {
-  const { route, slots, watcher, config = defaultHubConfig } = options;
+  const { route, slots, watcher, config = defaultHubConfig, cache } = options;
 
   if (!watcher) {
     yield { event: 'error', data: 'FSR watcher not configured' };
@@ -121,6 +146,9 @@ export async function* fsrHubStream(
           event: 'fsr',
           data: JSON.stringify({ [patch.slot]: patch.value })
         };
+        if (cache) {
+          patchBakedFiles(cache, route, patch.slot, patch.value).catch(() => {});
+        }
       }
     }
   } finally {
