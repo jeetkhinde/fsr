@@ -1,0 +1,22 @@
+{
+  "name": "create-fsr",
+  "version": "0.1.0",
+  "description": "Scaffolding CLI for Pilcrow.js apps",
+  "type": "module",
+  "main": "./dist/cli.js",
+  "bin": {
+    "create-pilcrow": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "citty": "^0.1.6",
+    "consola": "^3.2.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "@types/node": "^20.12.7"
+  }
+}

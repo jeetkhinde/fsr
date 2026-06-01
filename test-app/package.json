@@ -1,0 +1,36 @@
+{
+  "name": "test-app",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "pilcrow dev",
+    "build": "pilcrow build",
+    "start": "node dist/main.js",
+    "db:generate": "drizzle-kit generate:pg",
+    "db:push": "drizzle-kit push:pg"
+  },
+  "dependencies": {
+    "@fsr/core": "workspace:*",
+    "@fsr/react": "workspace:*",
+    "@fsr/adapter-elysia": "workspace:*",
+    "@fsr/engine": "workspace:*",
+    "@fsr/routekit": "workspace:*",
+    "elysia": "^1.0.12",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "drizzle-orm": "^0.30.10",
+    "pg": "^8.11.5",
+    "ioredis": "^5.4.1"
+  },
+  "devDependencies": {
+    "@fsr/cli": "workspace:*",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.11",
+    "@vitejs/plugin-react": "^4.2.1",
+    "drizzle-kit": "^0.20.17",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/pg": "^8.11.5",
+    "@types/node": "^20.12.7"
+  }
+}

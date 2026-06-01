@@ -1,0 +1,16 @@
+{
+  "name": "@fsr/client",
+  "version": "0.1.0",
+  "description": "Browser runtime for FSR.js (Silcrow hypermedia client)",
+  "type": "module",
+  "exports": {
+    "./silcrow.js": "./dist/silcrow.js",
+    "./silcrow.min.js": "./dist/silcrow.min.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "bun run build.ts",
+    "watch": "bun run build.ts --watch"
+  },
+  "devDependencies": {}
+}

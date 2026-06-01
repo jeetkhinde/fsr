@@ -1,0 +1,6 @@
+packages:
+  - 'packages/*'
+  - 'test-app'
+allowBuilds:
+  es5-ext: true
+  esbuild: true

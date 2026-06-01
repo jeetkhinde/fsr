@@ -1,0 +1,30 @@
+{
+  "name": "@fsr/engine",
+  "version": "0.1.0",
+  "description": "Hypermedia State Revalidation (FSR) baking engine for Pilcrow.js",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@fsr/core": "workspace:*",
+    "drizzle-orm": "^0.30.9",
+    "ioredis": "^5.4.1",
+    "pg": "^8.11.5",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "@types/node": "^20.12.7",
+    "@types/pg": "^8.11.6"
+  }
+}
