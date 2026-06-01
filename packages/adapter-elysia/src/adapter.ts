@@ -88,5 +88,12 @@ export class ElysiaAdapter implements ServerAdapter {
       const serverPort = this.app.server?.port || port;
       callback?.(`http://${hostname}:${serverPort}`);
     });
+
+    const shutdown = async () => {
+      await this.app.stop();
+      process.exit(0);
+    };
+    process.once('SIGTERM', shutdown);
+    process.once('SIGINT', shutdown);
   }
 }
