@@ -1,7 +1,7 @@
-import { Elysia } from 'elysia';
-import type { ServerAdapter, PilcrowRequest, PilcrowResponse, MiddlewareConfig } from '@fsr/core';
+import { Elysia, sse, file } from 'elysia';
+import type { ServerAdapter, PilcrowRequest, PilcrowResponse, MiddlewareConfig, SSEEvent } from '@fsr/core';
 import { wrapRequest, ElysiaResponseImpl, handleElysiaResponse } from './context.js';
-import { bodyLimit, csrf, timeout, compression, layoutIntercept } from './middleware/index.js';
+import { csrf, timeout, compression, layoutIntercept } from './middleware/index.js';
 import { createRequire } from 'module';
 
 const requireFn = typeof require !== 'undefined' ? require : createRequire(import.meta.url);
@@ -9,7 +9,9 @@ const requireFn = typeof require !== 'undefined' ? require : createRequire(impor
 export class ElysiaAdapter implements ServerAdapter {
   public app: Elysia;
 
-  constructor(options?: { elysia?: Elysia }) {
+  constructor(options?: { elysia?: Elysia; bodyLimitBytes?: number }) {
+    const limitBytes = options?.bodyLimitBytes ?? 2 * 1024 * 1024;
+
     if (options?.elysia) {
       this.app = options.elysia;
     } else {
@@ -23,7 +25,7 @@ export class ElysiaAdapter implements ServerAdapter {
           this.app = new Elysia();
         }
       } else {
-        this.app = new Elysia();
+        this.app = new Elysia({ serve: { maxRequestBodySize: limitBytes } });
       }
     }
   }
@@ -57,38 +59,32 @@ export class ElysiaAdapter implements ServerAdapter {
     pattern: string,
     handler: (req: PilcrowRequest, res: PilcrowResponse) => Promise<void>
   ): void {
-    this.app.get(pattern, async (ctx) => {
+    this.app.get(pattern, async function* (ctx: any) {
       const req = wrapRequest(ctx);
       const res = new ElysiaResponseImpl(ctx);
       await handler(req, res);
-      return handleElysiaResponse(res, ctx);
+
+      if (res.status && res.status !== 200) ctx.set.status = res.status;
+      for (const [k, v] of Object.entries(res.headers)) ctx.set.headers[k] = v;
+
+      if (res.bodyType === 'sse' && res.body) {
+        for await (const event of res.body as AsyncIterable<SSEEvent>) {
+          yield sse({
+            data: event.data,
+            ...(event.event && { event: event.event }),
+            ...(event.id && { id: event.id }),
+            ...(event.retry !== undefined && { retry: event.retry }),
+          });
+        }
+      }
     });
   }
 
   registerAsset(urlPath: string, filePath: string): void {
-    this.app.get(urlPath, () => {
-      // @ts-ignore
-      if (typeof Bun !== 'undefined') {
-        // @ts-ignore
-        return Bun.file(filePath);
-      }
-      // Node fallback for fs
-      try {
-        const fs = require('fs');
-        return new Response(fs.readFileSync(filePath));
-      } catch (e) {
-        return new Response('File not found', { status: 404 });
-      }
-    });
+    this.app.get(urlPath, () => file(filePath));
   }
 
   applyMiddleware(config: MiddlewareConfig): void {
-    if (config.bodyLimitBytes !== undefined) {
-      this.app.use(bodyLimit(config.bodyLimitBytes));
-    } else {
-      this.app.use(bodyLimit());
-    }
-
     if (config.csrf !== false) {
       this.app.use(csrf());
     }

@@ -78,34 +78,6 @@ export class ElysiaResponseImpl implements PilcrowResponse {
   }
 }
 
-export function sseToReadableStream(stream: AsyncIterable<SSEEvent>): ReadableStream {
-  return new ReadableStream({
-    async start(controller) {
-      const encoder = new TextEncoder();
-      try {
-        for await (const chunk of stream) {
-          let payload = '';
-          if (chunk.event) payload += `event: ${chunk.event}\n`;
-          if (chunk.id) payload += `id: ${chunk.id}\n`;
-          if (chunk.retry !== undefined) payload += `retry: ${chunk.retry}\n`;
-          
-          const lines = chunk.data.split('\n');
-          for (const line of lines) {
-            payload += `data: ${line}\n`;
-          }
-          payload += '\n';
-          
-          controller.enqueue(encoder.encode(payload));
-        }
-      } catch (err) {
-        controller.error(err);
-      } finally {
-        controller.close();
-      }
-    },
-  });
-}
-
 export function handleElysiaResponse(res: ElysiaResponseImpl, ctx: any) {
   if (res.status) {
     ctx.set.status = res.status;
@@ -113,20 +85,10 @@ export function handleElysiaResponse(res: ElysiaResponseImpl, ctx: any) {
   for (const [key, value] of Object.entries(res.headers)) {
     ctx.set.headers[key] = value;
   }
-  
+
   if (res.bodyType === 'redirect') {
     return;
   }
-  
-  if (res.bodyType === 'sse') {
-    ctx.set.headers['content-type'] = 'text/event-stream';
-    ctx.set.headers['cache-control'] = 'no-cache';
-    ctx.set.headers['connection'] = 'keep-alive';
-    return new Response(sseToReadableStream(res.body), {
-      status: res.status,
-      headers: ctx.set.headers,
-    });
-  }
-  
+
   return res.body;
 }

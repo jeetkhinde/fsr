@@ -1,5 +1,5 @@
-import * as fs from 'fs/promises';
 import * as path from 'path';
+import fg from 'fast-glob';
 import type { RouteManifest, PageRoute, LayoutNode } from './manifest.js';
 
 export interface RawDiscoveredFile {
@@ -45,46 +45,27 @@ export function pathToPattern(relativePath: string): string {
   return pattern;
 }
 
-export async function walkDir(
-  dir: string,
-  baseDir: string = dir
-): Promise<RawDiscoveredFile[]> {
-  const files: RawDiscoveredFile[] = [];
-  let entries;
+export async function walkDir(dir: string): Promise<RawDiscoveredFile[]> {
+  let relPaths: string[];
   try {
-    entries = await fs.readdir(dir, { withFileTypes: true });
-  } catch (err) {
+    relPaths = await fg('**/*.{tsx,ts,jsx,js,html}', {
+      cwd: dir,
+      ignore: ['node_modules/**', '.git/**', 'dist/**'],
+      onlyFiles: true,
+    });
+  } catch {
     return [];
   }
 
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name);
-    const relPath = path.relative(baseDir, fullPath);
-
-    if (entry.isDirectory()) {
-      if (['node_modules', '.git', 'dist'].includes(entry.name)) {
-        continue;
-      }
-      const subFiles = await walkDir(fullPath, baseDir);
-      files.push(...subFiles);
-    } else if (entry.isFile()) {
-      const ext = path.extname(entry.name);
-      if (['.tsx', '.ts', '.jsx', '.js', '.html'].includes(ext)) {
-        let dirRel = path.dirname(relPath);
-        if (dirRel === '.') {
-          dirRel = '';
-        }
-        files.push({
-          filePath: fullPath,
-          relativePath: relPath,
-          dirRelativePath: dirRel,
-          fileName: entry.name,
-        });
-      }
-    }
-  }
-
-  return files;
+  return relPaths.map((relPath) => {
+    const dirRel = path.dirname(relPath);
+    return {
+      filePath: path.join(dir, relPath),
+      relativePath: relPath,
+      dirRelativePath: dirRel === '.' ? '' : dirRel,
+      fileName: path.basename(relPath),
+    };
+  });
 }
 
 function getLayoutsForPage(

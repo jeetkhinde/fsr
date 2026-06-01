@@ -16,7 +16,8 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@fsr/core": "workspace:*"
+    "@fsr/core": "workspace:*",
+    "fast-glob": "^3.3.2"
   },
   "devDependencies": {
     "typescript": "^5.4.5",

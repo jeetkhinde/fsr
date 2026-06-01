@@ -11,8 +11,8 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { createServer, build as viteBuild } from 'vite';
 import react from '@vitejs/plugin-react';
 import { pilcrowVitePlugin } from '@fsr/routekit';
-import * as fs from 'fs/promises';
 import * as path from 'path';
+import fg from 'fast-glob';
 import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
 
@@ -162,29 +162,12 @@ const devCommand = defineCommand({
 });
 
 async function findClientEntries(dir: string): Promise<string[]> {
-  const entries: string[] = [];
-  async function walk(currentDir: string) {
-    let files;
-    try {
-      files = await fs.readdir(currentDir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const file of files) {
-      const fullPath = path.join(currentDir, file.name);
-      if (file.isDirectory()) {
-        if (['node_modules', '.git', 'dist'].includes(file.name)) continue;
-        await walk(fullPath);
-      } else if (file.isFile()) {
-        const ext = path.extname(file.name);
-        if (['.tsx', '.ts', '.jsx', '.js'].includes(ext)) {
-          entries.push(fullPath);
-        }
-      }
-    }
-  }
-  await walk(dir);
-  return entries;
+  return fg('**/*.{ts,tsx,js,jsx}', {
+    cwd: dir,
+    ignore: ['node_modules/**', '.git/**', 'dist/**'],
+    onlyFiles: true,
+    absolute: true,
+  });
 }
 
 const buildCommand = defineCommand({

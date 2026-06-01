@@ -20,6 +20,7 @@
     "pg": "^8.11.5",
     "drizzle-orm": "^0.30.10",
     "ioredis": "^5.4.1",
+    "fast-glob": "^3.3.2",
     "@fsr/core": "workspace:*",
     "@fsr/routekit": "workspace:*",
     "@fsr/adapter-elysia": "workspace:*",
