@@ -1439,7 +1439,7 @@ function destroyAllLive() {
  * Scans the DOM for explicit live connection attributes.
  * Strict protocol enforcement.
  */
-function initLiveElements() {
+function initSilcrowLiveElements() {
   // WS is checked first; an element should carry only one live protocol attribute.
   // If somehow both are present, WS wins and SSE is skipped for that element.
   document.querySelectorAll("[s-sse], [s-ws], [s-wss]").forEach(el => {
@@ -2659,7 +2659,7 @@ function init() {
   seedAtomsFromSSR();
 
   // 1. Unified Live Initialization
-  initLiveElements();
+  initSilcrowLiveElements();
 
   // 1b. Vanilla scope bindings (s-bind="scope")
   initScopeBindings();
@@ -2820,4 +2820,87 @@ if (document.readyState === "loading") {
 } else {
   init();
 }
+
+// ── KilnClient SSE anchor ─────────────────────────────────────────────────
+
+var RECONNECT_BASE_MS = 1000;
+var RECONNECT_MAX_MS = 30000;
+
+function openLiveConnection(el) {
+  var route = el.getAttribute('data-kiln-live');
+  var slots = [];
+  el.querySelectorAll('[data-kiln-live-field]').forEach(function(n) {
+    var k = n.getAttribute('data-kiln-live-field');
+    if (k && !slots.includes(k)) slots.push(k);
+  });
+  if (!route) return;
+
+  var url = '/__kiln/fsr?route=' + encodeURIComponent(route) + '&slots=' + encodeURIComponent(slots.join(','));
+  var delay = RECONNECT_BASE_MS;
+  var es;
+  var closed = false;
+
+  function connect() {
+    if (closed) return;
+    es = new EventSource(url);
+
+    es.addEventListener('live', function(e) {
+      try {
+        var data = JSON.parse(e.data);
+        var slot = data.slot;
+        var value = data.value;
+        el.querySelectorAll('[data-kiln-live-field="' + CSS.escape(slot) + '"]').forEach(function(n) {
+          n.textContent = typeof value === 'object' ? JSON.stringify(value) : String(value);
+        });
+        delay = RECONNECT_BASE_MS;
+      } catch(err) { warn('live patch parse error: ' + err.message); }
+    });
+
+    es.addEventListener('list-patch', function(e) {
+      try {
+        var data = JSON.parse(e.data);
+        var listName = data.list;
+        var key = data.key;
+        var changes = data.changes;
+        var listEl = document.querySelector('[data-kiln-list="' + CSS.escape(listName) + '"]');
+        if (!listEl) return;
+        var rowEl = listEl.querySelector('[data-kiln-key="' + CSS.escape(key) + '"]');
+        if (!rowEl) return;
+        Object.keys(changes).forEach(function(field) {
+          rowEl.querySelectorAll('[data-kiln-live-field="' + CSS.escape(field) + '"]').forEach(function(n) {
+            n.textContent = String(changes[field]);
+          });
+        });
+      } catch(err) { warn('list-patch error: ' + err.message); }
+    });
+
+    es.addEventListener('error', function() {
+      es.close();
+      if (closed) return;
+      setTimeout(connect, delay);
+      delay = Math.min(delay * 2, RECONNECT_MAX_MS);
+    });
+  }
+
+  connect();
+
+  return function destroy() {
+    closed = true;
+    if (es) es.close();
+  };
+}
+
+function initLiveElements() {
+  document.querySelectorAll('[data-kiln-live]').forEach(function(el) {
+    if (el.__kilnLiveDestroy) return;
+    el.__kilnLiveDestroy = openLiveConnection(el);
+  });
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initLiveElements);
+} else {
+  initLiveElements();
+}
+document.addEventListener('silcrow:patched', initLiveElements);
 })();
