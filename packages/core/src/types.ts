@@ -27,13 +27,15 @@ export interface KilnResponse {
   status: number;
   headers: Record<string, string>;
   body?: string | unknown | AsyncIterable<SSEEvent>;
-  bodyType?: 'html' | 'json' | 'sse' | 'redirect';
+  bodyType?: 'html' | 'json' | 'sse' | 'redirect' | 'binary';
   redirectUrl?: string;
 
   html(body: string): void;
   json(body: unknown): void;
   redirect(url: string, status?: number): void;
   sse(stream: AsyncIterable<SSEEvent>): void;
+  /** Send raw binary data (images, files). Content-type must be set via headers. */
+  binary?(data: Buffer | ArrayBuffer): void;
 }
 
 // ── Middleware Configuration ──

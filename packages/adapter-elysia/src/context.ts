@@ -50,7 +50,7 @@ export class ElysiaResponseImpl implements KilnResponse {
   public status = 200;
   public headers: Record<string, string> = {};
   public body?: any;
-  public bodyType?: 'html' | 'json' | 'sse' | 'redirect';
+  public bodyType?: 'html' | 'json' | 'sse' | 'redirect' | 'binary';
   public redirectUrl?: string;
 
   constructor(private ctx: any) {}
@@ -78,6 +78,11 @@ export class ElysiaResponseImpl implements KilnResponse {
   sse(stream: AsyncIterable<SSEEvent>): void {
     this.body = stream;
     this.bodyType = 'sse';
+  }
+
+  binary(data: Buffer | ArrayBuffer): void {
+    this.body = data instanceof Buffer ? data : Buffer.from(data);
+    this.bodyType = 'binary';
   }
 }
 

@@ -268,7 +268,13 @@ export async function startKiln(
     compression: true,
   });
 
-  // 4. Register page routes
+  // 4. Register /_image endpoint if images config is present
+  if ((config as any).images?.enabled) {
+    const { buildImageHandler } = await import('./image-handler.js');
+    adapter.registerPage('/_image', [], buildImageHandler((config as any).images));
+  }
+
+  // 5. Register page routes
   for (const page of manifest.pages) {
     const absolutePagePath = path.resolve(page.filePath);
     const mod = await import(pathToFileURL(absolutePagePath).href);
@@ -307,7 +313,7 @@ export async function startKiln(
     }
   }
 
-  // 5. Register /_kiln/client.js asset
+  // 6. Register /_kiln/client.js asset
   try {
     const clientPath = fileURLToPath(import.meta.resolve('@kiln/client/client.js'));
     adapter.registerAsset('/_kiln/client.js', clientPath);
@@ -315,7 +321,7 @@ export async function startKiln(
     // @kiln/client not installed
   }
 
-  // 6. Serve Silcrow browser runtime from @kiln/client (always)
+  // 7. Serve Silcrow browser runtime from @kiln/client (always)
   try {
     const silcrowPath = fileURLToPath(import.meta.resolve('@kiln/client/silcrow.js'));
     adapter.registerAsset('/_silcrow/silcrow.js', silcrowPath);
@@ -323,7 +329,7 @@ export async function startKiln(
     // @kiln/client not installed
   }
 
-  // 7. Serve FSR live client script when FSR is active
+  // 8. Serve FSR live client script when FSR is active
   if (options.fsr) {
     adapter.registerPage('/_kiln/live.js', [], async (_req, res) => {
       res.headers['content-type'] = 'application/javascript; charset=utf-8';
@@ -331,7 +337,7 @@ export async function startKiln(
     });
   }
 
-  // 8. Register FSR SSE endpoints
+  // 9. Register FSR SSE endpoints
   if (options.fsr) {
     adapter.registerSSE('/__kiln/fsr', async (req, res) => {
       const route = req.query.route || '';
@@ -374,7 +380,7 @@ export async function startKiln(
     });
   });
 
-  // 9. Register inspect endpoint
+  // 10. Register inspect endpoint
   adapter.registerPage('/__kiln/inspect', [], async (_req, res) => {
     res.json({
       pages: manifest.pages.map(p => ({
