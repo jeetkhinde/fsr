@@ -13,6 +13,7 @@ export interface KilnRequest {
   isEnhanced: boolean;            // silcrow-target header present
   layoutsPresent: string[];       // parsed from X-PS-Present
   raw?: any;                      // escape hatch for adapter-specific request object
+  prebakeNext(path: string): void;
 }
 
 export interface SSEEvent {
@@ -89,6 +90,11 @@ export interface PageDefinition {
   load?: (req: KilnRequest) => Promise<LoadResult> | LoadResult;
   actions?: Record<string, ActionHandler>;
   default: any; // React Component
+}
+
+export interface LayoutDefinition {
+  load?: (req: KilnRequest) => Promise<LoadResult> | LoadResult;
+  default: any; // React component with children prop
 }
 
 export interface LiveFieldMeta {
