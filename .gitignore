@@ -6,3 +6,7 @@ dist/
 *.local
 # Added by code-review-graph
 .code-review-graph/
+
+graphify-output/
+graphify-output/cache/ast/
+graphify-output/grapgh_report.md
