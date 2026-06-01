@@ -16,7 +16,8 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@kiln/core": "workspace:*"
+    "@kiln/core": "workspace:*",
+    "@kiln/engine": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.4.5",

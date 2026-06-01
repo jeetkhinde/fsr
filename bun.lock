@@ -111,6 +111,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@kiln/core": "workspace:*",
+        "@kiln/engine": "workspace:*",
       },
       "devDependencies": {
         "@types/node": "^20.12.7",

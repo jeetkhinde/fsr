@@ -3,20 +3,25 @@ import type { ComponentType } from 'react';
 export interface LayoutComponentConfig {
   pattern: string;
   component: ComponentType<any>;
+  props: Record<string, any>;
 }
 
 /**
  * Composes a page component and its parent layouts into a single React tree.
  * Wraps layouts in <div data-ps-layout="..."> containers and children in <div data-ps-slot="...">
  * using display: contents to avoid affecting layout styling.
+ *
+ * Each layout entry carries its own `props` (from its load() result), while
+ * the page itself uses `pageProps`.
  */
 export function composeLayoutChain(
   react: any,
   PageComponent: any,
   layouts: LayoutComponentConfig[],
   pagePattern: string,
-  props: any
+  pageProps: any
 ): any {
+  const props = pageProps; // alias for backward compat in page element
   // 1. Start with the page component
   let currentElement = react.createElement(PageComponent, props);
 
@@ -29,7 +34,7 @@ export function composeLayoutChain(
 
   // 3. Wrap layouts from innermost (right) to outermost (left)
   for (let i = layouts.length - 1; i >= 0; i--) {
-    const { pattern: layoutPattern, component: LayoutComponent } = layouts[i];
+    const { pattern: layoutPattern, component: LayoutComponent, props: layoutProps } = layouts[i];
 
     // Determine the child pattern (the next level down)
     const childPattern = i === layouts.length - 1 ? pagePattern : layouts[i + 1].pattern;
@@ -41,10 +46,10 @@ export function composeLayoutChain(
       currentElement
     );
 
-    // Instantiate layout with the slot element as children
+    // Instantiate layout with its own props + the slot element as children
     const layoutElement = react.createElement(
       LayoutComponent,
-      props,
+      layoutProps,
       slotElement
     );
 
