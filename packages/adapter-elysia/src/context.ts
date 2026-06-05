@@ -81,7 +81,7 @@ export class ElysiaResponseImpl implements KilnResponse {
   }
 
   binary(data: Buffer | ArrayBuffer): void {
-    this.body = data instanceof Buffer ? data : Buffer.from(data);
+    this.body = data instanceof Buffer ? data : Buffer.from(new Uint8Array(data));
     this.bodyType = 'binary';
   }
 }

@@ -1,1 +1,3 @@
-export { compression } from 'elysia-compress';
+import type { Elysia } from 'elysia';
+
+export const compression = () => (app: Elysia) => app;

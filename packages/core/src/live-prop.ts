@@ -1,3 +1,6 @@
+import type { LiveListOptions } from '@kiln/live';
+import { createLiveList, type LiveList } from './list.js';
+
 export interface DependencyKey {
   table: string;
   column: string;
@@ -45,3 +48,21 @@ export class LiveProp<T> {
     return this;
   }
 }
+
+export const Live = {
+  value<T>(
+    value: T,
+    dependsOn: (string | DependencyKey)[] = [],
+    options?: { patchDebounce?: number; target?: LiveTarget }
+  ): LiveProp<T> {
+    return new LiveProp(value, dependsOn, options);
+  },
+
+  initial<T>(value: T): LiveProp<T> {
+    return LiveProp.initial(value);
+  },
+
+  list<T>(options: LiveListOptions<T>): LiveList<T> {
+    return createLiveList(options);
+  },
+};

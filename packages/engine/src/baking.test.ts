@@ -104,12 +104,21 @@ function runTests() {
     console.log('✅ returns_empty_vec_when_no_slots_present passed');
   }
 
-  // 12. ignores_data_pilcrow_live_field_attributes
+  // 12. ignores_data_kiln_live_field_attributes
   {
-    const html = '<span data-pilcrow-live-field="status">x</span><span s-live="count">0</span>';
+    const html = '<span data-kiln-live-field="status">x</span><span s-live="count">0</span>';
     const names = findSLiveSlots(html);
     assert.deepEqual(names, ['count']);
-    console.log('✅ ignores_data_pilcrow_live_field_attributes passed');
+    console.log('✅ ignores_data_kiln_live_field_attributes passed');
+  }
+
+  // 13. patches_generated_data_kiln_live_field_markers
+  {
+    const shell = '<span data-kiln-live-field="status">in_progress</span>';
+    const slots: [string, any][] = [['status', 'complete']];
+    const result = injectFsrSlots(shell, slots);
+    assert.equal(result, '<span data-kiln-live-field="status">complete</span>');
+    console.log('✅ patches_generated_data_kiln_live_field_markers passed');
   }
 
   console.log('🎉 All FSR baking tests passed!');

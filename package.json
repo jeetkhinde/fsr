@@ -3,7 +3,9 @@
   "private": true,
   "scripts": {
     "build": "bun run --filter '*' build",
-    "test": "bun run --filter '*' test",
+    "test": "bun run test:unit && bun run test:integration",
+    "test:unit": "bun test --path-ignore-patterns '**/dist/**' --path-ignore-patterns 'packages/engine/src/store.test.ts' --path-ignore-patterns 'packages/engine/src/list-store.test.ts' --path-ignore-patterns 'packages/engine/src/hub.test.ts' --path-ignore-patterns 'packages/engine/src/db-notify.test.ts' --path-ignore-patterns 'packages/engine/src/watcher.test.ts' --path-ignore-patterns 'packages/engine/src/list-watcher.test.ts'",
+    "test:integration": "bun --env-file=test-app/.env packages/engine/src/store.test.ts && bun --env-file=test-app/.env packages/engine/src/hub.test.ts && bun --env-file=test-app/.env packages/engine/src/db-notify.test.ts && bun --env-file=test-app/.env packages/engine/src/watcher.test.ts",
     "dev": "bun run --filter '*' dev"
   },
   "devDependencies": {

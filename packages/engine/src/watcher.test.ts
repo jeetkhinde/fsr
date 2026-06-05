@@ -1,21 +1,18 @@
 import assert from 'node:assert/strict';
 import { SQL } from 'bun';
 import fs from 'node:fs/promises';
-import { drizzle } from 'drizzle-orm/bun-sql';
 import { FsrStore } from './store.js';
 import { RedisCache } from './cache.js';
-import { FsrWatcher, WatcherConfig, SlotPatch } from './watcher.js';
+import { FsrWatcher, WatcherConfig, type LivePatch } from './watcher.js';
 
 async function runTests() {
   console.log('Running FsrWatcher integration tests...');
 
-  const pgConnectionString = 'postgresql://localhost:5432/kilnjs_test';
-  const redisUrl = 'redis://127.0.0.1:6379';
+  const pgConnectionString = process.env.DATABASE_URL || 'postgresql://localhost:5432/kilnjs_test';
+  const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 
   const bunSql = new SQL(pgConnectionString);
-  const db = drizzle(bunSql);
-  const store = new FsrStore(db);
-  store.withPool(bunSql);
+  const store = new FsrStore(bunSql);
   const redis = new RedisCache(redisUrl);
   store.withRedis(redis);
 
@@ -66,8 +63,8 @@ async function runTests() {
     const watcher = new FsrWatcher(store, redis, config);
     
     // Listen for patch event
-    const patches: SlotPatch[] = [];
-    watcher.getEmitter().on('patch', (patch: SlotPatch) => {
+    const patches: LivePatch[] = [];
+    watcher.getEmitter().on('patch', (patch: LivePatch) => {
       patches.push(patch);
     });
 
@@ -96,8 +93,9 @@ async function runTests() {
 
     // Emitter should have received the patch event
     assert.ok(patches.length > 0);
-    const p = patches.find(x => x.route === route && x.slot === 'test_slot');
+    const p = patches.find(x => x.kind === 'scalar' && x.route === route && x.field === 'test_slot');
     assert.ok(p);
+    assert.equal(p.kind, 'scalar');
     assert.equal(p.value, 'original_val');
 
     // HTML/JSON files should be patched
@@ -205,7 +203,9 @@ async function runTests() {
   }
 }
 
-runTests().catch(err => {
-  console.error('❌ FsrWatcher tests failed:', err);
-  process.exit(1);
-});
+runTests()
+  .then(() => process.exit(0))
+  .catch(err => {
+    console.error('❌ FsrWatcher tests failed:', err);
+    process.exit(1);
+  });

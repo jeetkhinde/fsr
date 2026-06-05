@@ -1,8 +1,7 @@
 import { startKiln } from '@kiln/routekit';
 import { ElysiaAdapter } from '@kiln/adapter-elysia';
 import { FsrStore, FsrWatcher, startDbNotificationPipeline } from '@kiln/engine';
-import { drizzle } from 'drizzle-orm/node-postgres';
-import pg from 'pg';
+import { SQL } from 'bun';
 import config from '../kiln.config.js';
 
 async function main() {
@@ -10,11 +9,11 @@ async function main() {
 
   // Initialize DB and FSR if credentials exist
   let fsr;
+  let bunSql: SQL | null = null;
   const dbUrl = config.fsr?.postgresUrl;
   if (dbUrl) {
-    const pool = new pg.Pool({ connectionString: dbUrl });
-    const db = drizzle(pool);
-    const store = new FsrStore(db).withPool(pool);
+    bunSql = new SQL(dbUrl);
+    const store = new FsrStore(bunSql);
     const watcher = new FsrWatcher(store, null, {
       pollIntervalMs: 1000,
       promoteAfterHits: config.fsr?.promoteAfterHits ?? 1,
@@ -27,7 +26,7 @@ async function main() {
     
     await watcher.start();
     await startDbNotificationPipeline(dbUrl, store, watcher);
-    fsr = { store, watcher };
+    fsr = { fsr: true, store, watcher };
     console.log('FSR baking engine and watcher successfully initialized.');
   }
 

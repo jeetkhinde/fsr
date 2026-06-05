@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { SQL } from 'bun';
-import { drizzle } from 'drizzle-orm/bun-sql';
 import { FsrStore } from './store.js';
 import { FsrWatcher, WatcherConfig } from './watcher.js';
 import { fsrHubStream, fsrSnapshotHandler, getActiveConnectionsCount } from './hub.js';
@@ -8,12 +7,10 @@ import { fsrHubStream, fsrSnapshotHandler, getActiveConnectionsCount } from './h
 async function runTests() {
   console.log('Running FSR SSE Hub and Snapshot tests...');
 
-  const pgConnectionString = 'postgresql://localhost:5432/kilnjs_test';
+  const pgConnectionString = process.env.DATABASE_URL || 'postgresql://localhost:5432/kilnjs_test';
 
   const bunSql = new SQL(pgConnectionString);
-  const db = drizzle(bunSql);
-  const store = new FsrStore(db);
-  store.withPool(bunSql);
+  const store = new FsrStore(bunSql);
 
   await bunSql.unsafe('DELETE FROM kiln_fsr');
   await bunSql.unsafe('CREATE TABLE IF NOT EXISTS hub_test_dummy (id integer primary key, val text)');

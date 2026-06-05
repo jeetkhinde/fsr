@@ -7,11 +7,11 @@ import { ElysiaAdapter } from '@kiln/adapter-elysia';
 import { startKiln } from '@kiln/routekit';
 import { FsrStore, FsrWatcher, RedisCache, startDbNotificationPipeline } from '@kiln/engine';
 import { SQL } from 'bun';
-import { drizzle } from 'drizzle-orm/bun-sql';
 import { Glob } from 'bun';
 import { createServer, build as viteBuild } from 'vite';
 import react from '@vitejs/plugin-react';
 import { kilnVitePlugin } from '@kiln/routekit';
+import * as fs from 'fs/promises';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -62,9 +62,7 @@ const devCommand = defineCommand({
     if (config.fsr?.postgresUrl) {
       consola.info('Initializing FSR database store...');
       bunSql = new SQL(config.fsr.postgresUrl);
-      const db = drizzle(bunSql);
-      const store = new FsrStore(db);
-      store.withPool(bunSql);
+      const store = new FsrStore(bunSql);
 
       if (config.fsr.redisUrl) {
         consola.info('Initializing FSR Redis cache...');
@@ -83,7 +81,7 @@ const devCommand = defineCommand({
 
       await watcher.start();
       await startDbNotificationPipeline(config.fsr.postgresUrl, store, watcher);
-      fsr = { store, watcher };
+      fsr = { fsr: true, store, watcher };
       consola.success('FSR caching & notification supervisors started.');
     }
 

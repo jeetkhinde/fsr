@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import pg from 'pg';
 import { SQL } from 'bun';
-import { drizzle } from 'drizzle-orm/bun-sql';
 import { FsrStore } from './store.js';
 import { FsrWatcher, WatcherConfig } from './watcher.js';
 import { startDbNotificationPipeline } from './db-notify.js';
@@ -9,13 +8,11 @@ import { startDbNotificationPipeline } from './db-notify.js';
 async function runTests() {
   console.log('Running FSR DB Notification Pipeline tests...');
 
-  const pgConnectionString = 'postgresql://localhost:5432/kilnjs_test';
+  const pgConnectionString = process.env.DATABASE_URL || 'postgresql://localhost:5432/kilnjs_test';
 
-  // Bun.sql for FsrStore; pg.Pool for test setup and LISTEN/NOTIFY trigger queries
+  // Bun SQL for FsrStore; pg.Pool for test setup and LISTEN/NOTIFY trigger queries
   const bunSql = new SQL(pgConnectionString);
-  const db = drizzle(bunSql);
-  const store = new FsrStore(db);
-  store.withPool(bunSql);
+  const store = new FsrStore(bunSql);
   const pool = new pg.Pool({ connectionString: pgConnectionString });
 
   // Clean table

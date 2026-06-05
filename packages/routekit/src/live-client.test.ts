@@ -42,6 +42,33 @@ run('script listens for fsr-resync event', () => {
   assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes('fsr-resync'));
 });
 
+run('script applies scalar live patch envelopes', () => {
+  assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("data.kind==='scalar'"));
+  assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("data-kiln-live-field"));
+});
+
+run('script applies list field patch envelopes', () => {
+  assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("data.kind==='list'"));
+  assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("data-kiln-list"));
+  assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("data-kiln-key"));
+  assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("data-kiln-field"));
+  assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("data.op==='insert'"));
+  assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("data.op==='remove'"));
+  assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("data.op==='move'"));
+  assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("data.op==='replace-row'"));
+});
+
+run('script subscribes to generated list names', () => {
+  assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("[data-kiln-list]"));
+  assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("getAttribute('data-kiln-list')"));
+  assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("[data-kiln-live-lists]"));
+});
+
+run('script reloads once when an insert arrives without a marked list container', () => {
+  assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("sessionStorage"));
+  assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("location.reload()"));
+});
+
 run('script handles popstate navigation', () => {
   assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes('popstate'));
 });

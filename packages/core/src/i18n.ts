@@ -1,7 +1,7 @@
 import { FluentBundle, FluentResource } from '@fluent/bundle';
 import { negotiateLanguages } from '@fluent/langneg';
+import { join } from 'pathe';
 import type { KilnRequest } from './types.js';
-import * as path from 'path';
 
 export class KilnI18n {
   private bundles = new Map<string, FluentBundle>();
@@ -15,12 +15,12 @@ export class KilnI18n {
 
   async load(): Promise<void> {
     for (const locale of this.locales) {
-      const dir = path.join(this.config.localesDir, locale);
+      const dir = join(this.config.localesDir, locale);
       const glob = new Bun.Glob('*.ftl');
       const bundle = new FluentBundle(locale);
       try {
         for await (const file of glob.scan({ cwd: dir, onlyFiles: true })) {
-          const content = await Bun.file(path.join(dir, file)).text();
+          const content = await Bun.file(join(dir, file)).text();
           bundle.addResource(new FluentResource(content));
         }
       } catch { /* missing locale dir */ }

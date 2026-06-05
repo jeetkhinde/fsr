@@ -1,55 +1,12 @@
+import { applyScalarPatchToHtml, createScalarPatch } from '@kiln/live';
+
 export function injectFsrSlots(shell: string, slots: [string, any][]): string {
-  const patches: { start: number; end: number; replacement: string }[] = [];
-
-  for (const [slotName, jsonVal] of slots) {
-    let raw = '';
-    if (jsonVal === null || jsonVal === undefined) {
-      raw = '';
-    } else if (typeof jsonVal === 'string') {
-      raw = jsonVal;
-    } else if (typeof jsonVal === 'object') {
-      raw = JSON.stringify(jsonVal);
-    } else {
-      raw = String(jsonVal);
-    }
-    const escaped = escapeHtml(raw);
-    const range = findSLiveContentRange(shell, slotName);
-    if (range) {
-      patches.push({ start: range.start, end: range.end, replacement: escaped });
-    }
-  }
-
-  if (patches.length === 0) {
-    return shell;
-  }
-
-  // Apply patches right-to-left so earlier byte offsets remain valid.
-  patches.sort((a, b) => b.start - a.start);
-
   let result = shell;
-  for (const { start, end, replacement } of patches) {
-    result = result.slice(0, start) + replacement + result.slice(end);
+  for (const [slotName, jsonVal] of slots) {
+    result = applyScalarPatchToHtml(result, createScalarPatch('', slotName, jsonVal));
   }
 
   return result;
-}
-
-function findSLiveContentRange(html: string, name: string): { start: number; end: number } | null {
-  const attr = `s-live="${name}"`;
-  const attrPos = html.indexOf(attr);
-  if (attrPos === -1) return null;
-
-  const restFromAttr = html.slice(attrPos);
-  const tagClose = restFromAttr.indexOf('>');
-  if (tagClose === -1) return null;
-
-  const contentStart = attrPos + tagClose + 1;
-  const restFromContent = html.slice(contentStart);
-  const closeTag = restFromContent.indexOf('</');
-  if (closeTag === -1) return null;
-
-  const contentEnd = contentStart + closeTag;
-  return { start: contentStart, end: contentEnd };
 }
 
 export function findSLiveSlots(html: string): string[] {
@@ -70,19 +27,24 @@ export function findSLiveSlots(html: string): string[] {
   return names;
 }
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-import { renderToString } from 'react-dom/server';
-import { createElement } from 'react';
+import { renderToReadableStream } from 'react-dom/server';
+import { createElement, type ReactElement } from 'react';
 
 export const OUTLET_TOKEN = '__KILN_OUTLET_7f3a9c4b__';
+
+/**
+ * Render a React element to an HTML string via the streaming API.
+ *
+ * Streaming (renderToReadableStream) is used over the legacy renderToString
+ * so React 19 hoists document metadata (<title>/<meta>/<link>) and supports
+ * Suspense. allReady waits for the full tree (incl. suspended boundaries)
+ * before the string is consumed, so the output is complete markup.
+ */
+async function renderToHtml(element: ReactElement): Promise<string> {
+  const stream = await renderToReadableStream(element);
+  await stream.allReady;
+  return await new Response(stream).text();
+}
 
 /**
  * SSR a page/fragment component in isolation (no layout wrapping).
@@ -91,7 +53,7 @@ export async function bakeFragment(
   Component: (props: any) => any,
   props: Record<string, any>
 ): Promise<string> {
-  return renderToString(createElement(Component, props));
+  return renderToHtml(createElement(Component, props));
 }
 
 /**
@@ -102,7 +64,7 @@ export async function bakeLayoutFragment(
   LayoutComponent: (props: any) => any,
   props: Record<string, any>
 ): Promise<string> {
-  return renderToString(createElement(LayoutComponent, props, OUTLET_TOKEN));
+  return renderToHtml(createElement(LayoutComponent, props, OUTLET_TOKEN));
 }
 
 /**

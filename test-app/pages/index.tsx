@@ -1,5 +1,5 @@
 import React from 'react';
-import { useSilcrowForm } from '@pilcrowjs/react';
+import { useSilcrowForm } from '@kiln/react';
 
 export default function IndexPage() {
   const form = useSilcrowForm('submit');

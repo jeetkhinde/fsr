@@ -515,13 +515,13 @@ function initScopeBindings() {
 
 // ── SSR hydration seed ─────────────────────────────────────
 // A host can inject `window.__silcrow_seed = { "/path": data, ... }`
-// (or `window.__pilcrow_props` for back-compat) before silcrow boots.
+// (or `window.__kiln_props` for back-compat) before silcrow boots.
 // Seeding the route atom + prefetch cache lets React's useSyncExternalStore
 // + use() return real data on first paint without a network roundtrip and
 // with stable promise identity.
 function seedAtomsFromSSR() {
   if (typeof window === "undefined") return;
-  const seeds = window.__silcrow_seed || window.__pilcrow_props;
+  const seeds = window.__silcrow_seed || window.__kiln_props;
   if (!seeds || typeof seeds !== "object") return;
   for (const key in seeds) {
     if (!Object.prototype.hasOwnProperty.call(seeds, key)) continue;
@@ -1294,15 +1294,15 @@ function connectSseHub(hub) {
     try {
       const data = JSON.parse(e.data);
       if (!data || typeof data !== "object" || Array.isArray(data)) return;
-      document.querySelectorAll("[data-pilcrow-live-field]").forEach(function (n) {
-        const k = n.getAttribute("data-pilcrow-live-field");
+      document.querySelectorAll("[data-kiln-live-field]").forEach(function (n) {
+        const k = n.getAttribute("data-kiln-live-field");
         if (pendingByScope.has(k)) return;
         if (k in data) {
           n.textContent = data[k] == null ? "" : String(data[k]);
         }
       });
       document.querySelectorAll("[data-s-live-mod]").forEach(function(n) {
-        if (pendingByScope.has(n.getAttribute("data-pilcrow-live-field") || "")) return;
+        if (pendingByScope.has(n.getAttribute("data-kiln-live-field") || "")) return;
         for (var i = 0; i < n.attributes.length; i++) {
           var attr = n.attributes[i];
           if (!attr.name.startsWith("s-live:")) continue;
@@ -1324,11 +1324,11 @@ function connectSseHub(hub) {
       const key = String(payload.key);
       if (!listName || payload.key == null) return;
       const container = document.querySelector(
-        '[data-pilcrow-list="' + CSS.escape(listName) + '"]'
+        '[data-kiln-list="' + CSS.escape(listName) + '"]'
       );
       if (!container) return;
       const row = container.querySelector(
-        '[data-pilcrow-key="' + CSS.escape(key) + '"]'
+        '[data-kiln-key="' + CSS.escape(key) + '"]'
       );
       if (!row) return;
       const changes = Object.assign({}, payload);
@@ -2578,7 +2578,7 @@ function publishOptimistic(scope, data, mutationId) {
 
   const liveSnapshots = {};
   for (const [k, v] of Object.entries(data)) {
-    document.querySelectorAll(`[data-pilcrow-live-field="${CSS.escape(k)}"]`).forEach(function(n) {
+    document.querySelectorAll(`[data-kiln-live-field="${CSS.escape(k)}"]`).forEach(function(n) {
       liveSnapshots[k] = n.textContent;
       n.textContent = v == null ? "" : String(v);
     });
@@ -2622,7 +2622,7 @@ function revertOptimistic(mutationId) {
   if (atom) atom.set(entry.snapshot);
 
   for (const [k, old] of Object.entries(entry.liveSnapshots || {})) {
-    document.querySelectorAll(`[data-pilcrow-live-field="${CSS.escape(k)}"]`).forEach(function(n) {
+    document.querySelectorAll(`[data-kiln-live-field="${CSS.escape(k)}"]`).forEach(function(n) {
       n.textContent = old;
     });
   }
@@ -2664,17 +2664,17 @@ function init() {
   // 1b. Vanilla scope bindings (s-bind="scope")
   initScopeBindings();
 
-  // 1c. Pilcrow live-prop patch events — updates [data-pilcrow-live-field] text nodes.
-  // Delegates to window.__pilcrow_live_patch if defined (injected by Pilcrow's head shim),
+  // 1c. Kiln live-prop patch events — updates [data-kiln-live-field] text nodes.
+  // Delegates to window.__kiln_live_patch if defined (injected by Kiln's head shim),
   // otherwise falls back to direct DOM patching so s-boost navigation also works.
   document.addEventListener("silcrow:sse:live", function (e) {
     const data = e.detail && e.detail.data;
     if (!data || typeof data !== "object" || Array.isArray(data)) return;
-    if (typeof window.__pilcrow_live_patch === "function") {
-      window.__pilcrow_live_patch(data);
+    if (typeof window.__kiln_live_patch === "function") {
+      window.__kiln_live_patch(data);
     } else {
-      document.querySelectorAll("[data-pilcrow-live-field]").forEach(function (n) {
-        const k = n.getAttribute("data-pilcrow-live-field");
+      document.querySelectorAll("[data-kiln-live-field]").forEach(function (n) {
+        const k = n.getAttribute("data-kiln-live-field");
         if (k in data) {
           n.textContent = data[k] == null ? "" : String(data[k]);
         }
@@ -2826,12 +2826,98 @@ if (document.readyState === "loading") {
 var RECONNECT_BASE_MS = 1000;
 var RECONNECT_MAX_MS = 30000;
 
+function applyKilnScalarPatch(root, data) {
+  var field = data.kind === 'scalar' ? data.field : data.slot;
+  var value = data.value;
+  if (!field) return;
+  root.querySelectorAll('[data-kiln-live-field="' + CSS.escape(field) + '"],[s-live="' + CSS.escape(field) + '"]').forEach(function(n) {
+    n.textContent = value == null ? '' : String(value);
+  });
+}
+
+function applyKilnListPatch(data) {
+  if (!data) return;
+  var listName = data.list;
+  var key = data.key;
+  if (!listName || key == null) return;
+  var listEl = document.querySelector('[data-kiln-list="' + CSS.escape(listName) + '"]');
+  if (!listEl) {
+    if (data.op === 'insert') {
+      var reloadKey = 'kiln-live-list-reload:' + location.pathname + ':' + listName;
+      if (!sessionStorage.getItem(reloadKey)) {
+        sessionStorage.setItem(reloadKey, '1');
+        location.reload();
+      }
+    }
+    return;
+  }
+  sessionStorage.removeItem('kiln-live-list-reload:' + location.pathname + ':' + listName);
+  var rowEl = listEl.querySelector('[data-kiln-key="' + CSS.escape(String(key)) + '"]');
+  if (data.op === 'insert') {
+    if (!data.html) return;
+    var insertBox = document.createElement('div');
+    safeSetHTML(insertBox, data.html);
+    var insertNode = insertBox.firstElementChild;
+    if (!insertNode) return;
+    var rows = listEl.querySelectorAll('[data-kiln-key]');
+    var index = Math.max(0, Math.min(Number(data.index) || 0, rows.length));
+    listEl.insertBefore(insertNode, rows[index] || null);
+    return;
+  }
+  if (!rowEl) return;
+  if (data.op === 'remove') {
+    rowEl.remove();
+    return;
+  }
+  if (data.op === 'move') {
+    var moveRows = Array.from(listEl.querySelectorAll('[data-kiln-key]')).filter(function(n) { return n !== rowEl; });
+    var to = Math.max(0, Math.min(Number(data.to) || 0, moveRows.length));
+    listEl.insertBefore(rowEl, moveRows[to] || null);
+    return;
+  }
+  if (data.op === 'replace-row') {
+    if (!data.html) return;
+    var replaceBox = document.createElement('div');
+    safeSetHTML(replaceBox, data.html);
+    var replaceNode = replaceBox.firstElementChild;
+    if (replaceNode) rowEl.replaceWith(replaceNode);
+    return;
+  }
+  if (data.op === 'fields' || !data.op) {
+    var changes = data.changes;
+    if (!changes) return;
+    Object.keys(changes).forEach(function(field) {
+      rowEl.querySelectorAll('[data-kiln-field="' + CSS.escape(field) + '"],[data-kiln-live-field="' + CSS.escape(field) + '"]').forEach(function(n) {
+        n.textContent = changes[field] == null ? '' : String(changes[field]);
+      });
+    });
+  }
+}
+
 function openLiveConnection(el) {
   var route = el.getAttribute('data-kiln-live');
   var slots = [];
   el.querySelectorAll('[data-kiln-live-field]').forEach(function(n) {
     var k = n.getAttribute('data-kiln-live-field');
     if (k && !slots.includes(k)) slots.push(k);
+  });
+  el.querySelectorAll('[data-kiln-list]').forEach(function(n) {
+    var k = n.getAttribute('data-kiln-list');
+    if (k) {
+      sessionStorage.removeItem('kiln-live-list-reload:' + location.pathname + ':' + k);
+      if (!slots.includes(k)) slots.push(k);
+    }
+  });
+  var listNames = el.getAttribute('data-kiln-live-lists');
+  if (listNames) {
+    listNames.split(',').forEach(function(k) {
+      if (k && !slots.includes(k)) slots.push(k);
+    });
+  }
+  el.querySelectorAll('[data-kiln-live-lists]').forEach(function(n) {
+    String(n.getAttribute('data-kiln-live-lists') || '').split(',').forEach(function(k) {
+      if (k && !slots.includes(k)) slots.push(k);
+    });
   });
   if (!route) return;
 
@@ -2847,11 +2933,7 @@ function openLiveConnection(el) {
     es.addEventListener('live', function(e) {
       try {
         var data = JSON.parse(e.data);
-        var slot = data.slot;
-        var value = data.value;
-        el.querySelectorAll('[data-kiln-live-field="' + CSS.escape(slot) + '"]').forEach(function(n) {
-          n.textContent = typeof value === 'object' ? JSON.stringify(value) : String(value);
-        });
+        applyKilnScalarPatch(el, data);
         delay = RECONNECT_BASE_MS;
       } catch(err) { warn('live patch parse error: ' + err.message); }
     });
@@ -2859,18 +2941,7 @@ function openLiveConnection(el) {
     es.addEventListener('list-patch', function(e) {
       try {
         var data = JSON.parse(e.data);
-        var listName = data.list;
-        var key = data.key;
-        var changes = data.changes;
-        var listEl = document.querySelector('[data-kiln-list="' + CSS.escape(listName) + '"]');
-        if (!listEl) return;
-        var rowEl = listEl.querySelector('[data-kiln-key="' + CSS.escape(key) + '"]');
-        if (!rowEl) return;
-        Object.keys(changes).forEach(function(field) {
-          rowEl.querySelectorAll('[data-kiln-live-field="' + CSS.escape(field) + '"]').forEach(function(n) {
-            n.textContent = String(changes[field]);
-          });
-        });
+        applyKilnListPatch(data);
       } catch(err) { warn('list-patch error: ' + err.message); }
     });
 

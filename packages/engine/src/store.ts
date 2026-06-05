@@ -1,4 +1,10 @@
-import { sql } from 'drizzle-orm';
+import type { LiveListQueryContext } from '@kiln/live';
+import { FsrListStore } from './list-store.js';
+
+export type BunSqlClient = {
+  (strings: TemplateStringsArray, ...values: unknown[]): Promise<any[]>;
+  unsafe(query: string, params?: unknown[]): Promise<any[]>;
+};
 
 export type HitStatus = 'Tombstoned' | 'JustPromoted' | 'Normal';
 
@@ -35,16 +41,19 @@ export interface InspectRow {
 }
 
 export class FsrStore {
-  private pool: any = null;
+  readonly lists: FsrListStore;
 
   constructor(
-    private db: any,
+    private sql: BunSqlClient,
     private globalDebounceSecs = 0,
     private redis: any = null
-  ) {}
+  ) {
+    this.lists = new FsrListStore(sql);
+  }
 
-  withPool(pool: any): this {
-    this.pool = pool;
+  withPool(sql: BunSqlClient): this {
+    this.sql = sql;
+    this.lists.setSql(sql);
     return this;
   }
 
@@ -59,11 +68,11 @@ export class FsrStore {
   }
 
   async ensureRouteRow(route: string, promoteAfter?: number): Promise<void> {
-    await this.db.execute(sql`
+    await this.sql`
       INSERT INTO kiln_fsr (route, slot, promote_after)
       VALUES (${route}, '', ${promoteAfter ?? null})
       ON CONFLICT (route, slot) DO NOTHING
-    `);
+    `;
   }
 
   async upsertSlot(
@@ -75,15 +84,15 @@ export class FsrStore {
     debounceSecs?: number,
     columnName?: string
   ): Promise<void> {
-    await this.db.execute(sql`
+    await this.sql`
       INSERT INTO kiln_fsr
         (route, slot, query, query_params, depends_on, debounce_secs, column_name)
       VALUES (
         ${route}, 
         ${slot}, 
         ${querySql}, 
-        ${JSON.stringify(queryParams)}, 
-        ARRAY(SELECT jsonb_array_elements_text(${JSON.stringify(dependsOn)}::jsonb))::text[], 
+        ${queryParams}::jsonb,
+        ARRAY(SELECT jsonb_array_elements_text(${dependsOn}::jsonb))::text[],
         ${debounceSecs ?? null}, 
         ${columnName ?? null}
       )
@@ -93,11 +102,11 @@ export class FsrStore {
         depends_on    = EXCLUDED.depends_on,
         debounce_secs = EXCLUDED.debounce_secs,
         column_name   = EXCLUDED.column_name
-    `);
+    `;
   }
 
   async incrementHit(route: string): Promise<HitStatus> {
-    const res = await this.db.execute(sql`
+    const rows = await this.sql`
       UPDATE kiln_fsr
       SET hit_count  = hit_count + 1,
           last_hit   = now(),
@@ -110,14 +119,14 @@ export class FsrStore {
                        END
       WHERE route = ${route} AND slot = '' AND NOT tombstoned
       RETURNING hit_count as "hitCount", promoted, promote_after as "promoteAfter"
-    `);
+    `;
 
-    const row = res.rows[0] as any;
+    const row = rows[0] as any;
     if (!row) {
-      const checkRes = await this.db.execute(sql`
+      const checkRows = await this.sql`
         SELECT tombstoned FROM kiln_fsr WHERE route = ${route} AND slot = '' LIMIT 1
-      `);
-      const checkRow = checkRes.rows[0] as any;
+      `;
+      const checkRow = checkRows[0] as any;
       if (checkRow && checkRow.tombstoned) {
         return 'Tombstoned';
       }
@@ -132,18 +141,18 @@ export class FsrStore {
   }
 
   async tombstone(route: string): Promise<void> {
-    const res = await this.db.execute(sql`
+    const rows = await this.sql`
       UPDATE kiln_fsr
       SET tombstoned = TRUE, promoted = FALSE, stale = FALSE
       WHERE route = ${route}
       RETURNING slot, html_path as "htmlPath", json_path as "jsonPath"
-    `);
+    `;
 
     if (this.redis) {
       await this.redis.deleteRouteKeys(route).catch(() => {});
     }
+    await this.lists.deleteRoute(route);
 
-    const rows = res.rows as any[];
     const routeRow = rows.find((r) => r.slot === '');
     if (routeRow) {
       try {
@@ -161,24 +170,29 @@ export class FsrStore {
   }
 
   async isTombstoned(route: string): Promise<boolean> {
-    const res = await this.db.execute(sql`
+    const rows = await this.sql`
       SELECT tombstoned FROM kiln_fsr WHERE route = ${route} AND slot = ''
-    `);
-    const row = res.rows[0] as any;
+    `;
+    const row = rows[0] as any;
     return row ? !!row.tombstoned : false;
   }
 
   async invalidateDepKey(depKey: string): Promise<string[]> {
-    const res = await this.db.execute(sql`
-      UPDATE kiln_fsr
-      SET stale = TRUE, version = version + 1
-      WHERE ${depKey} = ANY(depends_on)
-        AND slot != ''
-      RETURNING route
-    `);
+    const [rows, listRoutes] = await Promise.all([
+      this.sql`
+        UPDATE kiln_fsr
+        SET stale = TRUE, version = version + 1
+        WHERE ${depKey} = ANY(depends_on)
+          AND slot != ''
+        RETURNING route
+      `,
+      this.lists.invalidateDependency(depKey),
+    ]);
 
-    const routes = Array.from(new Set(res.rows.map((r: any) => r.route))) as string[];
-    routes.sort();
+    const routes = Array.from(new Set([
+      ...rows.map((r: any) => String(r.route)),
+      ...listRoutes,
+    ])).sort();
 
     if (this.redis) {
       for (const route of routes) {
@@ -194,11 +208,11 @@ export class FsrStore {
   }
 
   async invalidateRoute(route: string): Promise<void> {
-    await this.db.execute(sql`
+    await this.sql`
       UPDATE kiln_fsr
       SET stale = TRUE, version = version + 1
       WHERE route = ${route} AND slot != ''
-    `);
+    `;
 
     if (this.redis) {
       await this.redis.publishInvalidate({
@@ -210,7 +224,7 @@ export class FsrStore {
   }
 
   async fetchStaleSlots(): Promise<StaleSlot[]> {
-    const res = await this.db.execute(sql`
+    const rows = await this.sql`
       SELECT s.route, s.slot, s.query, s.query_params as "queryParams", s.depends_on as "dependsOn", 
              r.promoted, s.debounce_secs as "debounceSecs", r.html_path as "htmlPath", 
              r.json_path as "jsonPath", s.column_name as "columnName"
@@ -222,9 +236,9 @@ export class FsrStore {
           OR s.last_patched_at IS NULL
           OR s.last_patched_at + (COALESCE(s.debounce_secs, ${this.globalDebounceSecs}) * interval '1 second') <= NOW()
         )
-    `);
+    `;
     
-    return res.rows.map((r: any) => ({
+    return rows.map((r: any) => ({
       route: r.route,
       slot: r.slot,
       query: r.query,
@@ -239,25 +253,25 @@ export class FsrStore {
   }
 
   async getPromotedPaths(route: string): Promise<{ htmlPath: string | null; jsonPath: string | null } | null> {
-    const res = await this.db.execute(sql`
+    const rows = await this.sql`
       SELECT html_path as "htmlPath", json_path as "jsonPath"
       FROM kiln_fsr
       WHERE route = ${route} AND slot = '' AND promoted = TRUE
-    `);
-    const row = res.rows[0] as any;
+    `;
+    const row = rows[0] as any;
     return row ? { htmlPath: row.htmlPath, jsonPath: row.jsonPath } : null;
   }
 
   async setBakedPaths(route: string, htmlPath: string, jsonPath: string | null): Promise<void> {
-    await this.db.execute(sql`
+    await this.sql`
       UPDATE kiln_fsr
       SET html_path = ${htmlPath}, json_path = ${jsonPath}
       WHERE route = ${route} AND slot = ''
-    `);
+    `;
   }
 
   async evictIdleRoutes(thresholdSecs: number): Promise<EvictedRoute[]> {
-    const res = await this.db.execute(sql`
+    const rows = await this.sql`
       UPDATE kiln_fsr
       SET promoted = FALSE, hit_count = 0
       WHERE slot = ''
@@ -265,8 +279,8 @@ export class FsrStore {
         AND NOT tombstoned
         AND last_hit < now() - (${thresholdSecs} * interval '1 second')
       RETURNING route, html_path as "htmlPath", json_path as "jsonPath"
-    `);
-    return res.rows.map((r: any) => ({
+    `;
+    return rows.map((r: any) => ({
       route: r.route,
       htmlPath: r.htmlPath,
       jsonPath: r.jsonPath
@@ -274,15 +288,15 @@ export class FsrStore {
   }
 
   async markFresh(route: string, slot: string): Promise<void> {
-    await this.db.execute(sql`
+    await this.sql`
       UPDATE kiln_fsr SET stale = FALSE, version = version + 1, last_patched_at = NOW() WHERE route = ${route} AND slot = ${slot}
-    `);
+    `;
   }
 
   async fetchSlotsForSnapshot(route: string, slots: string[]): Promise<StaleSlot[]> {
-    let res;
+    let rows: any[];
     if (slots.length === 0) {
-      res = await this.db.execute(sql`
+      rows = await this.sql`
         SELECT s.route, s.slot, s.query, s.query_params as "queryParams", s.depends_on as "dependsOn", 
                r.promoted, s.debounce_secs as "debounceSecs", r.html_path as "htmlPath", 
                r.json_path as "jsonPath", s.column_name as "columnName"
@@ -290,20 +304,20 @@ export class FsrStore {
         JOIN kiln_fsr r ON s.route = r.route AND r.slot = ''
         WHERE s.route = ${route} AND s.slot != ''
         ORDER BY s.slot
-      `);
+      `;
     } else {
-      res = await this.db.execute(sql`
+      rows = await this.sql`
         SELECT s.route, s.slot, s.query, s.query_params as "queryParams", s.depends_on as "dependsOn", 
                r.promoted, s.debounce_secs as "debounceSecs", r.html_path as "htmlPath", 
                r.json_path as "jsonPath", s.column_name as "columnName"
         FROM kiln_fsr s
         JOIN kiln_fsr r ON s.route = r.route AND r.slot = ''
-        WHERE s.route = ${route} AND s.slot != '' AND s.slot = ANY(ARRAY(SELECT jsonb_array_elements_text(${JSON.stringify(slots)}::jsonb)))
+        WHERE s.route = ${route} AND s.slot != '' AND s.slot = ANY(ARRAY(SELECT jsonb_array_elements_text(${slots}::jsonb)))
         ORDER BY s.slot
-      `);
+      `;
     }
 
-    return res.rows.map((r: any) => ({
+    return rows.map((r: any) => ({
       route: r.route,
       slot: r.slot,
       query: r.query,
@@ -318,14 +332,14 @@ export class FsrStore {
   }
 
   async fetchAllForInspect(): Promise<InspectRow[]> {
-    const res = await this.db.execute(sql`
+    const rows = await this.sql`
       SELECT route, slot, depends_on as "dependsOn", stale, version, hit_count as "hitCount",
              promoted, html_path as "htmlPath", json_path as "jsonPath",
              to_char(last_hit AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS UTC') AS "lastHit"
       FROM kiln_fsr
       ORDER BY route, slot
-    `);
-    return res.rows.map((r: any) => ({
+    `;
+    return rows.map((r: any) => ({
       route: r.route,
       slot: r.slot,
       dependsOn: r.dependsOn || [],
@@ -341,13 +355,22 @@ export class FsrStore {
 
   async reExecuteQuery(slot: StaleSlot): Promise<any> {
     if (!slot.query) return null;
-    const client = this.pool;
-    if (!client) throw new Error('FsrStore: no Bun.sql client — call .withPool(sql) after construction');
     const params = Array.isArray(slot.queryParams) ? slot.queryParams : [];
-    const rows = await client.unsafe(slot.query, params);
+    const rows = await this.sql.unsafe(slot.query, params);
     const row = rows[0];
     if (!row) return null;
     const colKey = slot.columnName || slot.slot;
     return row[colKey] !== undefined ? row[colKey] : null;
+  }
+
+  async executeLiveListQuery<T>(
+    query: (ctx: LiveListQueryContext) => Promise<T[]> | T[],
+    signal?: AbortSignal,
+  ): Promise<T[]> {
+    const rows = await query({ sql: this.sql, signal });
+    if (!Array.isArray(rows)) {
+      throw new Error('Live.list query must return an array');
+    }
+    return rows;
   }
 }

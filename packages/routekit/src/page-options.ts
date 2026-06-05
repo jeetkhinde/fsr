@@ -1,8 +1,14 @@
-import { LiveProp } from '@kiln/core';
+import { getLiveListMeta, isLiveList, LiveProp } from '@kiln/core';
 import type { LiveFieldMeta } from '@kiln/core';
 
 export interface PageOptions {
   promoteAfter?: number;
+}
+
+export interface LiveListFieldMeta {
+  name: string;
+  dependsOn: string[];
+  keys: string[];
 }
 
 export function extractPageOptions(module: any): PageOptions {
@@ -45,4 +51,24 @@ export function extractLiveFields(loadResult: any): LiveFieldMeta[] {
   }
 
   return fields;
+}
+
+export function extractLiveLists(loadResult: any): LiveListFieldMeta[] {
+  const lists: LiveListFieldMeta[] = [];
+  if (!loadResult || typeof loadResult !== 'object') {
+    return lists;
+  }
+
+  for (const [name, value] of Object.entries(loadResult)) {
+    if (!isLiveList(value)) continue;
+    const meta = getLiveListMeta(value);
+    if (!meta) continue;
+    lists.push({
+      name,
+      dependsOn: meta.dependsOn,
+      keys: (value as unknown[]).map((row) => meta.keyOf(row)),
+    });
+  }
+
+  return lists;
 }

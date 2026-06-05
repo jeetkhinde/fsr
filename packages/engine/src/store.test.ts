@@ -1,19 +1,16 @@
 import assert from 'node:assert/strict';
 import { SQL, RedisClient } from 'bun';
-import { drizzle } from 'drizzle-orm/bun-sql';
 import { FsrStore } from './store.js';
 import { RedisCache } from './cache.js';
 
 async function runTests() {
   console.log('Running FsrStore and RedisCache integration tests...');
 
-  const pgConnectionString = 'postgresql://localhost:5432/kilnjs_test';
-  const redisUrl = 'redis://127.0.0.1:6379';
+  const pgConnectionString = process.env.DATABASE_URL || 'postgresql://localhost:5432/kilnjs_test';
+  const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 
   const bunSql = new SQL(pgConnectionString);
-  const db = drizzle(bunSql);
-  const store = new FsrStore(db);
-  store.withPool(bunSql);
+  const store = new FsrStore(bunSql);
   const redisCache = new RedisCache(redisUrl);
   store.withRedis(redisCache);
 
@@ -176,7 +173,9 @@ async function runTests() {
   }
 }
 
-runTests().catch((err) => {
-  console.error('❌ Tests failed with error:', err);
-  process.exit(1);
-});
+runTests()
+  .then(() => process.exit(0))
+  .catch((err) => {
+    console.error('❌ Tests failed with error:', err);
+    process.exit(1);
+  });

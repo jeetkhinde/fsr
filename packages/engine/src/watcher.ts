@@ -3,6 +3,17 @@ import fs from 'node:fs/promises';
 import { FsrStore, StaleSlot } from './store.js';
 import { RedisCache } from './cache.js';
 import { injectFsrSlots } from './baking.js';
+import {
+  applyListPatchToHtml,
+  applyListPatchToJson,
+  createScalarPatch,
+  isScalarPatch,
+  reconcileListRows,
+  type RenderedListPatch,
+  type ScalarPatch,
+} from '@kiln/live';
+import type { LiveListSnapshot, LiveListSnapshotRow, UpsertLiveListSnapshot } from './list-store.js';
+import { liveListTargetKey, type RegisteredLiveListTarget } from './live-list-runtime.js';
 
 export interface ScheduledInvalidation {
   depKey: string;
@@ -25,10 +36,14 @@ export interface SlotPatch {
   value: any;
 }
 
+export type LivePatch = ScalarPatch | RenderedListPatch;
+
 export class FsrWatcher {
   private active = false;
   private abortController = new AbortController();
   private emitter = new EventEmitter();
+  private liveListTargets = new Map<string, RegisteredLiveListTarget<any>>();
+  private warnedUnregisteredLists = new Set<string>();
 
   constructor(
     private store: FsrStore,
@@ -38,6 +53,40 @@ export class FsrWatcher {
 
   getEmitter(): EventEmitter {
     return this.emitter;
+  }
+
+  async registerLiveList<T>(
+    target: RegisteredLiveListTarget<T>,
+    initialSnapshot: UpsertLiveListSnapshot<T>,
+  ): Promise<void> {
+    await this.store.lists.upsertSnapshot(initialSnapshot);
+    const targetKey = liveListTargetKey(target.route, target.name);
+    this.liveListTargets.set(targetKey, target);
+    this.warnedUnregisteredLists.delete(targetKey);
+  }
+
+  hasRegisteredRoute(route: string): boolean {
+    for (const target of this.liveListTargets.values()) {
+      if (target.route === route) return true;
+    }
+    return false;
+  }
+
+  unregisterRoute(route: string): void {
+    for (const [targetKey, target] of this.liveListTargets.entries()) {
+      if (target.route === route) {
+        this.liveListTargets.delete(targetKey);
+        this.warnedUnregisteredLists.delete(targetKey);
+      }
+    }
+  }
+
+  async runOnce(): Promise<void> {
+    if (this.redis) {
+      await this.watcherTickRedis();
+    } else {
+      await this.watcherTick();
+    }
   }
 
   async start(): Promise<void> {
@@ -191,7 +240,10 @@ export class FsrWatcher {
 
   private async watcherTick(): Promise<void> {
     const stale = await this.store.fetchStaleSlots();
-    if (stale.length === 0) return;
+    if (stale.length === 0) {
+      await this.processStaleLists();
+      return;
+    }
 
     // Phase 1: run DB queries
     const results: { slotRow: StaleSlot; value: any; err?: any }[] = [];
@@ -234,11 +286,7 @@ export class FsrWatcher {
     for (const { slotRow, value, err } of results) {
       if (err) continue;
       
-      this.emitter.emit('patch', {
-        route: slotRow.route,
-        slot: slotRow.slot,
-        value
-      } as SlotPatch);
+      this.emitter.emit('patch', createWatcherPatch(slotRow, value));
 
       try {
         await this.store.markFresh(slotRow.route, slotRow.slot);
@@ -246,11 +294,16 @@ export class FsrWatcher {
         console.warn(`FSR watcher: failed to mark slot fresh for ${slotRow.route}/${slotRow.slot}:`, err.message);
       }
     }
+
+    await this.processStaleLists();
   }
 
   private async watcherTickRedis(): Promise<void> {
     const stale = await this.store.fetchStaleSlots();
-    if (stale.length === 0) return;
+    if (stale.length === 0) {
+      await this.processStaleLists();
+      return;
+    }
 
     // Phase 1: run DB queries
     const results: { slotRow: StaleSlot; value: any; err?: any }[] = [];
@@ -340,27 +393,156 @@ export class FsrWatcher {
         }
 
         try {
-          await this.redis.publishPatch({
-            route: slotRow.route,
-            slot: slotRow.slot,
-            value
-          });
+          await this.redis.publishPatch(toLegacySlotPatch(createWatcherPatch(slotRow, value)));
         } catch (e: any) {
           console.warn(`FSR watcher: Redis publishPatch failed for ${slotRow.route}/${slotRow.slot}:`, e.message);
         }
       }
 
-      this.emitter.emit('patch', {
-        route: slotRow.route,
-        slot: slotRow.slot,
-        value
-      } as SlotPatch);
+      this.emitter.emit('patch', createWatcherPatch(slotRow, value));
 
       try {
         await this.store.markFresh(slotRow.route, slotRow.slot);
       } catch (e: any) {
         console.warn(`FSR watcher: failed to mark slot fresh for ${slotRow.route}/${slotRow.slot}:`, e.message);
       }
+    }
+
+    await this.processStaleLists();
+  }
+
+  private async processStaleLists(): Promise<void> {
+    const staleLists = await this.store.lists.fetchStaleLists();
+    for (const snapshot of staleLists) {
+      const targetKey = liveListTargetKey(snapshot.route, snapshot.name);
+      const target = this.liveListTargets.get(targetKey);
+      if (!target) {
+        if (!this.warnedUnregisteredLists.has(targetKey)) {
+          console.warn(
+            `FSR watcher: Live.list ${snapshot.route}/${snapshot.name} is stale but not registered; request the route once to restore embedded watcher callbacks`,
+          );
+          this.warnedUnregisteredLists.add(targetKey);
+        }
+        continue;
+      }
+
+      await this.revalidateLiveList(target, snapshot);
+    }
+  }
+
+  private async revalidateLiveList(
+    target: RegisteredLiveListTarget<any>,
+    snapshot: LiveListSnapshot,
+  ): Promise<void> {
+    const originalFiles = new Map<string, string>();
+    let originalRedisHtml: string | null = null;
+    let originalRedisJson: any | null = null;
+
+    try {
+      const nextRows = await this.store.executeLiveListQuery(target.query, this.abortController.signal);
+      const renderedRows = await target.renderRows(nextRows);
+      const patches = reconcileListRows({
+        route: snapshot.route,
+        list: snapshot.name,
+        keyOf: target.keyOf,
+        previous: snapshot.rows.map((row) => row.data),
+        next: nextRows,
+      }).map((patch): RenderedListPatch => {
+        if (patch.op !== 'insert' && patch.op !== 'replace-row') return patch;
+        const html = renderedRows.get(patch.key);
+        if (html === undefined) {
+          throw new Error(`Live.list renderer did not return HTML for key "${patch.key}"`);
+        }
+        return { ...patch, html };
+      });
+
+      const nextSnapshotRows: LiveListSnapshotRow[] = nextRows.map((row) => {
+        const key = String(target.keyOf(row));
+        const html = renderedRows.get(key);
+        if (html === undefined) {
+          throw new Error(`Live.list renderer did not return HTML for key "${key}"`);
+        }
+        return { key, data: row, html };
+      });
+
+      let patchedHtml: string | null = null;
+      let patchedJson: any | null = null;
+      let needsReregistration = false;
+
+      if (snapshot.htmlPath) {
+        const originalHtml = await fs.readFile(snapshot.htmlPath, 'utf8');
+        originalFiles.set(snapshot.htmlPath, originalHtml);
+        needsReregistration = patches.some(
+          (patch) =>
+            patch.op === 'insert' &&
+            !originalHtml.includes(`data-kiln-list="${escapeAttribute(snapshot.name)}"`),
+        );
+        patchedHtml = patches.reduce(
+          (html, patch) => applyListPatchToHtml(html, patch),
+          originalHtml,
+        );
+      }
+
+      if (snapshot.jsonPath) {
+        const originalJson = await fs.readFile(snapshot.jsonPath, 'utf8');
+        originalFiles.set(snapshot.jsonPath, originalJson);
+        patchedJson = patches.reduce(
+          (json, patch) => applyListPatchToJson(json, patch, target.keyOf),
+          JSON.parse(originalJson),
+        );
+      }
+
+      if (this.redis) {
+        originalRedisHtml = await this.redis.getHtml(snapshot.route);
+        originalRedisJson = await this.redis.getJson(snapshot.route);
+      }
+
+      if (snapshot.htmlPath && patchedHtml !== null) {
+        await fs.writeFile(snapshot.htmlPath, patchedHtml, 'utf8');
+      }
+      if (snapshot.jsonPath && patchedJson !== null) {
+        await fs.writeFile(snapshot.jsonPath, JSON.stringify(patchedJson), 'utf8');
+      }
+      if (this.redis) {
+        if (patchedHtml !== null) await this.redis.setHtml(snapshot.route, patchedHtml);
+        if (patchedJson !== null) await this.redis.setJson(snapshot.route, patchedJson);
+      }
+
+      await this.store.lists.markFresh(snapshot.route, snapshot.name, nextSnapshotRows);
+
+      if (this.redis) {
+        for (const patch of patches) {
+          await this.redis.publishPatch(toLegacySlotPatch(patch)).catch((err: any) => {
+            console.warn(
+              `FSR watcher: Redis publishPatch failed for ${snapshot.route}/${snapshot.name}:`,
+              err.message,
+            );
+          });
+        }
+      }
+      for (const patch of patches) {
+        this.emitter.emit('patch', patch);
+      }
+
+      if (needsReregistration) {
+        this.unregisterRoute(snapshot.route);
+      }
+    } catch (err: any) {
+      for (const [filePath, content] of originalFiles.entries()) {
+        await fs.writeFile(filePath, content, 'utf8').catch(() => {});
+      }
+      if (this.redis) {
+        if (originalRedisHtml !== null) {
+          await this.redis.setHtml(snapshot.route, originalRedisHtml).catch(() => {});
+        }
+        if (originalRedisJson !== null) {
+          await this.redis.setJson(snapshot.route, originalRedisJson).catch(() => {});
+        }
+      }
+      console.warn(
+        `FSR watcher: failed to revalidate Live.list ${snapshot.route}/${snapshot.name}:`,
+        err.message,
+      );
     }
   }
 
@@ -398,4 +580,20 @@ export class FsrWatcher {
       console.warn(`FSR watcher: failed to patch JSON file at ${jsonPath}:`, err.message);
     }
   }
+}
+
+function escapeAttribute(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
+function createWatcherPatch(slotRow: StaleSlot, value: any): LivePatch {
+  if (isScalarPatch(value)) return value;
+  return createScalarPatch(slotRow.route, slotRow.slot, value);
+}
+
+function toLegacySlotPatch(patch: LivePatch): SlotPatch {
+  if (patch.kind === 'scalar') {
+    return { route: patch.route, slot: patch.field, value: patch.value };
+  }
+  return { route: patch.route, slot: patch.list, value: patch };
 }

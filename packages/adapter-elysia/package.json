@@ -17,8 +17,7 @@
   },
   "dependencies": {
     "@kiln/core": "workspace:*",
-    "elysia": "^1.0.0",
-    "elysia-compress": "^1.2.1"
+    "elysia": "^1.0.0"
   },
   "devDependencies": {
     "typescript": "^5.4.5",

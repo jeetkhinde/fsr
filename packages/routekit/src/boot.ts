@@ -1,6 +1,7 @@
 import * as path from 'path';
 import { pathToFileURL, fileURLToPath } from 'url';
 import { KILN_LIVE_CLIENT_SCRIPT } from './live-client-script.js';
+import { applyLiveListMarkers, extractLiveListRowHtml } from './live-list-render.js';
 
 import { discoverRoutes } from './discover.js';
 import { extractPageOptions, extractLiveFields } from './page-options.js';
@@ -12,9 +13,18 @@ import type {
   ServerAdapter,
 } from '@kiln/core';
 import {
+  cloneLiveListRows,
+  getLiveListMeta,
+  isLiveList,
+  type LiveList,
+} from '@kiln/core';
+import {
   KilnCache,
+  type FsrStore,
+  type FsrWatcher,
   bakeSegment,
   assembleFragments,
+  hoistHeadTags,
   injectJsonSeed,
   injectKilnScript,
 } from '@kiln/engine';
@@ -48,6 +58,8 @@ export interface StartKilnOptions {
   ignoreGlobs?: string[];
   fsr?: boolean;
   promoteAfter?: number;
+  store?: FsrStore;
+  watcher?: FsrWatcher;
 }
 
 // ---------------------------------------------------------------------------
@@ -77,7 +89,9 @@ export function buildPageHandler(
   pageMeta: PageRoute,
   layoutNodes: LayoutNode[],
   cacheOpts: CacheOptions,
-  kilnConfig?: KilnConfig
+  kilnConfig?: KilnConfig,
+  store?: FsrStore,
+  watcher?: FsrWatcher,
 ) {
   const cache = new KilnCache(cacheOpts);
 
@@ -97,20 +111,30 @@ export function buildPageHandler(
       return node ? node.pattern : '/';
     });
 
+    let pageProps: any = {};
+    let pagePropsLoaded = false;
+    const loadPageProps = async () => {
+      if (pagePropsLoaded) return pageProps;
+      pagePropsLoaded = true;
+      if (typeof module.load !== 'function') return pageProps;
+      try {
+        pageProps = await module.load(req);
+        assertEmbeddedLiveLists(pageProps, kilnConfig);
+        pageProps = await materializeLiveLists(pageProps, store);
+        return pageProps;
+      } catch (err: any) {
+        if (err.type === 'Redirect') {
+          res.redirect(err.message, err.status);
+          return null;
+        }
+        throw err;
+      }
+    };
+
     // 2. Content negotiation — JSON shortcut
     if (wantsJson(req, layoutPatterns)) {
-      let data: any = {};
-      if (typeof module.load === 'function') {
-        try {
-          data = await module.load(req);
-        } catch (err: any) {
-          if (err.type === 'Redirect') {
-            res.redirect(err.message, err.status);
-            return;
-          }
-          throw err;
-        }
-      }
+      const data = await loadPageProps();
+      if (data === null) return;
       res.json(data);
       return;
     }
@@ -118,8 +142,20 @@ export function buildPageHandler(
     // 3. HTML cache check
     const cachedHtml = await cache.getHtml(req.path);
     if (cachedHtml) {
-      res.html(cachedHtml);
-      return;
+      if (kilnConfig?.fsr?.watcher === 'external') {
+        const loaded = await loadPageProps();
+        if (loaded === null) return;
+      }
+      if (!watcher || watcher.hasRegisteredRoute(req.path)) {
+        res.html(cachedHtml);
+        return;
+      }
+      const loaded = await loadPageProps();
+      if (loaded === null) return;
+      if (!hasLiveLists(loaded)) {
+        res.html(cachedHtml);
+        return;
+      }
     }
 
     // 4. Resolve layout nodes with their modules
@@ -133,25 +169,14 @@ export function buildPageHandler(
     );
 
     // 5. Parallel load: all layout loads + page load
-    let pageProps: any = {};
     const layoutPropsArr: any[] = new Array(layoutEntries.length).fill({});
     let aborted = false;
 
     await Promise.all([
       // Page load
       (async () => {
-        if (typeof module.load === 'function') {
-          try {
-            pageProps = await module.load(req);
-          } catch (err: any) {
-            if (err.type === 'Redirect') {
-              res.redirect(err.message, err.status);
-              aborted = true;
-              return;
-            }
-            throw err;
-          }
-        }
+        const loaded = await loadPageProps();
+        if (loaded === null) aborted = true;
       })(),
       // Layout loads
       ...layoutEntries.map(async ({ node, module: lMod }, idx) => {
@@ -180,6 +205,10 @@ export function buildPageHandler(
     // 7. Assemble: layouts[0] is outermost, each contains OUTLET_TOKEN
     const layoutHtmls = layoutBaked.map(b => b.html);
     let html = assembleFragments(layoutHtmls, pageBaked.html);
+    html = applyLiveListMarkers(html, pageProps as Record<string, unknown>, req.path);
+
+    // 7b. Hoist React 19 metadata (<title>/<meta>/<link>) from body into <head>
+    html = hoistHeadTags(html);
 
     // 8. Inject JSON seed before </body>
     html = injectJsonSeed(html, pageProps as Record<string, unknown>);
@@ -193,9 +222,30 @@ export function buildPageHandler(
 
     // 11. Write to cache if promoteAfter is set (0 = immediate)
     const options = extractPageOptions(module);
+    let htmlPath: string | null = null;
+    let jsonPath: string | null = null;
     if (options.promoteAfter !== undefined) {
-      // Fire-and-forget cache write
-      Promise.resolve().then(() => cache.setHtml(req.path, finalHtml)).catch(() => {});
+      await cache.setHtml(req.path, finalHtml);
+      await cache.setJson(req.path, pageProps);
+      htmlPath = cache.diskHtmlPath(req.path);
+      jsonPath = cache.diskJsonPath(req.path);
+      if (store) {
+        await store.ensureRouteRow(req.path, options.promoteAfter);
+        await store.incrementHit(req.path);
+        await store.setBakedPaths(req.path, htmlPath, jsonPath);
+      }
+    }
+
+    if (watcher) {
+      await registerLiveLists({
+        route: req.path,
+        pageComponent,
+        pageProps,
+        finalHtml,
+        htmlPath,
+        jsonPath,
+        watcher,
+      });
     }
 
     // 12. Extract live fields and persist on pageMeta
@@ -251,13 +301,14 @@ export async function startKiln(
   pagesDir: string,
   options: StartKilnOptions = {}
 ) {
+  const fsrEnabled = options.fsr === true || !!options.store || !!options.watcher;
   // 1. Discover routes
   const manifest = await discoverRoutes(pagesDir, { ignoreGlobs: options.ignoreGlobs ?? [] });
 
   // 2. Build cache options from config
   const cacheOpts: CacheOptions = {
     redis: null,
-    cacheDir: config.cache?.provider === 'disk' ? '.kiln-cache' : '.kiln-cache',
+    cacheDir: config.cache?.provider === 'filesystem' ? (config.cache.dir ?? '.kiln-cache') : '.kiln-cache',
     ttlSecs: 0,
   };
 
@@ -279,7 +330,15 @@ export async function startKiln(
     const absolutePagePath = path.resolve(page.filePath);
     const mod = await import(pathToFileURL(absolutePagePath).href);
 
-    const pageHandler = buildPageHandler(mod, page, manifest.layouts, cacheOpts, config);
+    const pageHandler = buildPageHandler(
+      mod,
+      page,
+      manifest.layouts,
+      cacheOpts,
+      config,
+      options.store,
+      options.watcher,
+    );
     adapter.registerPage(page.pattern, page.layouts, pageHandler);
 
     if (mod.actions) {
@@ -330,7 +389,7 @@ export async function startKiln(
   }
 
   // 8. Serve FSR live client script when FSR is active
-  if (options.fsr) {
+  if (fsrEnabled) {
     adapter.registerPage('/_kiln/live.js', [], async (_req, res) => {
       res.headers['content-type'] = 'application/javascript; charset=utf-8';
       res.html(KILN_LIVE_CLIENT_SCRIPT);
@@ -338,7 +397,7 @@ export async function startKiln(
   }
 
   // 9. Register FSR SSE endpoints
-  if (options.fsr) {
+  if (fsrEnabled) {
     adapter.registerSSE('/__kiln/fsr', async (req, res) => {
       const route = req.query.route || '';
       const slots = (req.query.slots || '').split(',').filter(Boolean);
@@ -351,6 +410,7 @@ export async function startKiln(
           connectionTtlSecs: config.fsr?.connectionTtlSecs ?? 3600,
           keepaliveSecs: config.fsr?.keepaliveSecs ?? 30,
         },
+        watcher: options.watcher,
       });
       res.sse(stream);
     });
@@ -359,7 +419,7 @@ export async function startKiln(
       const route = req.query.route || '';
       const slots = (req.query.slots || '').split(',').filter(Boolean);
       const { fsrSnapshotHandler } = await import('@kiln/engine' as any);
-      const snapshot = await fsrSnapshotHandler(route, slots, null);
+      const snapshot = await fsrSnapshotHandler(route, slots, options.store);
       res.json(snapshot);
     });
   } else {
@@ -408,4 +468,91 @@ export async function startKiln(
   }
 
   return manifest;
+}
+
+async function materializeLiveLists(loadResult: any, store?: FsrStore): Promise<any> {
+  if (!loadResult || typeof loadResult !== 'object') return loadResult;
+  const next = { ...loadResult };
+  for (const [name, value] of Object.entries(loadResult)) {
+    if (!isLiveList(value)) continue;
+    const meta = getLiveListMeta(value);
+    if (!meta) continue;
+    if (!store) {
+      if ((value as unknown[]).length === 0) {
+        throw new Error(`Live.list "${name}" requires an FsrStore to execute its query`);
+      }
+      continue;
+    }
+    const rows = await store.executeLiveListQuery(meta.query);
+    next[name] = cloneLiveListRows(value as LiveList<unknown>, rows);
+  }
+  return next;
+}
+
+function assertEmbeddedLiveLists(loadResult: any, kilnConfig?: KilnConfig): void {
+  if (kilnConfig?.fsr?.watcher !== 'external' || !hasLiveLists(loadResult)) return;
+  throw new Error(
+    'Live.list requires config.fsr.watcher = "embedded"; external watcher callbacks are not serializable in v1',
+  );
+}
+
+function hasLiveLists(loadResult: any): boolean {
+  return Boolean(
+    loadResult &&
+      typeof loadResult === 'object' &&
+      Object.values(loadResult).some((value) => isLiveList(value)),
+  );
+}
+
+async function registerLiveLists(input: {
+  route: string;
+  pageComponent: any;
+  pageProps: Record<string, unknown>;
+  finalHtml: string;
+  htmlPath: string | null;
+  jsonPath: string | null;
+  watcher: FsrWatcher;
+}): Promise<void> {
+  for (const [name, value] of Object.entries(input.pageProps)) {
+    if (!isLiveList(value)) continue;
+    const meta = getLiveListMeta(value);
+    if (!meta) continue;
+    const rows = value as unknown[];
+    const rendered = extractLiveListRowHtml(input.finalHtml, name);
+    const snapshotRows = rows.map((row) => {
+      const key = meta.keyOf(row);
+      const html = rendered.get(key);
+      if (html === undefined) {
+        throw new Error(`Live.list "${name}" did not render keyed HTML for row "${key}"`);
+      }
+      return { key, data: row, html };
+    });
+
+    await input.watcher.registerLiveList(
+      {
+        route: input.route,
+        name,
+        dependsOn: meta.dependsOn,
+        keyOf: meta.keyOf,
+        query: meta.query,
+        renderRows: async (replacementRows) => {
+          const replacementProps = {
+            ...input.pageProps,
+            [name]: cloneLiveListRows(value as LiveList<unknown>, replacementRows),
+          };
+          const baked = await bakeSegment(input.pageComponent, replacementProps, false);
+          const marked = applyLiveListMarkers(baked.html, replacementProps, input.route);
+          return extractLiveListRowHtml(marked, name);
+        },
+      },
+      {
+        route: input.route,
+        name,
+        dependsOn: meta.dependsOn,
+        rows: snapshotRows,
+        htmlPath: input.htmlPath,
+        jsonPath: input.jsonPath,
+      },
+    );
+  }
 }
