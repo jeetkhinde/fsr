@@ -9,3 +9,6 @@ dist/
 
 graphify-out/
 .graphify*
+
+# Local Superpowers design companion artifacts
+.superpowers/
