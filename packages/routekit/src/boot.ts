@@ -75,9 +75,11 @@ export interface StartKilnOptions {
  */
 function wantsJson(req: KilnRequest, layoutPatterns: string[]): boolean {
   const accept = req.headers.get('accept') ?? '';
+  if (accept.includes('text/html')) return false;
   if (accept.includes('application/json')) return true;
-  if (req.isEnhanced && layoutPatterns.every(p => req.layoutsPresent.includes(p))) return true;
-  return false;
+  return req.isEnhanced && layoutPatterns.every((pattern) =>
+    req.layoutsPresent.includes(pattern)
+  );
 }
 
 // ---------------------------------------------------------------------------

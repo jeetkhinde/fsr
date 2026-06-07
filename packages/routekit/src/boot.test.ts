@@ -46,6 +46,56 @@ describe('buildPageHandler', () => {
     await fs.rm(tmpDir, { recursive: true });
   });
 
+  it('returns HTML when an enhanced request explicitly accepts text/html', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
+    const layoutPath = path.join(tmpDir, 'layout.mjs');
+    await fs.writeFile(
+      layoutPath,
+      'export default function Layout({ children }) { return children; }',
+    );
+
+    try {
+      const { createElement } = await import('react');
+      const pageModule = {
+        load: async () => ({ title: 'Address Book' }),
+        default: ({ title }: any) => createElement('h1', null, title),
+      };
+      const pageMeta = {
+        pattern: '/contacts',
+        layouts: [layoutPath],
+        liveFields: [],
+        hasEntries: false,
+        filePath: '',
+        relativePath: '',
+      };
+      const layouts = [{
+        pattern: '/',
+        filePath: layoutPath,
+        relativePath: '_layout.tsx',
+        hasLoad: false,
+      }];
+      const handler = buildPageHandler(
+        pageModule,
+        pageMeta,
+        layouts,
+        { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      );
+      const req = makeReq({
+        headers: new Headers({ accept: 'text/html' }),
+        isEnhanced: true,
+        layoutsPresent: ['/'],
+      });
+      const res = makeRes();
+
+      await handler(req, res);
+
+      expect(res.captured.type).toBe('html');
+      expect(res.captured.body).toContain('Address Book');
+    } finally {
+      await fs.rm(tmpDir, { recursive: true });
+    }
+  });
+
   it('returns HTML when Accept: text/html with no layouts', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
     const { createElement } = await import('react');
