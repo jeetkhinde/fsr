@@ -12,5 +12,5 @@
     "typescript": "^5.4.5",
     "prettier": "^3.2.5"
   },
-  "workspaces": ["packages/*", "test-app"]
+  "workspaces": ["packages/*", "examples/*", "test-app"]
 }
