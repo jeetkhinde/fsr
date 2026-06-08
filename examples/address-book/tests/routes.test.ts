@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { load as loadDetail } from "../pages/contacts/[id]/index.js";
 import { load as loadContacts } from "../pages/contacts/index.js";
 import { actions as newContactActions } from "../pages/contacts/new.js";
 import { load as loadRoot } from "../pages/index.js";
@@ -43,5 +44,15 @@ describe("address book routes", () => {
       expect(result.errors.name).toBe("Enter a first or last name.");
       expect(result.errors.email).toBe("Enter a valid email address.");
     }
+  });
+
+  it("returns a missing contact state for an unknown id", async () => {
+    const result = await loadDetail({
+      ...request(),
+      path: "/contacts/999999999",
+      params: { id: "999999999" },
+    } as any);
+    expect(result.contact).toBeNull();
+    expect(result.selectedId).toBe("999999999");
   });
 });
