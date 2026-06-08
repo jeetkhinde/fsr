@@ -5,6 +5,17 @@ type SearchableContact = Pick<
   "firstName" | "lastName" | "company" | "role" | "email" | "handle"
 >;
 
+const contactNameCollator = new Intl.Collator("en", {
+  sensitivity: "base",
+});
+
+function compareContactIds(left: string, right: string): number {
+  const leftId = BigInt(left);
+  const rightId = BigInt(right);
+
+  return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+}
+
 export function getContactName(
   contact: Pick<Contact, "firstName" | "lastName">,
 ): string {
@@ -35,20 +46,16 @@ export function getContactSearchText(contact: SearchableContact): string {
     contact.handle,
   ]
     .join(" ")
-    .toLocaleLowerCase();
+    .toLowerCase();
 }
 
 export function sortContacts<T extends ContactSummary>(contacts: T[]): T[] {
   return [...contacts].sort(
     (left, right) =>
       Number(right.favorite) - Number(left.favorite) ||
-      left.lastName.localeCompare(right.lastName, undefined, {
-        sensitivity: "base",
-      }) ||
-      left.firstName.localeCompare(right.firstName, undefined, {
-        sensitivity: "base",
-      }) ||
-      Number(left.id) - Number(right.id),
+      contactNameCollator.compare(left.lastName, right.lastName) ||
+      contactNameCollator.compare(left.firstName, right.firstName) ||
+      compareContactIds(left.id, right.id),
   );
 }
 
@@ -56,7 +63,7 @@ export function filterContacts<T extends SearchableContact>(
   contacts: T[],
   query: string,
 ): T[] {
-  const normalized = query.trim().toLocaleLowerCase();
+  const normalized = query.trim().toLowerCase();
   if (!normalized) return contacts;
 
   return contacts.filter((contact) =>

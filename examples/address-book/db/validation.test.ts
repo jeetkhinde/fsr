@@ -57,6 +57,19 @@ describe("contact validation", () => {
     expect(result.errors.website).toBe("Use an http or https URL.");
     expect(result.errors.avatarUrl).toBe("Use an http or https URL.");
   });
+
+  it("rejects non-string multipart name values", () => {
+    const form = new FormData();
+    form.set("firstName", new Blob(["Sarah"]), "first-name.txt");
+    form.set("lastName", "");
+
+    const result = validateContactForm(form);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected validation to fail.");
+    expect(result.errors.name).toBe("Enter a first or last name.");
+    expect(result.values.firstName).toBe("");
+  });
 });
 
 describe("contact presentation", () => {
@@ -82,5 +95,17 @@ describe("contact presentation", () => {
       "1",
     ]);
     expect(sortContacts(contacts).map((item) => item.id)).toEqual(["1", "2"]);
+  });
+
+  it("sorts adjacent BIGSERIAL ids without losing precision", () => {
+    const contacts = [
+      contact({ id: "9007199254740993" }),
+      contact({ id: "9007199254740992" }),
+    ];
+
+    expect(sortContacts(contacts).map((item) => item.id)).toEqual([
+      "9007199254740992",
+      "9007199254740993",
+    ]);
   });
 });

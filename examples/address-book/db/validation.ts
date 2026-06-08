@@ -15,7 +15,8 @@ const fields = [
 ] as const;
 
 function read(form: FormData, name: (typeof fields)[number]): string {
-  return String(form.get(name) ?? "").trim();
+  const value = form.get(name);
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function isHttpUrl(value: string): boolean {
