@@ -13,21 +13,24 @@ import { sql } from '../db/client.js';
 async function main() {
   const adapter = new ElysiaAdapter();
   const store = new FsrStore(sql);
-  const redis = config.fsr?.redisUrl
-    ? new RedisCache(config.fsr.redisUrl)
+  const fsrConfig = config.fsr;
+  const redis = fsrConfig.redisUrl
+    ? new RedisCache(fsrConfig.redisUrl).withArtifactTtl(
+        fsrConfig.artifactTtlSecs,
+      )
     : null;
   const watcher = new FsrWatcher(store, redis, {
-    pollIntervalMs: 1000,
-    promoteAfterHits: config.fsr?.promoteAfterHits ?? 1,
-    patchDebounceSecs: 0,
-    purgeAfterSeconds: 3600,
+    pollIntervalMs: fsrConfig.pollIntervalMs,
+    promoteAfterHits: fsrConfig.promoteAfterHits,
+    patchDebounceSecs: fsrConfig.patchDebounceSecs,
+    purgeAfterSeconds: fsrConfig.purgeAfterSeconds,
     scheduledInvalidations: [],
-    idleEvictSecs: 1800,
-    idleThresholdSecs: 3600,
+    idleEvictSecs: fsrConfig.idleEvictSecs,
+    idleThresholdSecs: fsrConfig.idleThresholdSecs,
   });
 
   await watcher.start();
-  await startDbNotificationPipeline(config.fsr!.postgresUrl!, store, watcher);
+  await startDbNotificationPipeline(fsrConfig.postgresUrl!, store, watcher);
 
   adapter.registerAsset(
     '/assets/address-book.css',
