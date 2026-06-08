@@ -155,6 +155,11 @@ a {
   text-transform: uppercase;
 }
 
+.directory__section[hidden],
+.directory__empty[hidden] {
+  display: none;
+}
+
 .contact-row {
   min-height: 3.55rem;
   display: grid;
@@ -272,6 +277,10 @@ a {
   align-items: center;
   justify-content: flex-end;
   gap: 0.6rem;
+}
+
+.detail-toolbar__actions {
+  margin-left: auto;
 }
 
 .button {

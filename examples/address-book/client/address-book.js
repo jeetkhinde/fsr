@@ -98,7 +98,8 @@ function renderErrors(form, result) {
   const message = form.querySelector("[data-form-message]");
   if (message) {
     message.hidden = false;
-    message.textContent = result.message || "Check the highlighted fields.";
+    message.textContent =
+      result.errors?.name || result.message || "Check the highlighted fields.";
   }
   Object.entries(result.errors || {}).forEach(([name, text]) => {
     if (name === "name") return;

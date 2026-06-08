@@ -53,6 +53,7 @@ export function ContactForm({
       className="contact-form"
       method="post"
       action={action}
+      noValidate
       data-contact-form
     >
       <div className="contact-form__heading">
