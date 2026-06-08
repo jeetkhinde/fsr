@@ -43,6 +43,12 @@ describe('injectKilnScript', () => {
     expect(result).toContain('<script src="/_kiln/client.js"');
     expect(result.indexOf('</head>')).toBeGreaterThan(result.indexOf('<script'));
   });
+
+  it('does not inject a script that is already present', () => {
+    const html = '<html><head><script src="/_silcrow/silcrow.js" defer></script></head><body></body></html>';
+    const result = injectKilnScript(html, '/_silcrow/silcrow.js');
+    expect(result).toBe(html);
+  });
 });
 
 describe('hoistHeadTags', () => {
@@ -72,8 +78,7 @@ describe('hoistHeadTags', () => {
 
   it('deduplicates identical hoisted tags', () => {
     const html =
-      '<html><head></head><body>' +
-      '<meta name="x" content="1"/><meta name="x" content="1"/><p>y</p></body></html>';
+      '<html><head></head><body>' + '<meta name="x" content="1"/><meta name="x" content="1"/><p>y</p></body></html>';
     const result = hoistHeadTags(html);
     const matches = result.match(/<meta name="x" content="1"\/>/g) ?? [];
     expect(matches.length).toBe(1);

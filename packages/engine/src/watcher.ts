@@ -10,7 +10,7 @@ import {
   isScalarPatch,
   reconcileListRows,
   type RenderedListPatch,
-  type ScalarPatch,
+  type ScalarPatch
 } from '@kiln/live';
 import type { LiveListSnapshot, LiveListSnapshotRow, UpsertLiveListSnapshot } from './list-store.js';
 import { liveListTargetKey, type RegisteredLiveListTarget } from './live-list-runtime.js';
@@ -44,6 +44,7 @@ export class FsrWatcher {
   private emitter = new EventEmitter();
   private liveListTargets = new Map<string, RegisteredLiveListTarget<any>>();
   private warnedUnregisteredLists = new Set<string>();
+  private notificationQueue: Promise<void> = Promise.resolve();
 
   constructor(
     private store: FsrStore,
@@ -57,12 +58,74 @@ export class FsrWatcher {
 
   async registerLiveList<T>(
     target: RegisteredLiveListTarget<T>,
-    initialSnapshot: UpsertLiveListSnapshot<T>,
+    initialSnapshot: UpsertLiveListSnapshot<T>
   ): Promise<void> {
-    await this.store.lists.upsertSnapshot(initialSnapshot);
-    const targetKey = liveListTargetKey(target.route, target.name);
-    this.liveListTargets.set(targetKey, target);
-    this.warnedUnregisteredLists.delete(targetKey);
+    const operation = this.notificationQueue.then(async () => {
+      const previousSnapshot = await this.store.lists.getSnapshot(target.route, target.name);
+      const patches = previousSnapshot
+        ? this.reconcileRegistration(target, previousSnapshot, initialSnapshot)
+        : [];
+
+      await this.store.lists.upsertSnapshot(initialSnapshot);
+      const targetKey = liveListTargetKey(target.route, target.name);
+      this.liveListTargets.set(targetKey, target);
+      this.warnedUnregisteredLists.delete(targetKey);
+
+      if (this.redis) {
+        for (const patch of patches) {
+          await this.redis.publishPatch(toLegacySlotPatch(patch)).catch((err: any) => {
+            console.warn(
+              `FSR watcher: Redis publishPatch failed for ${initialSnapshot.route}/${initialSnapshot.name}:`,
+              err.message
+            );
+          });
+        }
+      }
+      for (const patch of patches) {
+        this.emitter.emit('patch', patch);
+      }
+    });
+
+    this.notificationQueue = operation.catch((err) => {
+      console.error(`Failed to register Live.list ${target.route}/${target.name}:`, err);
+    });
+    return operation;
+  }
+
+  private reconcileRegistration<T>(
+    target: RegisteredLiveListTarget<T>,
+    previousSnapshot: LiveListSnapshot,
+    initialSnapshot: UpsertLiveListSnapshot<T>
+  ): RenderedListPatch<T>[] {
+    const nextRowsByKey = new Map(initialSnapshot.rows.map((row) => [row.key, row] as const));
+    return reconcileListRows({
+      route: initialSnapshot.route,
+      list: initialSnapshot.name,
+      keyOf: target.keyOf,
+      previous: previousSnapshot.rows.map((row) => row.data as T),
+      next: initialSnapshot.rows.map((row) => row.data)
+    }).map((patch): RenderedListPatch<T> => {
+      if (patch.op !== 'insert' && patch.op !== 'fields' && patch.op !== 'replace-row') {
+        return patch;
+      }
+
+      const next = nextRowsByKey.get(patch.key);
+      if (!next) {
+        throw new Error(`Live.list renderer did not return HTML for key "${patch.key}"`);
+      }
+      if (patch.op === 'insert') {
+        return { ...patch, html: next.html };
+      }
+      return {
+        kind: 'list',
+        op: 'replace-row',
+        route: patch.route,
+        list: patch.list,
+        key: patch.key,
+        row: next.data,
+        html: next.html
+      };
+    });
   }
 
   hasRegisteredRoute(route: string): boolean {
@@ -118,17 +181,24 @@ export class FsrWatcher {
     this.abortController.abort();
   }
 
-  notifyChange(depKey: string): void {
-    // Invalidate dep keys in DB
-    this.store.invalidateDepKey(depKey).catch(err => {
-      console.error(`Failed to invalidate dep key ${depKey}:`, err);
-    });
+  notifyChange(depKey: string): Promise<void> {
+    this.notificationQueue = this.notificationQueue
+      .then(async () => {
+        await this.store.invalidateDepKey(depKey);
+        if (this.redis) {
+          await this.watcherTickRedis();
+        }
+      })
+      .catch((err) => {
+        console.error(`Failed to process invalidation for dep key ${depKey}:`, err);
+      });
+    return this.notificationQueue;
   }
 
   private spawnSupervisedInvalidation(scheduled: ScheduledInvalidation, signal: AbortSignal): void {
     const run = async () => {
       while (!signal.aborted) {
-        await new Promise(resolve => setTimeout(resolve, scheduled.intervalMs));
+        await new Promise((resolve) => setTimeout(resolve, scheduled.intervalMs));
         if (signal.aborted) break;
         try {
           await this.store.invalidateDepKey(scheduled.depKey);
@@ -143,7 +213,7 @@ export class FsrWatcher {
   private spawnSupervisedIdleEviction(signal: AbortSignal): void {
     const run = async () => {
       while (!signal.aborted) {
-        await new Promise(resolve => setTimeout(resolve, this.config.idleEvictSecs * 1000));
+        await new Promise((resolve) => setTimeout(resolve, this.config.idleEvictSecs * 1000));
         if (signal.aborted) break;
         try {
           const evicted = await this.store.evictIdleRoutes(this.config.idleThresholdSecs);
@@ -175,7 +245,7 @@ export class FsrWatcher {
         } catch (err: any) {
           console.error('FSR watcher tick failed:', err.message);
         }
-        await new Promise(resolve => setTimeout(resolve, this.config.pollIntervalMs));
+        await new Promise((resolve) => setTimeout(resolve, this.config.pollIntervalMs));
       }
     };
     run();
@@ -209,17 +279,19 @@ export class FsrWatcher {
               reject(new Error('Aborted'));
             });
 
-            subClient.subscribe('kiln:invalidate', async (_message: string) => {
-              try {
-                await this.watcherTickRedis();
-              } catch (err: any) {
-                console.error('FSR watcher: tick failed after invalidation event:', err.message);
-              }
-            }).then(() => {
-              console.log('FSR watcher: subscribed to kiln:invalidate');
-            }).catch(reject);
+            subClient
+              .subscribe('kiln:invalidate', async (_message: string) => {
+                try {
+                  await this.watcherTickRedis();
+                } catch (err: any) {
+                  console.error('FSR watcher: tick failed after invalidation event:', err.message);
+                }
+              })
+              .then(() => {
+                console.log('FSR watcher: subscribed to kiln:invalidate');
+              })
+              .catch(reject);
           });
-
         } catch (err: any) {
           if (signal.aborted) break;
           console.warn('FSR watcher: Redis connection dropped or failed. Switching to poll fallback...', err.message);
@@ -228,7 +300,7 @@ export class FsrWatcher {
           } catch (e: any) {
             console.error('FSR watcher: fallback tick failed:', e.message);
           }
-          await new Promise(resolve => setTimeout(resolve, Math.max(100, this.config.pollIntervalMs)));
+          await new Promise((resolve) => setTimeout(resolve, Math.max(100, this.config.pollIntervalMs)));
         } finally {
           if (subClient) subClient.close();
           subClient = null;
@@ -285,7 +357,7 @@ export class FsrWatcher {
     // Phase 2c: broadcast SSE and mark fresh
     for (const { slotRow, value, err } of results) {
       if (err) continue;
-      
+
       this.emitter.emit('patch', createWatcherPatch(slotRow, value));
 
       try {
@@ -312,7 +384,10 @@ export class FsrWatcher {
         const value = await this.store.reExecuteQuery(slotRow);
         results.push({ slotRow, value });
       } catch (err: any) {
-        console.warn(`FSR watcher (Redis): failed to re-execute query for ${slotRow.route}/${slotRow.slot}:`, err.message);
+        console.warn(
+          `FSR watcher (Redis): failed to re-execute query for ${slotRow.route}/${slotRow.slot}:`,
+          err.message
+        );
         results.push({ slotRow, value: null, err });
       }
     }
@@ -332,7 +407,7 @@ export class FsrWatcher {
         if (slotRow.jsonPath) {
           if (!jsonPatches.has(slotRow.jsonPath)) jsonPatches.set(slotRow.jsonPath, []);
           jsonPatches.get(slotRow.jsonPath)!.push([slotRow.slot, value]);
-          
+
           if (!redisJsonPatches.has(slotRow.route)) redisJsonPatches.set(slotRow.route, []);
           redisJsonPatches.get(slotRow.route)!.push([slotRow.slot, value]);
         }
@@ -353,7 +428,7 @@ export class FsrWatcher {
     if (this.redis) {
       for (const [route, patches] of redisJsonPatches.entries()) {
         try {
-          const existing = await this.redis.getJson(route) || {};
+          const existing = (await this.redis.getJson(route)) || {};
           for (const [slot, val] of patches) {
             existing[slot] = val;
           }
@@ -419,7 +494,7 @@ export class FsrWatcher {
       if (!target) {
         if (!this.warnedUnregisteredLists.has(targetKey)) {
           console.warn(
-            `FSR watcher: Live.list ${snapshot.route}/${snapshot.name} is stale but not registered; request the route once to restore embedded watcher callbacks`,
+            `FSR watcher: Live.list ${snapshot.route}/${snapshot.name} is stale but not registered; request the route once to restore embedded watcher callbacks`
           );
           this.warnedUnregisteredLists.add(targetKey);
         }
@@ -430,10 +505,7 @@ export class FsrWatcher {
     }
   }
 
-  private async revalidateLiveList(
-    target: RegisteredLiveListTarget<any>,
-    snapshot: LiveListSnapshot,
-  ): Promise<void> {
+  private async revalidateLiveList(target: RegisteredLiveListTarget<any>, snapshot: LiveListSnapshot): Promise<void> {
     const originalFiles = new Map<string, string>();
     let originalRedisHtml: string | null = null;
     let originalRedisJson: any | null = null;
@@ -441,13 +513,39 @@ export class FsrWatcher {
     try {
       const nextRows = await this.store.executeLiveListQuery(target.query, this.abortController.signal);
       const renderedRows = await target.renderRows(nextRows);
+      const nextRowsByKey = new Map(nextRows.map((row) => [String(target.keyOf(row)), row] as const));
+      const previousHtmlByKey = new Map(snapshot.rows.map((row) => [row.key, row.html] as const));
       const patches = reconcileListRows({
         route: snapshot.route,
         list: snapshot.name,
         keyOf: target.keyOf,
         previous: snapshot.rows.map((row) => row.data),
-        next: nextRows,
+        next: nextRows
       }).map((patch): RenderedListPatch => {
+        if (patch.op === 'fields') {
+          const previousHtml = previousHtmlByKey.get(patch.key);
+          const nextHtml = renderedRows.get(patch.key);
+          const nextRow = nextRowsByKey.get(patch.key);
+          if (previousHtml === undefined || nextHtml === undefined || nextRow === undefined) {
+            throw new Error(`Live.list renderer did not return HTML for key "${patch.key}"`);
+          }
+
+          const containerOpen = `<ul data-kiln-list="${escapeAttribute(snapshot.name)}">`;
+          const patchedHtml = applyListPatchToHtml(`${containerOpen}${previousHtml}</ul>`, patch);
+          if (patchedHtml !== `${containerOpen}${nextHtml}</ul>`) {
+            return {
+              kind: 'list',
+              op: 'replace-row',
+              route: patch.route,
+              list: patch.list,
+              key: patch.key,
+              row: nextRow,
+              html: nextHtml
+            };
+          }
+          return patch;
+        }
+
         if (patch.op !== 'insert' && patch.op !== 'replace-row') return patch;
         const html = renderedRows.get(patch.key);
         if (html === undefined) {
@@ -474,13 +572,9 @@ export class FsrWatcher {
         originalFiles.set(snapshot.htmlPath, originalHtml);
         needsReregistration = patches.some(
           (patch) =>
-            patch.op === 'insert' &&
-            !originalHtml.includes(`data-kiln-list="${escapeAttribute(snapshot.name)}"`),
+            patch.op === 'insert' && !originalHtml.includes(`data-kiln-list="${escapeAttribute(snapshot.name)}"`)
         );
-        patchedHtml = patches.reduce(
-          (html, patch) => applyListPatchToHtml(html, patch),
-          originalHtml,
-        );
+        patchedHtml = patches.reduce((html, patch) => applyListPatchToHtml(html, patch), originalHtml);
       }
 
       if (snapshot.jsonPath) {
@@ -488,7 +582,7 @@ export class FsrWatcher {
         originalFiles.set(snapshot.jsonPath, originalJson);
         patchedJson = patches.reduce(
           (json, patch) => applyListPatchToJson(json, patch, target.keyOf),
-          JSON.parse(originalJson),
+          JSON.parse(originalJson)
         );
       }
 
@@ -513,10 +607,7 @@ export class FsrWatcher {
       if (this.redis) {
         for (const patch of patches) {
           await this.redis.publishPatch(toLegacySlotPatch(patch)).catch((err: any) => {
-            console.warn(
-              `FSR watcher: Redis publishPatch failed for ${snapshot.route}/${snapshot.name}:`,
-              err.message,
-            );
+            console.warn(`FSR watcher: Redis publishPatch failed for ${snapshot.route}/${snapshot.name}:`, err.message);
           });
         }
       }
@@ -539,10 +630,7 @@ export class FsrWatcher {
           await this.redis.setJson(snapshot.route, originalRedisJson).catch(() => {});
         }
       }
-      console.warn(
-        `FSR watcher: failed to revalidate Live.list ${snapshot.route}/${snapshot.name}:`,
-        err.message,
-      );
+      console.warn(`FSR watcher: failed to revalidate Live.list ${snapshot.route}/${snapshot.name}:`, err.message);
     }
   }
 

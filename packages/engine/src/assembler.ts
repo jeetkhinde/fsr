@@ -29,6 +29,9 @@ export function injectJsonSeed(html: string, seed: Record<string, unknown>): str
  * Inject <script src="..."> before </head>.
  */
 export function injectKilnScript(html: string, src: string): string {
+  if (html.includes(`src="${src}"`) || html.includes(`src='${src}'`)) {
+    return html;
+  }
   const tag = `<script src="${src}" defer></script>`;
   const idx = html.indexOf('</head>');
   if (idx === -1) return tag + html;
@@ -48,11 +51,7 @@ export function injectStylesheet(html: string, href: string): string {
 // Hoistable document-metadata tags. React 19 renders these at the front of a
 // fragment (no <head> to hoist into server-side), so after assembly they sit
 // in the body. Lift them into the real <head>.
-const HOISTABLE_TAG_PATTERNS = [
-  /<title\b[^>]*>[\s\S]*?<\/title>/gi,
-  /<meta\b[^>]*?>/gi,
-  /<link\b[^>]*?>/gi,
-];
+const HOISTABLE_TAG_PATTERNS = [/<title\b[^>]*>[\s\S]*?<\/title>/gi, /<meta\b[^>]*?>/gi, /<link\b[^>]*?>/gi];
 
 /**
  * Move <title>/<meta>/<link> tags out of the body and into <head>.

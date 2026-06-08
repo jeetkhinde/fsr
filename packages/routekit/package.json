@@ -16,6 +16,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@kiln/client": "workspace:*",
     "@kiln/core": "workspace:*",
     "@kiln/engine": "workspace:*",
     "sharp": "^0.34.5"

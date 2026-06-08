@@ -8,11 +8,12 @@ export interface KilnRequest {
   params: Record<string, string>;
   query: Record<string, string>;
   headers: Headers;
+  signal?: AbortSignal;
   formData(): Promise<FormData>;
   json(): Promise<unknown>;
-  isEnhanced: boolean;            // silcrow-target header present
-  layoutsPresent: string[];       // parsed from X-PS-Present
-  raw?: any;                      // escape hatch for adapter-specific request object
+  isEnhanced: boolean; // silcrow-target header present
+  layoutsPresent: string[]; // parsed from X-PS-Present
+  raw?: any; // escape hatch for adapter-specific request object
   prebakeNext(path: string): void;
 }
 
@@ -58,16 +59,10 @@ export interface ServerAdapter {
   ): void;
 
   /** Register a POST action route */
-  registerAction(
-    pattern: string,
-    handler: (req: KilnRequest, res: KilnResponse) => Promise<void>
-  ): void;
+  registerAction(pattern: string, handler: (req: KilnRequest, res: KilnResponse) => Promise<void>): void;
 
   /** Register an SSE endpoint */
-  registerSSE(
-    pattern: string,
-    handler: (req: KilnRequest, res: KilnResponse) => Promise<void>
-  ): void;
+  registerSSE(pattern: string, handler: (req: KilnRequest, res: KilnResponse) => Promise<void>): void;
 
   /** Register a static asset route */
   registerAsset(urlPath: string, filePath: string): void;

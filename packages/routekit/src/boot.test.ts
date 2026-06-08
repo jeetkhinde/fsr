@@ -17,15 +17,21 @@ function makeReq(overrides: Partial<KilnRequest> = {}): KilnRequest {
     isEnhanced: false,
     layoutsPresent: [],
     prebakeNext: () => {},
-    ...overrides,
+    ...overrides
   };
 }
 
 function makeRes(): any {
   const res: any = { status: 200, headers: {}, captured: null };
-  res.html = (b: string) => { res.captured = { type: 'html', body: b }; };
-  res.json = (b: unknown) => { res.captured = { type: 'json', body: b }; };
-  res.redirect = (url: string) => { res.captured = { type: 'redirect', url }; };
+  res.html = (b: string) => {
+    res.captured = { type: 'html', body: b };
+  };
+  res.json = (b: unknown) => {
+    res.captured = { type: 'json', body: b };
+  };
+  res.redirect = (url: string) => {
+    res.captured = { type: 'redirect', url };
+  };
   res.sse = () => {};
   return res;
 }
@@ -35,30 +41,43 @@ describe('buildPageHandler', () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
     const pageModule = {
       load: async () => ({ contacts: [{ id: '1', name: 'Alice' }] }),
-      default: ({ contacts }: any) => null,
+      default: ({ contacts }: any) => null
     };
-    const handler = buildPageHandler(pageModule, { pattern: '/contacts', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' }, [], { cacheDir: tmpDir, ttlSecs: 0, redis: null });
-    const req = makeReq({ headers: new Headers({ accept: 'application/json' }) });
+    const handler = buildPageHandler(
+      pageModule,
+      {
+        pattern: '/contacts',
+        layouts: [],
+        liveFields: [],
+        hasEntries: false,
+        filePath: '',
+        relativePath: ''
+      },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null }
+    );
+    const req = makeReq({
+      headers: new Headers({ accept: 'application/json' })
+    });
     const res = makeRes();
     await handler(req as any, res as any);
     expect(res.captured.type).toBe('json');
-    expect(res.captured.body).toEqual({ contacts: [{ id: '1', name: 'Alice' }] });
+    expect(res.captured.body).toEqual({
+      contacts: [{ id: '1', name: 'Alice' }]
+    });
     await fs.rm(tmpDir, { recursive: true });
   });
 
   it('returns HTML when an enhanced request explicitly accepts text/html', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
     const layoutPath = path.join(tmpDir, 'layout.mjs');
-    await fs.writeFile(
-      layoutPath,
-      'export default function Layout({ children }) { return children; }',
-    );
+    await fs.writeFile(layoutPath, 'export default function Layout({ children }) { return children; }');
 
     try {
       const { createElement } = await import('react');
       const pageModule = {
         load: async () => ({ title: 'Address Book' }),
-        default: ({ title }: any) => createElement('h1', null, title),
+        default: ({ title }: any) => createElement('h1', null, title)
       };
       const pageMeta = {
         pattern: '/contacts',
@@ -66,24 +85,25 @@ describe('buildPageHandler', () => {
         liveFields: [],
         hasEntries: false,
         filePath: '',
-        relativePath: '',
+        relativePath: ''
       };
-      const layouts = [{
-        pattern: '/',
-        filePath: layoutPath,
-        relativePath: '_layout.tsx',
-        hasLoad: false,
-      }];
-      const handler = buildPageHandler(
-        pageModule,
-        pageMeta,
-        layouts,
-        { cacheDir: tmpDir, ttlSecs: 0, redis: null },
-      );
+      const layouts = [
+        {
+          pattern: '/',
+          filePath: layoutPath,
+          relativePath: '_layout.tsx',
+          hasLoad: false
+        }
+      ];
+      const handler = buildPageHandler(pageModule, pageMeta, layouts, {
+        cacheDir: tmpDir,
+        ttlSecs: 0,
+        redis: null
+      });
       const req = makeReq({
         headers: new Headers({ accept: 'text/html' }),
         isEnhanced: true,
-        layoutsPresent: ['/'],
+        layoutsPresent: ['/']
       });
       const res = makeRes();
 
@@ -101,14 +121,28 @@ describe('buildPageHandler', () => {
     const { createElement } = await import('react');
     const pageModule = {
       load: async () => ({ title: 'Hello' }),
-      default: ({ title }: any) => createElement('h1', null, title),
+      default: ({ title }: any) => createElement('h1', null, title)
     };
-    const handler = buildPageHandler(pageModule, { pattern: '/about', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' }, [], { cacheDir: tmpDir, ttlSecs: 0, redis: null });
+    const handler = buildPageHandler(
+      pageModule,
+      {
+        pattern: '/about',
+        layouts: [],
+        liveFields: [],
+        hasEntries: false,
+        filePath: '',
+        relativePath: ''
+      },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null }
+    );
     const req = makeReq({ path: '/about' });
     const res = makeRes();
     await handler(req as any, res as any);
     expect(res.captured.type).toBe('html');
     expect(res.captured.body).toContain('Hello');
+    expect(res.captured.body).toContain('/_silcrow/silcrow.js');
+    expect(res.captured.body).not.toContain('/_kiln/client.js');
     await fs.rm(tmpDir, { recursive: true });
   });
 
@@ -118,27 +152,45 @@ describe('buildPageHandler', () => {
     const { Live } = await import('@kiln/core');
     const pageModule = {
       load: async () => ({
-        todos: Live.list<{ id: number; title: string; completed: boolean; status: string }>({
+        todos: Live.list<{
+          id: number;
+          title: string;
+          completed: boolean;
+          status: string;
+        }>({
           key: (todo: { id: number }) => todo.id,
           dependsOn: 'another_table.col',
-          initial: [
-            { id: 1, title: 'Ship', completed: false, status: 'in_progress' },
-          ],
-          query: () => [],
-        }),
+          initial: [{ id: 1, title: 'Ship', completed: false, status: 'in_progress' }],
+          query: () => []
+        })
       }),
-      default: ({ todos }: any) => createElement(
-        'ul',
-        null,
-        todos.map((todo: any) => createElement(
-          'li',
-          { key: todo.id },
-          createElement('span', null, todo.title),
-          createElement('span', null, todo.status),
-        )),
-      ),
+      default: ({ todos }: any) =>
+        createElement(
+          'ul',
+          null,
+          todos.map((todo: any) =>
+            createElement(
+              'li',
+              { key: todo.id },
+              createElement('span', null, todo.title),
+              createElement('span', null, todo.status)
+            )
+          )
+        )
     };
-    const handler = buildPageHandler(pageModule, { pattern: '/todos', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' }, [], { cacheDir: tmpDir, ttlSecs: 0, redis: null });
+    const handler = buildPageHandler(
+      pageModule,
+      {
+        pattern: '/todos',
+        layouts: [],
+        liveFields: [],
+        hasEntries: false,
+        filePath: '',
+        relativePath: ''
+      },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null }
+    );
     const req = makeReq({ path: '/todos' });
     const res = makeRes();
     await handler(req as any, res as any);
@@ -155,11 +207,11 @@ describe('buildPageHandler', () => {
     const { Live } = await import('@kiln/core');
     const registrations: any[] = [];
     const store = {
-      executeLiveListQuery: async (query: any, signal?: AbortSignal) => query({ sql: 'shared-sql', signal }),
+      executeLiveListQuery: async (query: any, signal?: AbortSignal) => query({ sql: 'shared-sql', signal })
     };
     const watcher = {
       hasRegisteredRoute: () => false,
-      registerLiveList: async (target: any, snapshot: any) => registrations.push({ target, snapshot }),
+      registerLiveList: async (target: any, snapshot: any) => registrations.push({ target, snapshot })
     };
     const pageModule = {
       load: async () => ({
@@ -169,23 +221,31 @@ describe('buildPageHandler', () => {
           query: ({ sql }) => {
             expect(sql).toBe('shared-sql');
             return [{ id: 1, title: 'From query' }];
-          },
-        }),
+          }
+        })
       }),
-      default: ({ todos }: any) => createElement(
-        'ul',
-        null,
-        todos.map((todo: any) => createElement('li', { key: todo.id }, createElement('span', null, todo.title))),
-      ),
+      default: ({ todos }: any) =>
+        createElement(
+          'ul',
+          null,
+          todos.map((todo: any) => createElement('li', { key: todo.id }, createElement('span', null, todo.title)))
+        )
     };
     const handler = buildPageHandler(
       pageModule,
-      { pattern: '/todos', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      {
+        pattern: '/todos',
+        layouts: [],
+        liveFields: [],
+        hasEntries: false,
+        filePath: '',
+        relativePath: ''
+      },
       [],
       { cacheDir: tmpDir, ttlSecs: 0, redis: null },
       undefined,
       store as any,
-      watcher as any,
+      watcher as any
     );
     const res = makeRes();
 
@@ -209,13 +269,15 @@ describe('buildPageHandler', () => {
       executeLiveListQuery: async (query: any) => query({ sql: 'shared-sql' }),
       ensureRouteRow: async () => {},
       incrementHit: async () => 'JustPromoted',
-      setBakedPaths: async () => {},
+      setBakedPaths: async () => {}
     };
     const makeWatcher = () => {
       let registered = false;
       return {
         hasRegisteredRoute: () => registered,
-        registerLiveList: async () => { registered = true; },
+        registerLiveList: async () => {
+          registered = true;
+        }
       };
     };
     const pageModule = {
@@ -224,19 +286,47 @@ describe('buildPageHandler', () => {
         todos: Live.list<{ id: number; title: string }>({
           key: (todo) => todo.id,
           dependsOn: 'todo_events',
-          query: () => [{ id: 1, title }],
-        }),
+          query: () => [{ id: 1, title }]
+        })
       }),
-      default: ({ todos }: any) => createElement('ul', null, todos.map((todo: any) => createElement('li', { key: todo.id }, todo.title))),
+      default: ({ todos }: any) =>
+        createElement(
+          'ul',
+          null,
+          todos.map((todo: any) => createElement('li', { key: todo.id }, todo.title))
+        )
     };
-    const meta = { pattern: '/restart', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' };
-    const first = buildPageHandler(pageModule, meta, [], { cacheDir: tmpDir, ttlSecs: 0, redis: null }, undefined, store as any, makeWatcher() as any);
+    const meta = {
+      pattern: '/restart',
+      layouts: [],
+      liveFields: [],
+      hasEntries: false,
+      filePath: '',
+      relativePath: ''
+    };
+    const first = buildPageHandler(
+      pageModule,
+      meta,
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      store as any,
+      makeWatcher() as any
+    );
     const firstRes = makeRes();
     await first(makeReq({ path: '/restart' }) as any, firstRes);
     expect(firstRes.captured.body).toContain('First process');
 
     title = 'Second process';
-    const restarted = buildPageHandler(pageModule, meta, [], { cacheDir: tmpDir, ttlSecs: 0, redis: null }, undefined, store as any, makeWatcher() as any);
+    const restarted = buildPageHandler(
+      pageModule,
+      meta,
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      store as any,
+      makeWatcher() as any
+    );
     const restartedRes = makeRes();
     await restarted(makeReq({ path: '/restart' }) as any, restartedRes);
     expect(restartedRes.captured.body).toContain('Second process');
@@ -252,23 +342,30 @@ describe('buildPageHandler', () => {
         todos: Live.list({
           key: (todo: any) => todo.id,
           dependsOn: 'todo_events',
-          query: () => [],
-        }),
+          query: () => []
+        })
       }),
-      default: ({ todos }: any) => createElement('ul', null, todos),
+      default: ({ todos }: any) => createElement('ul', null, todos)
     };
     const handler = buildPageHandler(
       pageModule,
-      { pattern: '/external', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      {
+        pattern: '/external',
+        layouts: [],
+        liveFields: [],
+        hasEntries: false,
+        filePath: '',
+        relativePath: ''
+      },
       [],
       { cacheDir: tmpDir, ttlSecs: 0, redis: null },
       { fsr: { watcher: 'external' } } as any,
       { executeLiveListQuery: async () => [] } as any,
-      {} as any,
+      {} as any
     );
 
     await expect(handler(makeReq({ path: '/external' }) as any, makeRes())).rejects.toThrow(
-      'Live.list requires config.fsr.watcher = "embedded"',
+      'Live.list requires config.fsr.watcher = "embedded"'
     );
     await fs.rm(tmpDir, { recursive: true });
   });

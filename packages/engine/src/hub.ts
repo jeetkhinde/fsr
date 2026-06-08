@@ -14,7 +14,7 @@ export interface FsrHubConfig {
 export const defaultHubConfig: FsrHubConfig = {
   maxConnections: 1000,
   connectionTtlSecs: 3600,
-  keepaliveSecs: 30,
+  keepaliveSecs: 30
 };
 
 // Global active connections counter
@@ -28,36 +28,30 @@ export function getActiveConnectionsCount(): number {
  * After a LiveProp patch fires, update both JSON and HTML baked files
  * so the next cache hit serves fresh data without a DB round-trip.
  */
-export async function patchBakedFiles(
-  cache: KilnCache,
-  route: string,
-  slot: string,
-  value: unknown
-): Promise<void> {
+export async function patchBakedFiles(cache: KilnCache, route: string, slot: string, value: unknown): Promise<void> {
   await Promise.allSettled([
     // Patch JSON: update the field
     cache.patchJsonField(route, slot, value),
     // Patch HTML: re-inject the s-live slot
-    cache.getHtml(route).then(html => {
+    cache.getHtml(route).then((html) => {
       if (!html) return;
       const patched = injectFsrSlots(html, [[slot, value]]);
       return cache.setHtml(route, patched);
-    }),
+    })
   ]);
 }
 
 export interface FsrHubStreamOptions {
   route: string;
   slots: string[];
+  signal?: AbortSignal;
   watcher?: FsrWatcher;
   config?: FsrHubConfig;
   cache?: KilnCache;
 }
 
-export async function* fsrHubStream(
-  options: FsrHubStreamOptions
-): AsyncGenerator<SSEEvent, void, unknown> {
-  const { route, slots, watcher, config = defaultHubConfig, cache } = options;
+export async function* fsrHubStream(options: FsrHubStreamOptions): AsyncGenerator<SSEEvent, void, unknown> {
+  const { route, slots, signal, watcher, config = defaultHubConfig, cache } = options;
 
   if (!watcher) {
     yield { event: 'error', data: 'FSR watcher not configured' };
@@ -92,6 +86,16 @@ export async function* fsrHubStream(
 
   let keepaliveTimer: NodeJS.Timeout | null = null;
   let triggerKeepalive = false;
+  let aborted = signal?.aborted ?? false;
+
+  const onAbort = () => {
+    aborted = true;
+    if (resolveNext) {
+      resolveNext();
+      resolveNext = null;
+    }
+  };
+  signal?.addEventListener('abort', onAbort, { once: true });
 
   const resetKeepalive = () => {
     if (keepaliveTimer) clearInterval(keepaliveTimer);
@@ -116,14 +120,14 @@ export async function* fsrHubStream(
   }, config.connectionTtlSecs * 1000);
 
   try {
-    while (!ttlExpired) {
-      if (queue.length === 0 && !triggerKeepalive && !lagged && !ttlExpired) {
+    while (!ttlExpired && !aborted) {
+      if (queue.length === 0 && !triggerKeepalive && !lagged && !ttlExpired && !aborted) {
         await new Promise<void>((resolve) => {
           resolveNext = resolve;
         });
       }
 
-      if (ttlExpired) break;
+      if (ttlExpired || aborted) break;
 
       if (lagged) {
         lagged = false;
@@ -154,6 +158,7 @@ export async function* fsrHubStream(
   } finally {
     activeConnectionsCount--;
     emitter.off('patch', onPatch);
+    signal?.removeEventListener('abort', onAbort);
     if (keepaliveTimer) clearInterval(keepaliveTimer);
     clearTimeout(ttlTimer);
   }
@@ -181,17 +186,22 @@ function formatPatchEvent(patch: SlotPatch | LivePatch): SSEEvent {
 function normalizeScalarPatch(patch: SlotPatch | LivePatch): ScalarPatch | null {
   if (isScalarPatch(patch)) return patch;
   if (isListPatch(patch)) return null;
-  return { kind: 'scalar', route: patch.route, field: patch.slot, value: patch.value };
+  return {
+    kind: 'scalar',
+    route: patch.route,
+    field: patch.slot,
+    value: patch.value
+  };
 }
 
 function isListPatch(value: unknown): value is RenderedListPatch {
   return Boolean(
     value &&
-      typeof value === 'object' &&
-      (value as any).kind === 'list' &&
-      typeof (value as any).route === 'string' &&
-      typeof (value as any).list === 'string' &&
-      typeof (value as any).key === 'string'
+    typeof value === 'object' &&
+    (value as any).kind === 'list' &&
+    typeof (value as any).route === 'string' &&
+    typeof (value as any).list === 'string' &&
+    typeof (value as any).key === 'string'
   );
 }
 

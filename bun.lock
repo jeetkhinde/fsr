@@ -147,6 +147,7 @@
       "name": "@kiln/routekit",
       "version": "0.1.0",
       "dependencies": {
+        "@kiln/client": "workspace:*",
         "@kiln/core": "workspace:*",
         "@kiln/engine": "workspace:*",
         "sharp": "^0.34.5",

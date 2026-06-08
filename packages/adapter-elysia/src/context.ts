@@ -14,6 +14,7 @@ export function wrapRequest(ctx: any): KilnRequest {
     params: ctx.params || {},
     query: ctx.query || {},
     headers: req.headers,
+    signal: req.signal,
     formData: async () => {
       if (ctx.body instanceof FormData) {
         return ctx.body;
@@ -42,7 +43,7 @@ export function wrapRequest(ctx: any): KilnRequest {
     raw: ctx,
     prebakeNext(path: string): void {
       ctx.set.headers['x-prebake-next'] = path;
-    },
+    }
   };
 }
 
