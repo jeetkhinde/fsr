@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { load as loadContacts } from "../pages/contacts/index.js";
+import { actions as newContactActions } from "../pages/contacts/new.js";
 import { load as loadRoot } from "../pages/index.js";
 
 const request = (query: Record<string, string> = {}) => ({
@@ -25,5 +26,22 @@ describe("address book routes", () => {
     expect(result.query).toBe("Sarah");
     expect(Array.isArray(result.contacts)).toBe(true);
     expect(result.contacts).toHaveLength(0);
+  });
+
+  it("returns field errors for an invalid create action", async () => {
+    const form = new FormData();
+    form.set("email", "broken");
+    const result = await newContactActions.create({
+      ...request(),
+      method: "POST",
+      isEnhanced: true,
+      formData: async () => form,
+    } as any);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.name).toBe("Enter a first or last name.");
+      expect(result.errors.email).toBe("Enter a valid email address.");
+    }
   });
 });
