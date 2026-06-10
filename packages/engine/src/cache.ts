@@ -24,6 +24,24 @@ export class KilnCache {
     return path.join(this.cacheDir, safe, 'index.html');
   }
 
+  diskGenericShellPath(pattern: string): string {
+    const safe = pattern === '/' ? 'index' : pattern.replace(/^\//, '').replace(/\//g, path.sep);
+    return path.join(this.cacheDir, 'pages', safe, 'shell.html');
+  }
+
+  async saveGenericShell(pattern: string, html: string): Promise<void> {
+    const p = this.diskGenericShellPath(pattern);
+    const f = Bun.file(p);
+    if (!(await f.exists())) {
+      await atomicWrite(p, html);
+    }
+  }
+
+  async getGenericShell(pattern: string): Promise<string | null> {
+    const f = Bun.file(this.diskGenericShellPath(pattern));
+    return (await f.exists()) ? f.text() : null;
+  }
+
   diskJsonPath(route: string): string {
     return this.diskHtmlPath(route).replace(/\.html$/, '.json');
   }
@@ -42,13 +60,13 @@ export class KilnCache {
     return (await f.exists()) ? f.text() : null;
   }
 
-  async setHtml(route: string, html: string): Promise<void> {
+  async setHtml(route: string, html: string, pinInRedis: boolean = false): Promise<void> {
     const diskPath = this.diskHtmlPath(route);
-    await Bun.write(diskPath, html);
-    if (this.redis) {
+    await atomicWrite(diskPath, html);
+    if (this.redis && pinInRedis) {
       try {
         await this.redis.set(this.redisHtmlKey(route), html);
-        if (this.ttlSecs > 0) await this.redis.expire(this.redisHtmlKey(route), this.ttlSecs);
+        // Intentionally skip expire() to pin it permanently
       } catch { this.redis = null; }
     }
   }
@@ -67,7 +85,7 @@ export class KilnCache {
 
   async setJson(route: string, data: unknown): Promise<void> {
     const json = JSON.stringify(data);
-    await Bun.write(this.diskJsonPath(route), json);
+    await atomicWrite(this.diskJsonPath(route), json);
     if (this.redis) {
       try {
         await this.redis.set(this.redisJsonKey(route), json);
@@ -79,7 +97,12 @@ export class KilnCache {
   async patchJsonField(route: string, field: string, value: unknown): Promise<void> {
     const existing = (await this.getJson(route)) as Record<string, unknown> | null;
     if (!existing) return;
-    existing[field] = value;
+    const target =
+      existing.data && typeof existing.data === 'object' && !Array.isArray(existing.data)
+        ? existing.data as Record<string, unknown>
+        : existing;
+    target[field] = value;
+    if ('updatedAt' in existing) existing.updatedAt = new Date().toISOString();
     await this.setJson(route, existing);
   }
 
@@ -97,7 +120,23 @@ export class KilnCache {
     }
   }
 
+  async purgeRoute(route: string): Promise<void> {
+    await this.delete(route);
+  }
+
   getClient(): RedisClient | null { return this.redis; }
+}
+
+async function atomicWrite(filePath: string, content: string): Promise<void> {
+  const tempPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  try {
+    await Bun.write(tempPath, content);
+    await fs.rename(tempPath, filePath);
+  } catch (error) {
+    await fs.unlink(tempPath).catch(() => {});
+    throw error;
+  }
 }
 
 // ---------------------------------------------------------------------------

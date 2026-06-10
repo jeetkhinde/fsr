@@ -15,7 +15,6 @@ export function EmptyDetail({ missing = false }: { missing?: boolean }) {
       <a
         className="button button--primary"
         href={missing ? "/contacts" : "/contacts/new"}
-        s-html=""
         data-preserve-query
       >
         {missing ? "Back to directory" : "Create contact"}

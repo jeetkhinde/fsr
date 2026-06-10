@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-FSR.js is a TypeScript monorepo implementing **Field-Selective Rendering** for the JavaScript/Bun ecosystem. It is the JS port of Pilcrow's FSR paradigm — no other framework offers field-level rendering granularity at the HTML baking layer.
+FSR.js is a TypeScript monorepo implementing **Field-Selective Rendering** for the JavaScript/Bun ecosystem. It is the JS port of Kiln's FSR paradigm — no other framework offers field-level rendering granularity at the HTML baking layer.
 
 **Runtime:** Bun + Elysia  
 **Language:** TypeScript (57 files)  
@@ -42,7 +42,7 @@ packages/
 ## ADR-001: Redis is Required Infrastructure
 
 **Status:** LOCKED  
-**Decision:** Redis is not optional. No fallback-only mode. Pilcrow fails to start without a valid `REDIS_URL`.
+**Decision:** Redis is not optional. No fallback-only mode. Kiln fails to start without a valid `REDIS_URL`.
 
 **Rationale:** Multi-instance deployments require a shared cache layer. Redis provides:
 - Atomic field-level updates (HASH + RedisJSON)
@@ -54,17 +54,17 @@ packages/
 
 **Redis key schema:**
 ```
-pilcrow:html:<route>   STRING  full baked HTML
-pilcrow:json:<route>   STRING  baked JSON (if FSR_JSON opted in)
-pilcrow:slot:<route>   HASH    { slot_name: current_value }
-pilcrow:meta:<route>   HASH    { version, baked_at, checksum, promoted }
+kiln:html:<route>   STRING  full baked HTML
+kiln:json:<route>   STRING  baked JSON (if FSR_JSON opted in)
+kiln:slot:<route>   HASH    { slot_name: current_value }
+kiln:meta:<route>   HASH    { version, baked_at, checksum, promoted }
 ```
 
 **Pub/sub channels:**
 ```
-pilcrow:invalidate  → watcher receives { route, slots, deps }
-pilcrow:patch       → SSE hub receives { route, slot, value }
-pilcrow:promote     → all instances receive { route, promoted: true }
+kiln:invalidate  → watcher receives { route, slots, deps }
+kiln:patch       → SSE hub receives { route, slot, value }
+kiln:promote     → all instances receive { route, promoted: true }
 ```
 
 ---
@@ -75,12 +75,12 @@ pilcrow:promote     → all instances receive { route, promoted: true }
 **Decision:** Redis (serve + bus) → Postgres (truth) → Disk (recovery, optional).
 
 - **Redis:** hot path, source of truth for baked HTML/JSON on promoted routes
-- **Postgres:** `pilcrow_fsr` metadata, real application data, durable record of what should be cached; managed via Drizzle (`packages/engine/src/schema.ts`)
+- **Postgres:** `kiln_fsr` metadata, real application data, durable record of what should be cached; managed via Drizzle (`packages/engine/src/schema.ts`)
 - **Disk:** async write-behind from Redis, only used on cold start — never on hot path
 
 **DB schema (single table):**
 ```sql
-pilcrow_fsr (
+kiln_fsr (
   route           TEXT,
   slot            TEXT,          -- '' = route-level, 'field_name' = slot-level
   query           TEXT,          -- SQL to re-execute when stale
@@ -128,8 +128,8 @@ All promoted modes receive surgical field-level patches on dependency change. Th
 **Status:** LOCKED  
 **Decision:** Static fields baked directly into HTML (never stored). Watched fields (`LiveProp<T>`) get:
 1. A shell slot in HTML with `s-live="slot_name"` attribute
-2. A row in `pilcrow_fsr` (slot-level)
-3. Live SSE updates via `pilcrow:patch` channel
+2. A row in `kiln_fsr` (slot-level)
+3. Live SSE updates via `kiln:patch` channel
 
 **Key primitive:** `packages/core/src/live-prop.ts` → `LiveProp`, `depToString`
 
@@ -142,17 +142,17 @@ All promoted modes receive surgical field-level patches on dependency change. Th
 ## ADR-005: Event-Driven Watcher (No Polling)
 
 **Status:** LOCKED  
-**Decision:** Watcher subscribes to `pilcrow:invalidate` Redis pub/sub. No polling loop in normal operation.
+**Decision:** Watcher subscribes to `kiln:invalidate` Redis pub/sub. No polling loop in normal operation.
 
 **Flow on dep change:**
 ```
 invalidate(dep) 
-  → UPDATE pilcrow_fsr SET stale=TRUE WHERE depends_on @> ARRAY[dep]
-  → PUBLISH pilcrow:invalidate { route, slots, deps }
+  → UPDATE kiln_fsr SET stale=TRUE WHERE depends_on @> ARRAY[dep]
+  → PUBLISH kiln:invalidate { route, slots, deps }
   → Watcher receives instantly
   → Re-executes stored query
   → Patches Redis slot HASH + re-renders HTML
-  → PUBLISH pilcrow:patch { route, slot, value }
+  → PUBLISH kiln:patch { route, slot, value }
   → SSE hub fans out to connected clients
   → silcrow.js patches DOM via querySelectorAll('[s-live="..."]')
   → Async disk write (fire and forget)
@@ -169,7 +169,7 @@ Polling fallback only if Redis pub/sub connection drops.
 **Status:** LOCKED  
 **Decision:** `s-live="slot_name"` — consistent with Silcrow's `s-` prefix convention.
 
-Same name end-to-end: field name in code = `s-live` attr = `pilcrow_fsr` slot = SSE payload key = Redis HASH field.
+Same name end-to-end: field name in code = `s-live` attr = `kiln_fsr` slot = SSE payload key = Redis HASH field.
 
 **List row naming:** `list_field__row_id__field_name` e.g. `ticket_list__42__status`. Same patcher handles it — no special case needed.
 
@@ -189,10 +189,10 @@ Same name end-to-end: field name in code = `s-live` attr = `pilcrow_fsr` slot = 
 
 **Routes registered:**
 ```
-/__pilcrow/fsr           → FSR hub SSE stream
-/__pilcrow/fsr/snapshot  → slot snapshot
+/__kiln/fsr           → FSR hub SSE stream
+/__kiln/fsr/snapshot  → slot snapshot
 /_silcrow/silcrow.js     → auto-injected client script
-/_pilcrow/live.js        → live client script
+/_kiln/live.js        → live client script
 ```
 
 **Middleware:** `bodyLimit`, `csrf`, `layoutIntercept`, `timeout`
@@ -236,7 +236,7 @@ Developer declares `dependsOn` explicitly on each `LiveProp` field. Framework do
 ## What is NOT in Scope
 
 - Wrapping Drizzle/ORM — developer uses it directly, declares deps explicitly
-- Value storage in `pilcrow_fsr` — source of truth stays in real DB tables
+- Value storage in `kiln_fsr` — source of truth stays in real DB tables
 - Per-route config files — all config co-located on field declaration
 - Optional Redis mode — Redis is required
 - Shared DTOs between frontend and backend — independent type definitions

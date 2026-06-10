@@ -172,11 +172,6 @@ function sanitizeTree(root, options = {}) {
 function safeSetHTML(el, raw, options = {}) {
   const markup = raw == null ? "" : String(raw);
 
-  if (el.setHTML && !options.allowStyleTags) {
-    el.setHTML(markup);
-    return;
-  }
-
   const doc = new DOMParser().parseFromString(markup, "text/html");
   sanitizeTree(doc.body, options);
 
@@ -2211,7 +2206,10 @@ async function navigate(url, options = {}) {
     let text, contentType, redirected = false, finalUrl = fullUrl, pushUrl = null;
     let sideEffects = null;
 
-    const wantsHTML = sourceEl?.hasAttribute("s-html");
+    const wantsHTML =
+      method === "GET" && !targetSelector
+        ? true
+        : sourceEl?.hasAttribute("s-html");
     if (cached) {
       // Side-effect headers are intentionally not cached — they are
       // one-shot triggers that should only fire on the original response.
@@ -2326,7 +2324,10 @@ async function navigate(url, options = {}) {
 
     // #10: Wrap swap in View Transitions API if available
     if (document.startViewTransition) {
-      document.startViewTransition(() => { if (!swapExecuted) proceed(); });
+      const transition = document.startViewTransition(() => {
+        if (!swapExecuted) proceed();
+      });
+      await transition.updateCallbackDone;
     } else {
       if (!swapExecuted) proceed();
     }

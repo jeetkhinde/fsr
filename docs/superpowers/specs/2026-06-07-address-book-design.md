@@ -418,3 +418,9 @@ The feature is complete when:
 6. Desktop and mobile behavior match the approved modern-workspace design.
 7. The focused test suites, build, existing repo tests, browser flow, and
    Graphify update pass.
+# ANTI-PATTERN: Historical Full-Page Navigation Design
+
+This document is retained as historical context only. Its `s-html` body
+replacement approach bypasses Kiln layout-aware fetching and baked-shell
+freshness. The implemented architecture uses `pages/contacts/_layout.tsx` for
+the persistent directory and swaps only the route-owned detail slot.

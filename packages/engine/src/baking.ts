@@ -1,4 +1,63 @@
 import { applyScalarPatchToHtml, createScalarPatch } from '@kiln/live';
+import { applyListPatchToHtml } from '@kiln/live';
+
+export const BAKED_SNAPSHOT_VERSION = 1;
+export const BAKED_RENDER_VERSION = 1;
+
+export interface BakedSnapshot {
+  schemaVersion: number;
+  renderVersion: number;
+  data: Record<string, unknown>;
+  lists?: Record<string, Array<{ key: string; html: string }>>;
+  updatedAt: string;
+}
+
+export function createBakedSnapshot(
+  data: Record<string, unknown>,
+  lists?: BakedSnapshot['lists'],
+): BakedSnapshot {
+  return {
+    schemaVersion: BAKED_SNAPSHOT_VERSION,
+    renderVersion: BAKED_RENDER_VERSION,
+    data,
+    lists,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function materializeBakedShell(shell: string, rawSnapshot: unknown): string | null {
+  const snapshot = normalizeSnapshot(rawSnapshot);
+  if (!snapshot) return null;
+  let html = injectFsrSlots(shell, Object.entries(snapshot.data));
+  for (const [list, rows] of Object.entries(snapshot.lists ?? {})) {
+    for (const row of rows) {
+      html = applyListPatchToHtml(html, {
+        kind: 'list',
+        route: '',
+        list,
+        key: row.key,
+        op: 'replace-row',
+        row: null,
+        html: row.html,
+      });
+    }
+  }
+  return html;
+}
+
+function normalizeSnapshot(raw: unknown): BakedSnapshot | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const candidate = raw as Partial<BakedSnapshot>;
+  if (
+    candidate.schemaVersion !== BAKED_SNAPSHOT_VERSION ||
+    candidate.renderVersion !== BAKED_RENDER_VERSION ||
+    !candidate.data ||
+    typeof candidate.data !== 'object'
+  ) {
+    return null;
+  }
+  return candidate as BakedSnapshot;
+}
 
 export function injectFsrSlots(shell: string, slots: [string, any][]): string {
   let result = shell;

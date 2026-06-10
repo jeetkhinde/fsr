@@ -17,13 +17,12 @@ export function Directory({
   return (
     <aside className="directory" aria-label="Contact directory">
       <div className="directory__header">
-        <a className="directory__brand" href="/contacts" s-html="">
+        <a className="directory__brand" href="/contacts">
           Directory
         </a>
         <a
           className="icon-button icon-button--primary"
           href="/contacts/new"
-          s-html=""
           data-preserve-query
           aria-label="Create contact"
         >
@@ -64,7 +63,6 @@ export function Directory({
               <a
                 className="contact-row"
                 href={`/contacts/${contact.id}`}
-                s-html=""
                 data-preserve-query
                 aria-current={selectedId === contact.id ? "page" : undefined}
               >

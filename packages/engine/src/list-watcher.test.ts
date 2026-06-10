@@ -29,7 +29,10 @@ class FakeListStore {
       jsonPath: input.jsonPath ?? null,
       stale: false,
       version: 0,
-      lastPatchedAt: new Date()
+      lastPatchedAt: new Date(),
+      debounceSecs: input.debounceSecs ?? null,
+      revalidateSecs:
+        input.revalidateSecs === false ? 0 : input.revalidateSecs ?? null,
     });
   }
 
@@ -175,18 +178,14 @@ async function runTests() {
 
   assert.deepEqual(
     patches.map((patch: any) => patch.op),
-    ['remove', 'insert', 'move', 'fields']
+    ["remove", "insert", "move", "replace-row"],
   );
   assert.equal(events[0], 'emit:list:remove');
   assert.equal(store.lists.events[0], 'persist:/todos:todos');
   assert.equal(timeline[0], 'persist:/todos:todos');
 
-  const patchedHtml = await fs.readFile(htmlPath, 'utf8');
-  assert.equal(patchedHtml.includes('data-kiln-key="a"'), false);
-  assert.ok(patchedHtml.indexOf('data-kiln-key="d"') < patchedHtml.indexOf('data-kiln-key="b"'));
-  assert.ok(patchedHtml.indexOf('data-kiln-key="b"') < patchedHtml.indexOf('data-kiln-key="c"'));
-  assert.ok(patchedHtml.includes('>updated</span>'));
-  assert.ok(patchedHtml.includes('>Gamma</span>'));
+  const patchedHtml = await fs.readFile(htmlPath, "utf8");
+  assert.equal(patchedHtml, initialHtml);
 
   const patchedJson = JSON.parse(await fs.readFile(jsonPath, 'utf8'));
   assert.deepEqual(patchedJson.todos, nextRows);
@@ -391,9 +390,10 @@ async function runTests() {
       jsonPath: redisJsonPath
     }
   );
-  await redisWatcher.notifyChange('todo_events');
-  assert.ok(redis.html.get('/redis')?.includes('>fresh</span>'));
-  assert.equal(redis.json.get('/redis').todos[0].status, 'fresh');
+  redisStore.lists.snapshots.get(key("/redis", "todos"))!.stale = true;
+  await redisWatcher.runOnce();
+  assert.equal(redis.html.get("/redis"), redisInitialHtml);
+  assert.equal(redis.json.get("/redis").todos[0].status, "fresh");
   assert.equal(redis.published.length, 1);
 
   const emptyHtmlPath = path.join(tempDir, 'empty.html');
@@ -422,7 +422,7 @@ async function runTests() {
   );
   emptyStore.lists.snapshots.get(key('/empty', 'todos'))!.stale = true;
   await emptyWatcher.runOnce();
-  assert.equal(emptyWatcher.hasRegisteredRoute('/empty'), false);
+  assert.equal(emptyWatcher.hasRegisteredRoute("/empty"), true);
 
   await fs.rm(tempDir, { recursive: true });
   console.log('FsrWatcher Live.list tests passed');

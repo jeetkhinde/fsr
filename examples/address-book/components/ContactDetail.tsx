@@ -10,7 +10,6 @@ export function ContactDetail({ contact }: { contact: Contact }) {
         <a
           className="mobile-back"
           href="/contacts"
-          s-html=""
           data-preserve-query
         >
           ‹ People
@@ -19,7 +18,6 @@ export function ContactDetail({ contact }: { contact: Contact }) {
           <a
             className="button"
             href={`/contacts/${contact.id}/edit`}
-            s-html=""
             data-preserve-query
           >
             Edit contact

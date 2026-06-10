@@ -1,18 +1,9 @@
 import React from "react";
 import { AppError, type KilnRequest } from "@kiln/core";
-import { AppShell } from "../../components/AppShell.js";
 import { ContactForm } from "../../components/ContactForm.js";
 import { sql } from "../../db/client.js";
 import { createContact } from "../../db/contacts.js";
 import { validateContactForm } from "../../db/validation.js";
-import { contactsLiveList } from "../../features/contacts/live.js";
-
-export function load(req: KilnRequest) {
-  return {
-    contacts: contactsLiveList(),
-    query: req.query.q ?? "",
-  };
-}
 
 export const actions = {
   async create(req: KilnRequest) {
@@ -32,13 +23,8 @@ export const actions = {
   },
 };
 
-export default function NewContactPage({
-  contacts,
-  query,
-}: Awaited<ReturnType<typeof load>>) {
+export default function NewContactPage() {
   return (
-    <AppShell contacts={contacts} query={query} focusDetail>
-      <ContactForm action="?/create" submitLabel="Create contact" />
-    </AppShell>
+    <ContactForm action="?/create" submitLabel="Create contact" />
   );
 }

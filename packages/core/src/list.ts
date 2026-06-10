@@ -23,6 +23,8 @@ export interface ListChunkCache {
 export interface LiveListMeta<T = unknown> {
   kind: 'list';
   dependsOn: string[];
+  debounce?: number;
+  revalidate?: number | false;
   keyOf(row: T): string;
   query(ctx: LiveListQueryContext): Promise<T[]> | T[];
 }
@@ -38,6 +40,8 @@ export function createLiveList<T>(options: LiveListOptions<T>): LiveList<T> {
   const meta: LiveListMeta<T> = {
     kind: 'list',
     dependsOn: normalizeLiveListDependsOn(options.dependsOn),
+    debounce: options.debounce,
+    revalidate: options.revalidate,
     keyOf: (row) => String(options.key(row)),
     query: options.query,
   };

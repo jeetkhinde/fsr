@@ -16,16 +16,18 @@ export async function startDbNotificationPipeline(
     if (msg.channel === 'kiln_invalidate' && msg.payload) {
       try {
         const payload = JSON.parse(msg.payload);
-        const { depKey, id } = payload;
+        const { depKey, id, op, eventId } = payload;
         
-        if (depKey) {
-          // Notify collection key
-          watcher.notifyChange(depKey);
-          
-          // Notify dynamic row-specific key (e.g. tickets:42)
-          if (id !== undefined && id !== null) {
-            watcher.notifyChange(`${depKey}:${id}`);
-          }
+        if (op === 'DELETE') {
+          if (depKey) watcher.notifyDelete(depKey);
+          if (depKey && id !== undefined && id !== null) watcher.notifyDelete(`${depKey}:${id}`);
+        } else {
+          if (depKey) watcher.notifyChange(depKey);
+          if (depKey && id !== undefined && id !== null) watcher.notifyChange(`${depKey}:${id}`);
+        }
+        
+        if (eventId !== undefined) {
+          watcher.updateCursor(eventId);
         }
       } catch (err: any) {
         console.error('FSR DB listener: failed to parse notification payload:', err.message);

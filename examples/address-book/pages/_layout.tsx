@@ -14,11 +14,10 @@ export default function RootLayout({
         <title>Directory · Kiln Address Book</title>
         <link rel="stylesheet" href="/assets/address-book.css" />
         <script src="/_silcrow/silcrow.js" defer />
-        <script src="/_kiln/live.js" defer />
         <script src="/assets/address-book.js" defer />
       </head>
       <body>
-        <div id="app" data-ps-layout="/">
+        <div id="app">
           {children}
         </div>
       </body>

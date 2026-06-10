@@ -9,6 +9,8 @@ export interface LiveListOptions<T> {
   key(row: T): LiveListKey;
   dependsOn?: string | string[];
   initial?: T[];
+  debounce?: number;
+  revalidate?: number | false;
   query(ctx: LiveListQueryContext): Promise<T[]> | T[];
 }
 
@@ -17,6 +19,8 @@ export interface LiveListTarget<T = unknown> {
   route: string;
   name: string;
   dependsOn: string[];
+  debounce?: number;
+  revalidate?: number | false;
   keyOf(row: T): string;
   query(ctx: LiveListQueryContext): Promise<T[]> | T[];
 }

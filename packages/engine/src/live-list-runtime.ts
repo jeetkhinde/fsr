@@ -4,6 +4,8 @@ export interface RegisteredLiveListTarget<T = unknown> {
   route: string;
   name: string;
   dependsOn: string[];
+  debounce?: number;
+  revalidate?: number | false;
   keyOf(row: T): string;
   query(ctx: LiveListQueryContext): Promise<T[]> | T[];
   renderRows(rows: T[]): Promise<Map<string, string>>;

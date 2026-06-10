@@ -11,8 +11,8 @@ describe('create-kiln templates', () => {
     expect(indexPage).not.toContain('s-key=');
   });
 
-  it('includes list snapshots and external todo invalidation tables', () => {
-    expect(migrationSql).toContain('CREATE TABLE IF NOT EXISTS kiln_fsr_lists');
+  it('leaves framework-owned FSR tables out of app migrations', () => {
+    expect(migrationSql).not.toContain('CREATE TABLE IF NOT EXISTS kiln_fsr');
     expect(migrationSql).toContain('CREATE TABLE IF NOT EXISTS todo_events');
     expect(migrationSql).toContain("kiln_notify_change('todo_events')");
   });

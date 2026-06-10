@@ -11,6 +11,7 @@ async function runTests() {
 
   const bunSql = new SQL(pgConnectionString);
   const store = new FsrStore(bunSql);
+  await store.initialize();
   const redisCache = new RedisCache(redisUrl);
   store.withRedis(redisCache);
 

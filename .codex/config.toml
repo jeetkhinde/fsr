@@ -1,8 +1,14 @@
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+
 [mcp_servers]
 
 [mcp_servers.echovault]
 command = "memory"
 args = ["mcp"]
+
+[mcp_servers.echovault.tools.memory_save]
+approval_mode = "approve"
 
 [mcp_servers.codebase-memory-mcp]
 command = "codebase-memory-mcp"
@@ -12,6 +18,12 @@ args = []
 approval_mode = "approve"
 
 [mcp_servers.codebase-memory-mcp.tools.search_graph]
+approval_mode = "approve"
+
+[mcp_servers.codebase-memory-mcp.tools.get_architecture]
+approval_mode = "approve"
+
+[mcp_servers.codebase-memory-mcp.tools.detect_changes]
 approval_mode = "approve"
 
 [mcp_servers.code-review-graph]
@@ -32,4 +44,28 @@ approval_mode = "approve"
 approval_mode = "approve"
 
 [mcp_servers.code-review-graph.tools.list_repos_tool]
+approval_mode = "approve"
+
+[mcp_servers.code-review-graph.tools.get_architecture_overview_tool]
+approval_mode = "approve"
+
+[mcp_servers.code-review-graph.tools.list_flows_tool]
+approval_mode = "approve"
+
+[mcp_servers.code-review-graph.tools.get_flow_tool]
+approval_mode = "approve"
+
+[mcp_servers.code-review-graph.tools.get_minimal_context_tool]
+approval_mode = "approve"
+
+[mcp_servers.code-review-graph.tools.get_review_context_tool]
+approval_mode = "approve"
+
+[mcp_servers.code-review-graph.tools.get_affected_flows_tool]
+approval_mode = "approve"
+
+[mcp_servers.code-review-graph.tools.query_graph_tool]
+approval_mode = "approve"
+
+[mcp_servers.code-review-graph.tools.get_impact_radius_tool]
 approval_mode = "approve"

@@ -10,6 +10,7 @@ async function runTests() {
 
   const sql = new SQL(databaseUrl);
   const store = new FsrStore(sql);
+  await store.initialize();
 
   await sql.unsafe(`
     CREATE TABLE IF NOT EXISTS kiln_fsr_lists (
@@ -46,6 +47,18 @@ async function runTests() {
     assert.equal(snapshot?.stale, false);
 
     assert.deepEqual(await store.invalidateDepKey("todo_events"), ["/todos"]);
+    await store.lists.upsertSnapshot({
+      route: "/todos",
+      name: "todos",
+      dependsOn: ["todo_events"],
+      rows: [
+        { key: "3", data: { id: 3, title: "Premature" }, html: "<li>Premature</li>" },
+      ],
+    });
+    const preserved = await store.lists.getSnapshot("/todos", "todos");
+    assert.equal(preserved?.stale, true);
+    assert.deepEqual(preserved?.rows.map((row) => row.key), ["2", "1"]);
+
     const stale = await store.lists.fetchStaleLists();
     assert.equal(stale.length, 1);
     assert.equal(stale[0].name, "todos");

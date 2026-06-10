@@ -9,6 +9,28 @@ test("search synchronizes q and filters rows", async ({ page }) => {
   await expect(page.getByRole("link", { name: /Maya Patel/ })).toBeHidden();
 });
 
+test("navigation preserves the contacts layout and fetches a fragment", async ({
+  page,
+}) => {
+  await page.goto("/contacts");
+  const directory = page.locator(".directory");
+  const before = await directory.evaluate((node) => {
+    (window as any).__directoryNode = node;
+    return node.isConnected;
+  });
+  expect(before).toBe(true);
+
+  const responsePromise = page.waitForResponse(
+    (response) => response.url().includes("/contacts/") && response.request().method() === "GET",
+  );
+  await page.getByRole("link", { name: /Sarah Chen/ }).click();
+  const response = await responsePromise;
+
+  expect(response.request().headers()["x-ps-present"]).toContain("/contacts");
+  expect(response.headers()["content-type"]).toContain("x-ps-fragment=1");
+  expect(await page.evaluate(() => (window as any).__directoryNode === document.querySelector(".directory"))).toBe(true);
+});
+
 test("creates, edits, favorites, and deletes a contact", async ({ page }) => {
   await page.goto("/contacts/new");
   await page.getByLabel("First name").fill("Avery");
@@ -54,6 +76,8 @@ test("shows validation errors and portrait fallback", async ({ page }) => {
 test("reconciles insert, update, reorder, and delete across tabs", async ({
   browser,
 }) => {
+  test.setTimeout(75_000);
+  const liveTimeout = 15_000;
   const context = await browser.newContext();
   const left = await context.newPage();
   const right = await context.newPage();
@@ -65,7 +89,7 @@ test("reconciles insert, update, reorder, and delete across tabs", async ({
   await left.getByRole("button", { name: "Create contact" }).click();
 
   await expect(right.getByRole("link", { name: /Cross Aaron/ })).toBeVisible({
-    timeout: 10_000,
+    timeout: liveTimeout,
   });
 
   await left.getByRole("link", { name: "Edit contact" }).click();
@@ -73,16 +97,20 @@ test("reconciles insert, update, reorder, and delete across tabs", async ({
   await left.getByRole("button", { name: "Save changes" }).click();
   await expect(right.getByRole("link", { name: /Cross Aaron/ })).toContainText(
     "Cross-tab Director",
+    { timeout: liveTimeout },
   );
 
   await left.getByRole("button", { name: "Add to favorites" }).click();
   await expect(right.locator("[data-contact-row]").first()).toContainText(
     "Cross Aaron",
+    { timeout: liveTimeout },
   );
 
   left.once("dialog", (dialog) => dialog.accept());
   await left.getByRole("button", { name: "Delete" }).click();
-  await expect(right.getByRole("link", { name: /Cross Aaron/ })).toHaveCount(0);
+  await expect(right.getByRole("link", { name: /Cross Aaron/ })).toHaveCount(0, {
+    timeout: liveTimeout,
+  });
 
   await context.close();
 });

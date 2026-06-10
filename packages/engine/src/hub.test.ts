@@ -11,6 +11,7 @@ async function runTests() {
 
   const bunSql = new SQL(pgConnectionString);
   const store = new FsrStore(bunSql);
+  await store.initialize();
 
   await bunSql.unsafe('DELETE FROM kiln_fsr');
   await bunSql.unsafe('CREATE TABLE IF NOT EXISTS hub_test_dummy (id integer primary key, val text)');
@@ -95,6 +96,7 @@ async function runTests() {
     const items: any[] = [];
     const runStream = async () => {
       for await (const val of gen) {
+        if (val.event === 'ready') continue;
         items.push(val);
       }
     };
@@ -135,6 +137,7 @@ async function runTests() {
     const heartbeatItems: any[] = [];
     const heartbeatPromise = (async () => {
       for await (const val of genHeartbeat) {
+        if (val.event === 'ready') continue;
         heartbeatItems.push(val);
         if (heartbeatItems.length >= 2) break; // stop after 2 keepalives
       }

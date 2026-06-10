@@ -15,6 +15,8 @@ describe("Live.list", () => {
         { id: 1, title: "Ship" },
         { id: 2, title: "Review" },
       ],
+      debounce: 5,
+      revalidate: 60,
       query: async () => [],
     });
 
@@ -25,6 +27,8 @@ describe("Live.list", () => {
     const meta = getLiveListMeta(todos);
     expect(meta?.kind).toBe("list");
     expect(meta?.dependsOn).toEqual(["another_table.col"]);
+    expect(meta?.debounce).toBe(5);
+    expect(meta?.revalidate).toBe(60);
     expect(meta?.keyOf(todos[0])).toBe("1");
     expect(meta?.keyOf(todos[1])).toBe("2");
     expect("name" in (meta ?? {})).toBe(false);

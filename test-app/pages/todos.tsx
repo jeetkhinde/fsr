@@ -8,7 +8,7 @@ interface Todo {
   completed: boolean;
 }
 
-export const promoteAfter = 0;
+export const promote_after = 0;
 
 export async function load() {
   return {

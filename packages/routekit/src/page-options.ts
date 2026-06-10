@@ -2,7 +2,11 @@ import { getLiveListMeta, isLiveList, LiveProp } from '@kiln/core';
 import type { LiveFieldMeta } from '@kiln/core';
 
 export interface PageOptions {
-  promoteAfter?: number;
+  promoteAfter?: number | false;
+  revalidate?: number | false;
+  debounce?: number;
+  purgeAfter?: number;
+  pinInRedis?: boolean;
 }
 
 export interface LiveListFieldMeta {
@@ -12,8 +16,23 @@ export interface LiveListFieldMeta {
 }
 
 export function extractPageOptions(module: any): PageOptions {
+  let promoteAfter = module.promote_after;
+  if (promoteAfter === undefined && typeof module.promoteAfter === 'number') {
+    console.warn('[kiln] promoteAfter is deprecated; export promote_after instead');
+    promoteAfter = module.promoteAfter;
+  }
   return {
-    promoteAfter: typeof module.promoteAfter === 'number' ? module.promoteAfter : undefined,
+    promoteAfter:
+      typeof promoteAfter === 'number' || promoteAfter === false
+        ? promoteAfter
+        : undefined,
+    revalidate:
+      typeof module.revalidate === 'number' || module.revalidate === false
+        ? module.revalidate
+        : undefined,
+    debounce: typeof module.debounce === 'number' ? module.debounce : undefined,
+    purgeAfter: typeof module.purge_after === 'number' ? module.purge_after : undefined,
+    pinInRedis: typeof module.pinInRedis === 'boolean' ? module.pinInRedis : undefined,
   };
 }
 
@@ -36,7 +55,7 @@ export function extractLiveFields(loadResult: any): LiveFieldMeta[] {
         dependsOn = lp.options.dependsOn;
       }
 
-      const revalidate = lp.options?.revalidate;
+      const revalidate = lp.revalidateSeconds ?? lp.options?.revalidate;
       const debounce = lp.patchDebounce !== undefined ? lp.patchDebounce : lp.options?.debounce;
       const deliveryTarget = lp.deliveryTarget || lp.options?.target || 'dom';
 

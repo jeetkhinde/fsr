@@ -13,6 +13,7 @@ async function runTests() {
 
   const bunSql = new SQL(pgConnectionString);
   const store = new FsrStore(bunSql);
+  await store.initialize();
   const redis = new RedisCache(redisUrl);
   store.withRedis(redis);
 
@@ -98,17 +99,16 @@ async function runTests() {
     assert.equal(p.kind, 'scalar');
     assert.equal(p.value, 'original_val');
 
-    // HTML/JSON files should be patched
+    // JSON is patched; the HTML shell remains immutable.
     const htmlContent = await fs.readFile(tempHtmlPath, 'utf8');
-    assert.ok(htmlContent.includes('<div s-live="test_slot">original_val</div>'));
+    assert.equal(htmlContent, '<html><body><div s-live="test_slot">loading</div></body></html>');
 
     const jsonContent = await fs.readFile(tempJsonPath, 'utf8');
     assert.deepEqual(JSON.parse(jsonContent), { test_slot: 'original_val' });
 
     // Redis values should be updated too
     const redisHtml = await redis.getHtml(route);
-    assert.ok(redisHtml);
-    assert.ok(redisHtml.includes('original_val'));
+    assert.equal(redisHtml, null);
 
     const redisSlots = await redis.getSlots(route);
     assert.deepEqual(redisSlots, { test_slot: 'original_val' });
@@ -125,7 +125,7 @@ async function runTests() {
 
     // Check files are updated
     const updatedHtml = await fs.readFile(tempHtmlPath, 'utf8');
-    assert.ok(updatedHtml.includes('<div s-live="test_slot">updated_val</div>'));
+    assert.equal(updatedHtml, '<html><body><div s-live="test_slot">loading</div></body></html>');
 
     const updatedJson = await fs.readFile(tempJsonPath, 'utf8');
     assert.deepEqual(JSON.parse(updatedJson), { test_slot: 'updated_val' });

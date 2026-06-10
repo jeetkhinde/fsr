@@ -83,6 +83,11 @@ export interface ActionHandler {
 }
 
 export interface PageDefinition {
+  promote_after?: number | false;
+  revalidate?: number | false;
+  debounce?: number;
+  purge_after?: number;
+  /** @deprecated Use promote_after. */
   promoteAfter?: number;
   load?: (req: KilnRequest) => Promise<LoadResult> | LoadResult;
   actions?: Record<string, ActionHandler>;
@@ -90,6 +95,12 @@ export interface PageDefinition {
 }
 
 export interface LayoutDefinition {
+  promote_after?: number | false;
+  revalidate?: number | false;
+  debounce?: number;
+  purge_after?: number;
+  /** @deprecated Use promote_after. */
+  promoteAfter?: number;
   load?: (req: KilnRequest) => Promise<LoadResult> | LoadResult;
   default: any; // React component with children prop
 }

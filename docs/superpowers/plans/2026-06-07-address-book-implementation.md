@@ -2824,3 +2824,9 @@ Expected: only address-book implementation, routekit negotiation, lockfile, and 
 git add examples/address-book packages/routekit/src/boot.ts packages/routekit/src/boot.test.ts package.json bun.lock
 git commit -m "feat(example): complete Kiln address book"
 ```
+# ANTI-PATTERN: Superseded Implementation Plan
+
+The full-page `s-html` navigation described below bypasses Kiln layout-aware
+fetching and baked-shell freshness. Do not use it as implementation guidance.
+The current address-book keeps the directory in `/contacts/_layout.tsx` and
+uses fragment-only enhanced navigation.

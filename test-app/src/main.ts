@@ -14,14 +14,15 @@ async function main() {
   if (dbUrl) {
     bunSql = new SQL(dbUrl);
     const store = new FsrStore(bunSql);
+    await store.initialize();
     const watcher = new FsrWatcher(store, null, {
       pollIntervalMs: 1000,
-      promoteAfterHits: config.fsr?.promoteAfterHits ?? 1,
-      patchDebounceSecs: 0,
-      purgeAfterSeconds: 3600,
+      promoteAfterHits: config.fsr.promoteAfterHits,
+      patchDebounceSecs: config.fsr.patchDebounceSecs,
+      purgeAfterSeconds: config.fsr.purgeAfterSeconds,
+      purgeSweepSeconds: config.fsr.purgeSweepSeconds,
+      revalidateSeconds: config.fsr.revalidateSeconds,
       scheduledInvalidations: [],
-      idleEvictSecs: 1800,
-      idleThresholdSecs: 3600
     });
     
     await watcher.start();

@@ -1,6 +1,5 @@
 import React from "react";
 import { AppError, type KilnRequest } from "@kiln/core";
-import { AppShell } from "../../../components/AppShell.js";
 import { ContactDetail } from "../../../components/ContactDetail.js";
 import { EmptyDetail } from "../../../components/EmptyDetail.js";
 import { sql } from "../../../db/client.js";
@@ -9,14 +8,10 @@ import {
   getContact,
   toggleFavorite,
 } from "../../../db/contacts.js";
-import { contactsLiveList } from "../../../features/contacts/live.js";
 
 export async function load(req: KilnRequest) {
   return {
-    contacts: contactsLiveList(),
     contact: await getContact(sql, req.params.id),
-    selectedId: req.params.id,
-    query: req.query.q ?? "",
   };
 }
 
@@ -42,19 +37,7 @@ export const actions = {
 };
 
 export default function ContactPage({
-  contacts,
   contact,
-  selectedId,
-  query,
 }: Awaited<ReturnType<typeof load>>) {
-  return (
-    <AppShell
-      contacts={contacts}
-      selectedId={selectedId}
-      query={query}
-      focusDetail
-    >
-      {contact ? <ContactDetail contact={contact} /> : <EmptyDetail missing />}
-    </AppShell>
-  );
+  return contact ? <ContactDetail contact={contact} /> : <EmptyDetail missing />;
 }

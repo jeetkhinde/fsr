@@ -13,6 +13,7 @@ async function runTests() {
   // Bun SQL for FsrStore; pg.Pool for test setup and LISTEN/NOTIFY trigger queries
   const bunSql = new SQL(pgConnectionString);
   const store = new FsrStore(bunSql);
+  await store.initialize();
   const pool = new pg.Pool({ connectionString: pgConnectionString });
 
   // Clean table

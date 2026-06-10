@@ -19,14 +19,19 @@ async function main() {
         fsrConfig.artifactTtlSecs,
       )
     : null;
+  if (process.env.NODE_ENV === 'production' && (!fsrConfig.postgresUrl || !redis)) {
+    throw new Error('Kiln production requires reachable PostgreSQL and Redis');
+  }
+  await store.initialize();
+  if (redis) await redis.getClient().send('PING', []);
   const watcher = new FsrWatcher(store, redis, {
     pollIntervalMs: fsrConfig.pollIntervalMs,
     promoteAfterHits: fsrConfig.promoteAfterHits,
     patchDebounceSecs: fsrConfig.patchDebounceSecs,
     purgeAfterSeconds: fsrConfig.purgeAfterSeconds,
+    purgeSweepSeconds: fsrConfig.purgeSweepSeconds,
+    revalidateSeconds: fsrConfig.revalidateSeconds,
     scheduledInvalidations: [],
-    idleEvictSecs: fsrConfig.idleEvictSecs,
-    idleThresholdSecs: fsrConfig.idleThresholdSecs,
   });
 
   await watcher.start();
@@ -41,7 +46,7 @@ async function main() {
     fileURLToPath(new URL('../client/address-book.js', import.meta.url)),
   );
 
-  await startKiln(adapter, config, './pages', { fsr: true, store, watcher });
+  await startKiln(adapter, config, './pages', { fsr: true, store, watcher, redis: redis ?? undefined });
   await adapter.listen(config.port ?? 3100, (address) => {
     console.log(`Address book running at ${address}`);
   });

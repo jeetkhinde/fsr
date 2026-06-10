@@ -17,15 +17,14 @@ describe('patchBakedFiles', () => {
     await fs.rm(tmpDir, { recursive: true });
   });
 
-  it('patches s-live slot in baked html', async () => {
+  it('leaves the baked HTML shell unchanged', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-hub-'));
     const cache = new KilnCache({ redis: null, cacheDir: tmpDir, ttlSecs: 0 });
     const html = '<div><span s-live="count">5</span></div>';
     await cache.setHtml('/contacts', html);
     await patchBakedFiles(cache, '/contacts', 'count', '10');
     const result = await cache.getHtml('/contacts');
-    expect(result).toContain('>10<');
-    expect(result).not.toContain('>5<');
+    expect(result).toBe(html);
     await fs.rm(tmpDir, { recursive: true });
   });
 });

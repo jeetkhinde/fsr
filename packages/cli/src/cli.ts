@@ -59,29 +59,35 @@ const devCommand = defineCommand({
     let redisCache: RedisCache | null = null;
     let watcher: FsrWatcher | null = null;
 
+    if (process.env.NODE_ENV === 'production' && (!config.fsr?.postgresUrl || !config.fsr?.redisUrl)) {
+      throw new Error('Kiln production requires reachable PostgreSQL and Redis');
+    }
+
     if (config.fsr?.postgresUrl) {
       consola.info('Initializing FSR database store...');
       bunSql = new SQL(config.fsr.postgresUrl);
       const store = new FsrStore(bunSql);
+      await store.initialize();
 
       if (config.fsr.redisUrl) {
         consola.info('Initializing FSR Redis cache...');
         redisCache = new RedisCache(config.fsr.redisUrl);
+        await redisCache.getClient().send('PING', []);
       }
 
       watcher = new FsrWatcher(store, redisCache, {
         pollIntervalMs: 1000,
-        promoteAfterHits: config.fsr.promoteAfterHits ?? 1,
-        patchDebounceSecs: 0,
-        purgeAfterSeconds: 3600,
+        promoteAfterHits: config.fsr.promoteAfterHits,
+        patchDebounceSecs: config.fsr.patchDebounceSecs,
+        purgeAfterSeconds: config.fsr.purgeAfterSeconds,
+        purgeSweepSeconds: config.fsr.purgeSweepSeconds,
+        revalidateSeconds: config.fsr.revalidateSeconds,
         scheduledInvalidations: [],
-        idleEvictSecs: 1800,
-        idleThresholdSecs: 3600,
       });
 
       await watcher.start();
       await startDbNotificationPipeline(config.fsr.postgresUrl, store, watcher);
-      fsr = { fsr: true, store, watcher };
+      fsr = { fsr: true, store, watcher, redis: redisCache ?? undefined };
       consola.success('FSR caching & notification supervisors started.');
     }
 

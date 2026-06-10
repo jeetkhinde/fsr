@@ -6,6 +6,7 @@ export interface PageRoute {
   relativePath: string;
   layouts: string[];
   promoteAfter?: number;
+  pinInRedis?: boolean;
   liveFields: LiveFieldMeta[];
   hasEntries: boolean;    // exports entries(): Promise<Record<string,string>[]>
 }

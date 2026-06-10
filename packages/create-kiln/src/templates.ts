@@ -55,7 +55,11 @@ export default defineConfig({
   pagesDir: './pages',
   apiDir: './api',
   fsr: {
-    promoteAfterHits: 1,
+    promoteAfterHits: 2,
+    patchDebounceSecs: 5,
+    revalidateSeconds: 300,
+    purgeAfterSeconds: 2592000,
+    purgeSweepSeconds: 3600,
     maxSseConnections: 1000,
     connectionTtlSecs: 3600,
     keepaliveSecs: 30,
@@ -77,7 +81,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script src="/_silcrow/silcrow.js" defer></script>
       </head>
       <body>
-        <div id="app" data-ps-layout="/">
+        <div id="app">
           {children}
         </div>
       </body>
@@ -97,7 +101,7 @@ interface Todo {
   completed: boolean;
 }
 
-export const promoteAfter = 0;
+export const promote_after = 2;
 
 export async function load() {
   return {
@@ -178,42 +182,7 @@ export const healthApi = `export async function get(req: any) {
 }
 `;
 
-export const migrationSql = `-- Create Kiln FSR table
-CREATE TABLE IF NOT EXISTS kiln_fsr (
-  route TEXT NOT NULL,
-  slot TEXT NOT NULL DEFAULT '',
-  query TEXT,
-  query_params JSONB,
-  depends_on TEXT[] NOT NULL DEFAULT '{}',
-  stale BOOLEAN NOT NULL DEFAULT false,
-  version INTEGER NOT NULL DEFAULT 0,
-  hit_count INTEGER NOT NULL DEFAULT 0,
-  promoted BOOLEAN NOT NULL DEFAULT false,
-  tombstoned BOOLEAN NOT NULL DEFAULT false,
-  promote_after INTEGER,
-  debounce_secs INTEGER,
-  html_path TEXT,
-  json_path TEXT,
-  column_name TEXT,
-  last_hit TIMESTAMP,
-  last_patched_at TIMESTAMP,
-  CONSTRAINT kiln_fsr_pkey PRIMARY KEY (route, slot)
-);
-
-CREATE TABLE IF NOT EXISTS kiln_fsr_lists (
-  route TEXT NOT NULL,
-  name TEXT NOT NULL,
-  depends_on TEXT[] NOT NULL DEFAULT '{}',
-  rows JSONB NOT NULL DEFAULT '[]',
-  stale BOOLEAN NOT NULL DEFAULT false,
-  version INTEGER NOT NULL DEFAULT 0,
-  html_path TEXT,
-  json_path TEXT,
-  last_patched_at TIMESTAMP,
-  PRIMARY KEY (route, name)
-);
-
-CREATE TABLE IF NOT EXISTS todos (
+export const migrationSql = `CREATE TABLE IF NOT EXISTS todos (
   id BIGSERIAL PRIMARY KEY,
   title TEXT NOT NULL,
   completed BOOLEAN NOT NULL DEFAULT false
@@ -265,14 +234,15 @@ async function main() {
   if (dbUrl) {
     bunSql = new SQL(dbUrl);
     const store = new FsrStore(bunSql);
+    await store.initialize();
     const watcher = new FsrWatcher(store, null, {
       pollIntervalMs: 1000,
-      promoteAfterHits: config.fsr?.promoteAfterHits ?? 1,
-      patchDebounceSecs: 0,
-      purgeAfterSeconds: 3600,
+      promoteAfterHits: config.fsr.promoteAfterHits,
+      patchDebounceSecs: config.fsr.patchDebounceSecs,
+      purgeAfterSeconds: config.fsr.purgeAfterSeconds,
+      purgeSweepSeconds: config.fsr.purgeSweepSeconds,
+      revalidateSeconds: config.fsr.revalidateSeconds,
       scheduledInvalidations: [],
-      idleEvictSecs: 1800,
-      idleThresholdSecs: 3600
     });
     
     await watcher.start();

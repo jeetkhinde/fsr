@@ -1,3 +1,24 @@
+## Execution Style: Execute Without Questions
+
+- Execute every user request directly. Do not ask clarifying, confirmation,
+  preference, scope, design, or approval questions.
+- If details are missing or ambiguous, inspect the repository, infer the most
+  reasonable intent from existing patterns, choose a sensible default, and
+  continue. State important assumptions in the final response.
+- A user request is authorization to perform all necessary repository-local
+  reads, edits, commands, dependency changes, migrations, tests, builds,
+  formatting, and verification required to complete it.
+- Never initiate brainstorming, design documents, specifications,
+  implementation plans, approval gates, or review checkpoints.
+- Create or discuss a plan only when the user explicitly asks for a plan.
+  Otherwise implement the requested work immediately.
+- Complete implementation and verification in the current turn whenever
+  technically possible. If genuinely blocked by unavailable credentials,
+  external services, or platform restrictions, make all remaining progress and
+  report the blocker without asking a question.
+- Preserve unrelated working-tree changes unless the user explicitly requests
+  their removal.
+
 <!-- code-review-graph MCP tools -->
 ## MCP Tools: code-review-graph
 

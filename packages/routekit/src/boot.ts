@@ -6,17 +6,30 @@ import { applyLiveListMarkers, extractLiveListRowHtml } from './live-list-render
 import { discoverRoutes } from './discover.js';
 import { extractPageOptions, extractLiveFields } from './page-options.js';
 import type { PageRoute, LayoutNode } from './manifest.js';
-import type { KilnRequest, KilnResponse, KilnConfig, ServerAdapter } from '@kiln/core';
-import { cloneLiveListRows, getLiveListMeta, isLiveList, type LiveList } from '@kiln/core';
+import type {
+  KilnRequest,
+  KilnResponse,
+  KilnConfig,
+  ServerAdapter,
+} from '@kiln/core';
+import {
+  cloneLiveListRows,
+  getLiveListMeta,
+  isLiveList,
+  type LiveList,
+  LiveProp,
+} from '@kiln/core';
 import {
   KilnCache,
   type FsrStore,
   type FsrWatcher,
   bakeSegment,
-  assembleFragments,
+  OUTLET_TOKEN,
+  createBakedSnapshot,
   hoistHeadTags,
   injectJsonSeed,
-  injectKilnScript
+  injectKilnScript,
+  materializeBakedShell,
 } from '@kiln/engine';
 
 // ---------------------------------------------------------------------------
@@ -50,6 +63,7 @@ export interface StartKilnOptions {
   promoteAfter?: number;
   store?: FsrStore;
   watcher?: FsrWatcher;
+  redis?: { getClient(): any };
 }
 
 // ---------------------------------------------------------------------------
@@ -58,16 +72,13 @@ export interface StartKilnOptions {
 
 /**
  * Returns true when the caller wants raw JSON (data-only) rather than HTML.
- * Two cases:
- *   1. Accept: application/json header (API consumers, fetch calls)
- *   2. Enhanced Silcrow navigation where all layouts are already present on the
- *      client (no wrapping HTML needed, just data hydration)
+ * JSON is only returned when explicitly requested. Enhanced navigation uses
+ * layout-aware HTML fragments so the existing layout DOM remains mounted.
  */
-function wantsJson(req: KilnRequest, layoutPatterns: string[]): boolean {
+function wantsJson(req: KilnRequest): boolean {
   const accept = req.headers.get('accept') ?? '';
   if (accept.includes('text/html')) return false;
-  if (accept.includes('application/json')) return true;
-  return req.isEnhanced && layoutPatterns.every((pattern) => req.layoutsPresent.includes(pattern));
+  return accept.includes('application/json');
 }
 
 // ---------------------------------------------------------------------------
@@ -84,6 +95,8 @@ export function buildPageHandler(
   watcher?: FsrWatcher
 ) {
   const cache = new KilnCache(cacheOpts);
+  let localHitCount = 0;
+  let locallyPromoted = false;
 
   return async (req: KilnRequest, res: KilnResponse) => {
     // Wire prebakeNext as fire-and-forget prefetch for subsequent routes
@@ -104,17 +117,40 @@ export function buildPageHandler(
       const node = layoutNodes.find((l) => l.filePath === layoutPath);
       return node ? node.pattern : '/';
     });
+    const options = extractPageOptions(module);
+    const promoteAfter = options.promoteAfter ?? kilnConfig?.fsr?.promoteAfterHits ?? 2;
+    const revalidate = options.revalidate ?? kilnConfig?.fsr?.revalidateSeconds ?? 300;
+    const purgeAfter = options.purgeAfter ?? kilnConfig?.fsr?.purgeAfterSeconds ?? 2_592_000;
+    let hitStatus: 'Tombstoned' | 'JustPromoted' | 'Normal' = 'Normal';
+    let promoted = false;
+
+    if (store && typeof store.ensureRouteRow === 'function' && typeof store.incrementHit === 'function') {
+      await store.ensureRouteRow(req.path, promoteAfter === false ? null : promoteAfter, revalidate === false ? 0 : revalidate, purgeAfter);
+      hitStatus = await store.incrementHit(req.path);
+      promoted = hitStatus === 'JustPromoted' || await store.isPromoted?.(req.path) === true;
+    } else {
+      if (promoteAfter !== false) {
+        localHitCount += 1;
+        if (!locallyPromoted && localHitCount >= promoteAfter) {
+          locallyPromoted = true;
+          hitStatus = 'JustPromoted';
+        }
+        promoted = locallyPromoted;
+      }
+    }
 
     let pageProps: any = {};
+    let rawPageProps: any = {};
     let pagePropsLoaded = false;
     const loadPageProps = async () => {
       if (pagePropsLoaded) return pageProps;
       pagePropsLoaded = true;
       if (typeof module.load !== 'function') return pageProps;
       try {
-        pageProps = await module.load(req);
-        assertEmbeddedLiveLists(pageProps, kilnConfig);
-        pageProps = await materializeLiveLists(pageProps, store);
+        rawPageProps = await module.load(req);
+        assertEmbeddedLiveLists(rawPageProps, kilnConfig);
+        rawPageProps = await materializeLiveLists(rawPageProps, store);
+        pageProps = unwrapLiveProps(rawPageProps);
         return pageProps;
       } catch (err: any) {
         if (err.type === 'Redirect') {
@@ -126,7 +162,7 @@ export function buildPageHandler(
     };
 
     // 2. Content negotiation — JSON shortcut
-    if (wantsJson(req, layoutPatterns)) {
+    if (wantsJson(req)) {
       const data = await loadPageProps();
       if (data === null) return;
       res.json(data);
@@ -134,20 +170,33 @@ export function buildPageHandler(
     }
 
     // 3. HTML cache check
-    const cachedHtml = await cache.getHtml(req.path);
-    if (cachedHtml) {
+    const cachedHtml = promoted ? await cache.getHtml(req.path) : null;
+    if (promoted && !cachedHtml) {
+      hitStatus = 'JustPromoted';
+      promoted = false;
+    }
+    const cachedSnapshot = cachedHtml ? await cache.getJson(req.path) : null;
+    const materialized = cachedHtml ? materializeBakedShell(cachedHtml, cachedSnapshot) : null;
+    if (cachedHtml && !materialized) {
+      await cache.delete(req.path);
+      hitStatus = 'JustPromoted';
+      promoted = false;
+    }
+    if (materialized) {
       if (kilnConfig?.fsr?.watcher === 'external') {
         const loaded = await loadPageProps();
         if (loaded === null) return;
       }
       if (!watcher || watcher.hasRegisteredRoute(req.path)) {
-        res.html(cachedHtml);
+        await store?.touchRoute?.(req.path);
+        respondWithNavigationShape(res, req, layoutPatterns, pageMeta.pattern, materialized);
         return;
       }
       const loaded = await loadPageProps();
       if (loaded === null) return;
       if (!hasLiveLists(loaded)) {
-        res.html(cachedHtml);
+        await store?.touchRoute?.(req.path);
+        respondWithNavigationShape(res, req, layoutPatterns, pageMeta.pattern, materialized);
         return;
       }
     }
@@ -164,6 +213,7 @@ export function buildPageHandler(
 
     // 5. Parallel load: all layout loads + page load
     const layoutPropsArr: any[] = new Array(layoutEntries.length).fill({});
+    const rawLayoutPropsArr: any[] = new Array(layoutEntries.length).fill({});
     let aborted = false;
 
     await Promise.all([
@@ -174,12 +224,12 @@ export function buildPageHandler(
       })(),
       // Layout loads
       ...layoutEntries.map(async ({ node, module: lMod }, idx) => {
-        if (node?.hasLoad && typeof lMod.load === 'function') {
-          try {
-            layoutPropsArr[idx] = await lMod.load(req);
-          } catch {
-            layoutPropsArr[idx] = {};
-          }
+        if (typeof lMod.load === 'function') {
+          let loaded = await lMod.load(req);
+          assertEmbeddedLiveLists(loaded, kilnConfig);
+          loaded = await materializeLiveLists(loaded, store);
+          rawLayoutPropsArr[idx] = loaded;
+          layoutPropsArr[idx] = unwrapLiveProps(loaded);
         }
       })
     ]);
@@ -195,35 +245,72 @@ export function buildPageHandler(
     ]);
 
     // 7. Assemble: layouts[0] is outermost, each contains OUTLET_TOKEN
-    const layoutHtmls = layoutBaked.map((b) => b.html);
-    let html = assembleFragments(layoutHtmls, pageBaked.html);
-    html = applyLiveListMarkers(html, pageProps as Record<string, unknown>, req.path);
+    const markedPageHtml = applyLivePropMarkers(
+      applyLiveListMarkers(pageBaked.html, rawPageProps, req.path),
+      rawPageProps,
+    );
+    const pageFragment = wrapPageSegment(pageMeta.pattern, markedPageHtml);
+    let html = pageFragment;
+    for (let index = layoutBaked.length - 1; index >= 0; index--) {
+      const layoutRoute = layoutPatterns[index] ?? '/';
+      const markedLayoutHtml = applyLivePropMarkers(
+        applyLiveListMarkers(
+          layoutBaked[index].html,
+          rawLayoutPropsArr[index],
+          layoutRoute,
+        ),
+        rawLayoutPropsArr[index],
+      );
+      html = materializeLayoutSegment(
+        layoutRoute,
+        markedLayoutHtml,
+        html,
+      );
+    }
+    const rawSnapshotProps = Object.assign({}, ...rawLayoutPropsArr, rawPageProps);
+    const snapshotProps = Object.assign({}, ...layoutPropsArr, pageProps);
 
     // 7b. Hoist React 19 metadata (<title>/<meta>/<link>) from body into <head>
     html = hoistHeadTags(html);
 
     // 8. Inject JSON seed before </body>
-    html = injectJsonSeed(html, pageProps as Record<string, unknown>);
+    html = injectJsonSeed(html, snapshotProps);
 
     // 9. Optionally inject Kiln client script
     const clientSrc = '/_silcrow/silcrow.js';
-    html = injectKilnScript(html, clientSrc);
+    if (!html.includes(`src="${clientSrc}"`)) {
+      html = injectKilnScript(html, clientSrc);
+    }
 
     // 10. Wrap with doctype if it looks like a full page
     const finalHtml = html.startsWith('<html') ? '<!DOCTYPE html>' + html : html;
 
-    // 11. Write to cache if promoteAfter is set (0 = immediate)
-    const options = extractPageOptions(module);
+    const pinInRedis = options.pinInRedis ?? false;
+
+    // 11. Caching & Persistence
     let htmlPath: string | null = null;
     let jsonPath: string | null = null;
-    if (options.promoteAfter !== undefined) {
-      await cache.setHtml(req.path, finalHtml);
-      await cache.setJson(req.path, pageProps);
-      htmlPath = cache.diskHtmlPath(req.path);
+
+    // A. Eagerly save generic shell (once per pattern)
+    await cache.saveGenericShell(pageMeta.pattern, finalHtml);
+
+    // B. Eagerly save JSON (once per concrete route)
+    const existingJson = await cache.getJson(req.path);
+    if (!existingJson) {
+      await cache.setJson(req.path, createBakedSnapshot(snapshotProps));
       jsonPath = cache.diskJsonPath(req.path);
       if (store) {
-        await store.ensureRouteRow(req.path, options.promoteAfter);
-        await store.incrementHit(req.path);
+        await store.setBakedPaths(req.path, null, jsonPath);
+      }
+    } else {
+      jsonPath = cache.diskJsonPath(req.path);
+    }
+
+    // C. Save Fully Baked HTML if promoted
+    if (hitStatus === 'JustPromoted') {
+      await cache.setHtml(req.path, finalHtml, pinInRedis);
+      htmlPath = cache.diskHtmlPath(req.path);
+      if (store) {
         await store.setBakedPaths(req.path, htmlPath, jsonPath);
       }
     }
@@ -232,21 +319,156 @@ export function buildPageHandler(
       await registerLiveLists({
         route: req.path,
         pageComponent,
-        pageProps,
+        pageProps: rawPageProps,
         finalHtml,
         htmlPath,
         jsonPath,
-        watcher
+        watcher,
+        defaultDebounce: options.debounce ?? kilnConfig?.fsr?.patchDebounceSecs,
+        defaultRevalidate: options.revalidate ?? kilnConfig?.fsr?.revalidateSeconds,
       });
+      for (let index = 0; index < layoutEntries.length; index++) {
+        const layoutRoute = layoutPatterns[index] ?? '/';
+        const layoutOptions = extractPageOptions(layoutEntries[index].module);
+        await registerLiveLists({
+          route: layoutRoute,
+          pageComponent: layoutEntries[index].module.default,
+          pageProps: rawLayoutPropsArr[index],
+          finalHtml,
+          htmlPath: cache.diskHtmlPath(layoutRoute),
+          jsonPath: cache.diskJsonPath(layoutRoute),
+          watcher,
+          isLayout: true,
+          defaultDebounce: layoutOptions.debounce ?? kilnConfig?.fsr?.patchDebounceSecs,
+          defaultRevalidate: layoutOptions.revalidate ?? kilnConfig?.fsr?.revalidateSeconds,
+        });
+      }
     }
 
     // 12. Extract live fields and persist on pageMeta
-    const liveFields = extractLiveFields(pageProps);
+    const liveFields = extractLiveFields(rawPageProps);
+    if (store && liveFields.length > 0) {
+      for (const field of liveFields) {
+        await store.upsertSlot(
+          req.path,
+          field.name,
+          null,
+          [],
+          field.dependsOn ? [field.dependsOn] : [],
+          field.debounce ?? options.debounce ?? kilnConfig?.fsr?.patchDebounceSecs,
+        );
+      }
+      watcher?.registerLoader?.({
+        route: req.path,
+        load: async () => {
+          const loaded = typeof module.load === 'function' ? await module.load(req) : {};
+          return loaded as Record<string, unknown>;
+        },
+      });
+    }
     pageMeta.liveFields = liveFields;
-    pageMeta.promoteAfter = options.promoteAfter;
+    pageMeta.promoteAfter = promoteAfter === false ? undefined : promoteAfter;
 
-    res.html(finalHtml);
+    respondWithNavigationShape(res, req, layoutPatterns, pageMeta.pattern, finalHtml, pageFragment);
   };
+}
+
+function wrapPageSegment(pattern: string, html: string): string {
+  return `<div data-ps-layout="${escapeAttribute(pattern)}" style="display:contents">${html}</div>`;
+}
+
+function materializeLayoutSegment(pattern: string, shell: string, child: string): string {
+  const slot = `<div data-ps-slot="${escapeAttribute(pattern)}" style="display:contents">${child}</div>`;
+  const rendered = shell.replace(OUTLET_TOKEN, slot);
+  if (/^\s*(?:<!DOCTYPE html>)?<html\b/i.test(rendered)) {
+    return rendered.replace(
+      /<body\b/i,
+      `<body data-ps-layout="${escapeAttribute(pattern)}"`,
+    );
+  }
+  return `<div data-ps-layout="${escapeAttribute(pattern)}" style="display:contents">${rendered}</div>`;
+}
+
+function respondWithNavigationShape(
+  res: KilnResponse,
+  req: KilnRequest,
+  layoutPatterns: string[],
+  pagePattern: string,
+  html: string,
+  renderedPageFragment?: string,
+): void {
+  if (!req.isEnhanced) {
+    res.html(html);
+    return;
+  }
+
+  const deepestPresent = [...layoutPatterns]
+    .reverse()
+    .find((pattern) => req.layoutsPresent.includes(pattern));
+  if (!deepestPresent) {
+    res.headers['silcrow-full-reload'] = 'true';
+    res.html(html);
+    return;
+  }
+
+  const fragmentBody = renderedPageFragment ?? extractLayoutFragment(html, pagePattern) ?? html;
+  res.headers['content-type'] = 'text/html; x-ps-fragment=1';
+  res.html(
+    `<div data-ps-slot="${escapeAttribute(deepestPresent)}" style="display:contents">${fragmentBody}</div>`,
+  );
+}
+
+function extractLayoutFragment(html: string, pattern: string): string | null {
+  const marker = `data-ps-layout="${escapeAttribute(pattern)}"`;
+  const markerIndex = html.indexOf(marker);
+  if (markerIndex < 0) return null;
+  const start = html.lastIndexOf('<div', markerIndex);
+  if (start < 0) return null;
+  const tag = /<\/?div\b[^>]*>/gi;
+  tag.lastIndex = start;
+  let depth = 0;
+  for (let match = tag.exec(html); match; match = tag.exec(html)) {
+    depth += match[0].startsWith('</') ? -1 : 1;
+    if (depth === 0) return html.slice(start, tag.lastIndex);
+  }
+  return null;
+}
+
+function escapeAttribute(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
+function unwrapLiveProps(input: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(input ?? {}).map(([key, value]) => [
+      key,
+      value instanceof LiveProp || (value as any)?.constructor?.name === 'LiveProp'
+        ? (value as LiveProp<unknown>).value
+        : value,
+    ]),
+  );
+}
+
+function applyLivePropMarkers(html: string, props: Record<string, unknown>): string {
+  let result = html;
+  for (const [name, raw] of Object.entries(props ?? {})) {
+    if (!(raw instanceof LiveProp) && (raw as any)?.constructor?.name !== 'LiveProp') continue;
+    const value = (raw as LiveProp<unknown>).value;
+    if (!['string', 'number', 'boolean'].includes(typeof value)) continue;
+    const text = escapeHtml(String(value));
+    if (result.includes(`s-live="${escapeAttribute(name)}"`)) continue;
+    result = result.replace(text, `<span s-live="${escapeAttribute(name)}">${text}</span>`);
+  }
+  return result;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 // ---------------------------------------------------------------------------
@@ -301,7 +523,7 @@ export async function startKiln(
 
   // 2. Build cache options from config
   const cacheOpts: CacheOptions = {
-    redis: null,
+    redis: options.redis?.getClient?.() ?? null,
     cacheDir: config.cache?.provider === 'filesystem' ? (config.cache.dir ?? '.kiln-cache') : '.kiln-cache',
     ttlSecs: 0
   };
@@ -365,7 +587,7 @@ export async function startKiln(
     }
   }
 
-  // 6. Serve Silcrow browser runtime from @kiln/client.
+  // 6. Serve Silcrow browser runtime from @kiln/client (always)
   try {
     const silcrowPath = fileURLToPath(import.meta.resolve('@kiln/client/silcrow.js'));
     adapter.registerAsset('/_silcrow/silcrow.js', silcrowPath);
@@ -496,6 +718,9 @@ async function registerLiveLists(input: {
   htmlPath: string | null;
   jsonPath: string | null;
   watcher: FsrWatcher;
+  isLayout?: boolean;
+  defaultDebounce?: number;
+  defaultRevalidate?: number | false;
 }): Promise<void> {
   for (const [name, value] of Object.entries(input.pageProps)) {
     if (!isLiveList(value)) continue;
@@ -517,14 +742,16 @@ async function registerLiveLists(input: {
         route: input.route,
         name,
         dependsOn: meta.dependsOn,
+        debounce: meta.debounce ?? input.defaultDebounce,
+        revalidate: meta.revalidate ?? input.defaultRevalidate,
         keyOf: meta.keyOf,
         query: meta.query,
         renderRows: async (replacementRows) => {
-          const replacementProps = {
+          const replacementProps = unwrapLiveProps({
             ...input.pageProps,
-            [name]: cloneLiveListRows(value as LiveList<unknown>, replacementRows)
-          };
-          const baked = await bakeSegment(input.pageComponent, replacementProps, false);
+            [name]: cloneLiveListRows(value as LiveList<unknown>, replacementRows),
+          });
+          const baked = await bakeSegment(input.pageComponent, replacementProps, input.isLayout ?? false);
           const marked = applyLiveListMarkers(baked.html, replacementProps, input.route);
           return extractLiveListRowHtml(marked, name);
         }
@@ -533,6 +760,8 @@ async function registerLiveLists(input: {
         route: input.route,
         name,
         dependsOn: meta.dependsOn,
+        debounceSecs: meta.debounce ?? input.defaultDebounce,
+        revalidateSecs: meta.revalidate ?? input.defaultRevalidate,
         rows: snapshotRows,
         htmlPath: input.htmlPath,
         jsonPath: input.jsonPath

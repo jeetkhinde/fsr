@@ -27,9 +27,12 @@ export interface FsrConfig {
   keepaliveSecs: number;
   redisUrl?: string;
   artifactTtlSecs: number;
-  idleEvictSecs: number;
-  idleThresholdSecs: number;
-  revalidateSeconds?: number;
+  purgeSweepSeconds: number;
+  revalidateSeconds: number;
+  /** @deprecated Use purgeSweepSeconds. */
+  idleEvictSecs?: number;
+  /** @deprecated Use purgeAfterSeconds. */
+  idleThresholdSecs?: number;
   postgresUrl?: string;
 }
 
@@ -141,22 +144,22 @@ export const DEFAULT_CONFIG: KilnConfig = {
     inlineRuntime: false,
   },
   live: {
-    promoteAfterHits: 100,
-    patchDebounceSeconds: 30,
+    promoteAfterHits: 2,
+    patchDebounceSeconds: 5,
     purgeAfterSeconds: 2_592_000, // 30 days
   },
   fsr: {
     watcher: 'embedded',
     pollIntervalMs: 500,
-    promoteAfterHits: 100,
-    patchDebounceSecs: 0,
+    promoteAfterHits: 2,
+    patchDebounceSecs: 5,
     purgeAfterSeconds: 2_592_000,
+    purgeSweepSeconds: 3_600,
+    revalidateSeconds: 300,
     maxSseConnections: 1000,
     connectionTtlSecs: 3600,
     keepaliveSecs: 30,
-    artifactTtlSecs: 86_400, // 24h
-    idleEvictSecs: 1_800, // 30m
-    idleThresholdSecs: 86_400, // 24h
+    artifactTtlSecs: 0,
   },
 };
 
@@ -180,8 +183,28 @@ export function defineConfig(config: DeepPartial<KilnConfig>): KilnConfig {
       react: { ...DEFAULT_CONFIG.client.react, ...config.client.react } as any,
     } as any;
   }
-  if (config.live) merged.live = { ...DEFAULT_CONFIG.live, ...config.live } as any;
+  if (config.live) {
+    console.warn('[kiln] config.live is deprecated; use config.fsr');
+    merged.live = { ...DEFAULT_CONFIG.live, ...config.live } as any;
+  }
   if (config.fsr) merged.fsr = { ...DEFAULT_CONFIG.fsr, ...config.fsr } as any;
+  if (config.live && config.fsr?.promoteAfterHits === undefined) {
+    merged.fsr.promoteAfterHits = merged.live.promoteAfterHits;
+  }
+  if (config.live && config.fsr?.patchDebounceSecs === undefined) {
+    merged.fsr.patchDebounceSecs = merged.live.patchDebounceSeconds;
+  }
+  if (config.live && config.fsr?.purgeAfterSeconds === undefined) {
+    merged.fsr.purgeAfterSeconds = merged.live.purgeAfterSeconds;
+  }
+  if (config.fsr?.idleEvictSecs !== undefined) {
+    console.warn('[kiln] config.fsr.idleEvictSecs is deprecated; use purgeSweepSeconds');
+    merged.fsr.purgeSweepSeconds = config.fsr.idleEvictSecs;
+  }
+  if (config.fsr?.idleThresholdSecs !== undefined) {
+    console.warn('[kiln] config.fsr.idleThresholdSecs is deprecated; use purgeAfterSeconds');
+    merged.fsr.purgeAfterSeconds = config.fsr.idleThresholdSecs;
+  }
   if (config.port !== undefined) merged.port = config.port;
   if (config.pagesDir !== undefined) merged.pagesDir = config.pagesDir as any;
   if (config.apiDir !== undefined) merged.apiDir = config.apiDir as any;

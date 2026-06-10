@@ -120,7 +120,22 @@ function followRedirect(path) {
   const target = new URL(path, location.origin);
   const query = new URL(location.href).searchParams.get("q");
   if (query) target.searchParams.set("q", query);
-  location.assign(target);
+  void window.Silcrow.go(target.href);
+}
+
+function syncRouteState() {
+  const shell = document.querySelector(".app-shell");
+  if (!shell) return;
+  const detailRoute = location.pathname !== "/contacts";
+  shell.classList.toggle("app-shell--detail", detailRoute);
+
+  document.querySelectorAll(".contact-row[aria-current]").forEach((link) => {
+    link.removeAttribute("aria-current");
+  });
+  const current = document.querySelector(
+    `.contact-row[href="${CSS.escape(location.pathname)}"]`,
+  );
+  if (current) current.setAttribute("aria-current", "page");
 }
 
 async function submitForm(form) {
@@ -228,6 +243,7 @@ function init() {
   initAvatars();
   initSearch();
   initForms();
+  syncRouteState();
 }
 
 document.addEventListener("DOMContentLoaded", init);

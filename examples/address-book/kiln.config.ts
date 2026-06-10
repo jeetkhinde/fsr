@@ -5,7 +5,11 @@ export default defineConfig({
   pagesDir: './pages',
   fsr: {
     watcher: 'embedded',
-    promoteAfterHits: 1,
+    promoteAfterHits: 2,
+    patchDebounceSecs: 5,
+    revalidateSeconds: 300,
+    purgeAfterSeconds: 2_592_000,
+    purgeSweepSeconds: 3_600,
     maxSseConnections: 1000,
     connectionTtlSecs: 3600,
     keepaliveSecs: 30,

@@ -2,7 +2,6 @@ import { FsrStore } from './store.js';
 import { FsrWatcher, type LivePatch, type SlotPatch } from './watcher.js';
 import { SSEEvent } from '@kiln/core';
 import { KilnCache } from './cache.js';
-import { injectFsrSlots } from './baking.js';
 import { isScalarPatch, type RenderedListPatch, type ScalarPatch } from '@kiln/live';
 
 export interface FsrHubConfig {
@@ -25,20 +24,15 @@ export function getActiveConnectionsCount(): number {
 }
 
 /**
- * After a LiveProp patch fires, update both JSON and HTML baked files
- * so the next cache hit serves fresh data without a DB round-trip.
+ * JSON is the mutable freshness authority. The baked shell is immutable.
  */
-export async function patchBakedFiles(cache: KilnCache, route: string, slot: string, value: unknown): Promise<void> {
-  await Promise.allSettled([
-    // Patch JSON: update the field
-    cache.patchJsonField(route, slot, value),
-    // Patch HTML: re-inject the s-live slot
-    cache.getHtml(route).then((html) => {
-      if (!html) return;
-      const patched = injectFsrSlots(html, [[slot, value]]);
-      return cache.setHtml(route, patched);
-    })
-  ]);
+export async function patchBakedFiles(
+  cache: KilnCache,
+  route: string,
+  slot: string,
+  value: unknown
+): Promise<void> {
+  await cache.patchJsonField(route, slot, value);
 }
 
 export interface FsrHubStreamOptions {
@@ -66,6 +60,9 @@ export async function* fsrHubStream(options: FsrHubStreamOptions): AsyncGenerato
   activeConnectionsCount++;
 
   const emitter = watcher.getEmitter();
+  if (emitter.getMaxListeners() < config.maxConnections) {
+    emitter.setMaxListeners(config.maxConnections);
+  }
   const queue: (SlotPatch | LivePatch)[] = [];
   let resolveNext: ((value: void) => void) | null = null;
   let lagged = false;
@@ -120,6 +117,9 @@ export async function* fsrHubStream(options: FsrHubStreamOptions): AsyncGenerato
   }, config.connectionTtlSecs * 1000);
 
   try {
+    // Commit the SSE response before waiting for the first application patch.
+    yield { event: 'ready', data: '' };
+
     while (!ttlExpired && !aborted) {
       if (queue.length === 0 && !triggerKeepalive && !lagged && !ttlExpired && !aborted) {
         await new Promise<void>((resolve) => {

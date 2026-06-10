@@ -2,7 +2,6 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs/promises';
 import { FsrStore, StaleSlot } from './store.js';
 import { RedisCache } from './cache.js';
-import { injectFsrSlots } from './baking.js';
 import {
   applyListPatchToHtml,
   applyListPatchToJson,
@@ -25,9 +24,13 @@ export interface WatcherConfig {
   promoteAfterHits: number;
   patchDebounceSecs: number;
   purgeAfterSeconds: number;
+  purgeSweepSeconds?: number;
+  revalidateSeconds?: number;
   scheduledInvalidations: ScheduledInvalidation[];
-  idleEvictSecs: number;
-  idleThresholdSecs: number;
+  /** @deprecated Use purgeSweepSeconds. */
+  idleEvictSecs?: number;
+  /** @deprecated Use purgeAfterSeconds. */
+  idleThresholdSecs?: number;
 }
 
 export interface SlotPatch {
@@ -38,11 +41,17 @@ export interface SlotPatch {
 
 export type LivePatch = ScalarPatch | RenderedListPatch;
 
+interface RegisteredLoaderTarget {
+  route: string;
+  load(): Promise<Record<string, unknown>>;
+}
+
 export class FsrWatcher {
   private active = false;
   private abortController = new AbortController();
   private emitter = new EventEmitter();
   private liveListTargets = new Map<string, RegisteredLiveListTarget<any>>();
+  private loaderTargets = new Map<string, RegisteredLoaderTarget>();
   private warnedUnregisteredLists = new Set<string>();
   private notificationQueue: Promise<void> = Promise.resolve();
 
@@ -54,6 +63,10 @@ export class FsrWatcher {
 
   getEmitter(): EventEmitter {
     return this.emitter;
+  }
+
+  registerLoader(target: RegisteredLoaderTarget): void {
+    this.loaderTargets.set(target.route, target);
   }
 
   async registerLiveList<T>(
@@ -136,6 +149,7 @@ export class FsrWatcher {
   }
 
   unregisterRoute(route: string): void {
+    this.loaderTargets.delete(route);
     for (const [targetKey, target] of this.liveListTargets.entries()) {
       if (target.route === route) {
         this.liveListTargets.delete(targetKey);
@@ -158,13 +172,16 @@ export class FsrWatcher {
     this.abortController = new AbortController();
     const signal = this.abortController.signal;
 
+    // 0. Catch up on any missed events before we start sweeping
+    await this.catchUpMissedEvents();
+
     // 1. Scheduled invalidations
     for (const scheduled of this.config.scheduledInvalidations) {
       this.spawnSupervisedInvalidation(scheduled, signal);
     }
 
     // 2. Idle eviction
-    if (this.config.idleEvictSecs > 0) {
+    if (this.purgeSweepSeconds() > 0) {
       this.spawnSupervisedIdleEviction(signal);
     }
 
@@ -181,18 +198,72 @@ export class FsrWatcher {
     this.abortController.abort();
   }
 
-  notifyChange(depKey: string): Promise<void> {
-    this.notificationQueue = this.notificationQueue
+  notifyChange(depKey: string): void {
+    this.store.invalidateDepKey(depKey)
       .then(async () => {
-        await this.store.invalidateDepKey(depKey);
         if (this.redis) {
-          await this.watcherTickRedis();
+          await this.redis.publishInvalidate({
+            route: '',
+            slots: [],
+            deps: [depKey],
+          });
         }
       })
-      .catch((err) => {
-        console.error(`Failed to process invalidation for dep key ${depKey}:`, err);
+      .catch(err => {
+        console.error(`Failed to invalidate dep key ${depKey}:`, err);
       });
-    return this.notificationQueue;
+  }
+
+  notifyDelete(depKey: string): void {
+    this.store.tombstoneDependentRoutes(depKey).then(async (routes) => {
+      if (this.redis) {
+        for (const route of routes) {
+          await this.redis.publishInvalidate({
+            route,
+            slots: [],
+            deps: [depKey],
+          }).catch(() => {});
+        }
+      }
+    }).catch(err => {
+      console.error(`Failed to tombstone dependent routes for ${depKey}:`, err);
+    });
+  }
+
+  updateCursor(eventId: number): void {
+    const cursorPath = '.kiln-cache/cursor';
+    fs.writeFile(cursorPath, String(eventId), 'utf8').catch(() => {});
+  }
+
+  private async catchUpMissedEvents(): Promise<void> {
+    try {
+      const cursorPath = '.kiln-cache/cursor';
+      let cursor = 0;
+      try {
+        cursor = Number(await fs.readFile(cursorPath, 'utf8'));
+      } catch {}
+
+      const events = await this.store.fetchEventsSince(cursor);
+      let lastProcessed = cursor;
+
+      for (const event of events) {
+        const { depKey, id } = event.payload;
+        if (event.eventType === 'DELETE') {
+          if (depKey) await this.store.tombstoneDependentRoutes(depKey);
+          if (depKey && id !== undefined && id !== null) await this.store.tombstoneDependentRoutes(`${depKey}:${id}`);
+        } else {
+          if (depKey) await this.store.invalidateDepKey(depKey);
+          if (depKey && id !== undefined && id !== null) await this.store.invalidateDepKey(`${depKey}:${id}`);
+        }
+        lastProcessed = event.id;
+      }
+
+      if (lastProcessed > cursor) {
+        await fs.writeFile(cursorPath, String(lastProcessed), 'utf8');
+      }
+    } catch (err: any) {
+      console.warn(`FSR watcher: failed to catch up missed events:`, err.message);
+    }
   }
 
   private spawnSupervisedInvalidation(scheduled: ScheduledInvalidation, signal: AbortSignal): void {
@@ -213,10 +284,10 @@ export class FsrWatcher {
   private spawnSupervisedIdleEviction(signal: AbortSignal): void {
     const run = async () => {
       while (!signal.aborted) {
-        await new Promise((resolve) => setTimeout(resolve, this.config.idleEvictSecs * 1000));
+        await new Promise(resolve => setTimeout(resolve, this.purgeSweepSeconds() * 1000));
         if (signal.aborted) break;
         try {
-          const evicted = await this.store.evictIdleRoutes(this.config.idleThresholdSecs);
+          const evicted = await this.store.purgeInactiveRoutes(this.purgeAfterSeconds());
           for (const r of evicted) {
             console.log(`FSR: idle eviction for route ${r.route}`);
             if (this.redis) {
@@ -235,6 +306,14 @@ export class FsrWatcher {
       }
     };
     run();
+  }
+
+  private purgeSweepSeconds(): number {
+    return this.config.purgeSweepSeconds ?? this.config.idleEvictSecs ?? 3_600;
+  }
+
+  private purgeAfterSeconds(): number {
+    return this.config.purgeAfterSeconds ?? this.config.idleThresholdSecs ?? 2_592_000;
   }
 
   private spawnSupervisedPollingWatcher(signal: AbortSignal): void {
@@ -265,7 +344,7 @@ export class FsrWatcher {
             } catch (err: any) {
               console.error('FSR watcher: reconciliation tick failed:', err.message);
             }
-          }, 60000);
+          }, Math.max(100, Math.min(this.config.pollIntervalMs || 1000, 1000)));
 
           await new Promise<void>((_, reject) => {
             subClient.onclose = (err?: Error) => {
@@ -318,8 +397,11 @@ export class FsrWatcher {
     }
 
     // Phase 1: run DB queries
+    const loaderRows = stale.filter((slotRow) => !slotRow.query);
+    const queryRows = stale.filter((slotRow) => Boolean(slotRow.query));
+    await this.refreshRegisteredLoaders(loaderRows);
     const results: { slotRow: StaleSlot; value: any; err?: any }[] = [];
-    for (const slotRow of stale) {
+    for (const slotRow of queryRows) {
       try {
         const value = await this.store.reExecuteQuery(slotRow);
         results.push({ slotRow, value });
@@ -329,16 +411,11 @@ export class FsrWatcher {
       }
     }
 
-    // Phase 2a: build layout slot batches for file baking
-    const htmlPatches = new Map<string, [string, any][]>();
+    // JSON snapshots are authoritative; shells are immutable.
     const jsonPatches = new Map<string, [string, any][]>();
     for (const { slotRow, value, err } of results) {
       if (err) continue;
       if (slotRow.promoted) {
-        if (slotRow.htmlPath) {
-          if (!htmlPatches.has(slotRow.htmlPath)) htmlPatches.set(slotRow.htmlPath, []);
-          htmlPatches.get(slotRow.htmlPath)!.push([slotRow.slot, value]);
-        }
         if (slotRow.jsonPath) {
           if (!jsonPatches.has(slotRow.jsonPath)) jsonPatches.set(slotRow.jsonPath, []);
           jsonPatches.get(slotRow.jsonPath)!.push([slotRow.slot, value]);
@@ -347,9 +424,6 @@ export class FsrWatcher {
     }
 
     // Phase 2b: write to files
-    for (const [htmlPath, patches] of htmlPatches.entries()) {
-      await this.patchHtmlFileBatchReturning(htmlPath, patches);
-    }
     for (const [jsonPath, patches] of jsonPatches.entries()) {
       await this.patchJsonFileBatch(jsonPath, patches);
     }
@@ -378,8 +452,11 @@ export class FsrWatcher {
     }
 
     // Phase 1: run DB queries
+    const loaderRows = stale.filter((slotRow) => !slotRow.query);
+    const queryRows = stale.filter((slotRow) => Boolean(slotRow.query));
+    await this.refreshRegisteredLoaders(loaderRows);
     const results: { slotRow: StaleSlot; value: any; err?: any }[] = [];
-    for (const slotRow of stale) {
+    for (const slotRow of queryRows) {
       try {
         const value = await this.store.reExecuteQuery(slotRow);
         results.push({ slotRow, value });
@@ -393,17 +470,12 @@ export class FsrWatcher {
     }
 
     // Phase 2a: build batches
-    const htmlPatches = new Map<string, [string, any][]>();
     const jsonPatches = new Map<string, [string, any][]>();
     const redisJsonPatches = new Map<string, [string, any][]>();
 
     for (const { slotRow, value, err } of results) {
       if (err) continue;
       if (slotRow.promoted) {
-        if (slotRow.htmlPath) {
-          if (!htmlPatches.has(slotRow.htmlPath)) htmlPatches.set(slotRow.htmlPath, []);
-          htmlPatches.get(slotRow.htmlPath)!.push([slotRow.slot, value]);
-        }
         if (slotRow.jsonPath) {
           if (!jsonPatches.has(slotRow.jsonPath)) jsonPatches.set(slotRow.jsonPath, []);
           jsonPatches.get(slotRow.jsonPath)!.push([slotRow.slot, value]);
@@ -415,11 +487,6 @@ export class FsrWatcher {
     }
 
     // Phase 2b: patch files
-    const htmlPatched = new Map<string, string | null>();
-    for (const [htmlPath, patches] of htmlPatches.entries()) {
-      const patched = await this.patchHtmlFileBatchReturning(htmlPath, patches);
-      htmlPatched.set(htmlPath, patched);
-    }
     for (const [jsonPath, patches] of jsonPatches.entries()) {
       await this.patchJsonFileBatch(jsonPath, patches);
     }
@@ -456,17 +523,6 @@ export class FsrWatcher {
           console.warn(`FSR watcher: Redis patchSlot failed for ${slotRow.route}/${slotRow.slot}:`, e.message);
         }
 
-        if (slotRow.promoted && slotRow.htmlPath) {
-          const patchedHtml = htmlPatched.get(slotRow.htmlPath);
-          if (patchedHtml) {
-            try {
-              await this.redis.setHtml(slotRow.route, patchedHtml);
-            } catch (e: any) {
-              console.warn(`FSR watcher: Redis setHtml failed for ${slotRow.route}:`, e.message);
-            }
-          }
-        }
-
         try {
           await this.redis.publishPatch(toLegacySlotPatch(createWatcherPatch(slotRow, value)));
         } catch (e: any) {
@@ -487,7 +543,7 @@ export class FsrWatcher {
   }
 
   private async processStaleLists(): Promise<void> {
-    const staleLists = await this.store.lists.fetchStaleLists();
+    const staleLists = await this.store.lists.fetchStaleLists(this.config.revalidateSeconds ?? 300);
     for (const snapshot of staleLists) {
       const targetKey = liveListTargetKey(snapshot.route, snapshot.name);
       const target = this.liveListTargets.get(targetKey);
@@ -505,16 +561,61 @@ export class FsrWatcher {
     }
   }
 
-  private async revalidateLiveList(target: RegisteredLiveListTarget<any>, snapshot: LiveListSnapshot): Promise<void> {
+  private async refreshRegisteredLoaders(rows: StaleSlot[]): Promise<void> {
+    const byRoute = new Map<string, StaleSlot[]>();
+    for (const row of rows) {
+      const existing = byRoute.get(row.route) ?? [];
+      existing.push(row);
+      byRoute.set(row.route, existing);
+    }
+
+    for (const [route, routeRows] of byRoute) {
+      const target = this.loaderTargets.get(route);
+      if (!target) continue;
+      try {
+        const loaded = await target.load();
+        const paths = await this.store.getPromotedPaths(route);
+        let snapshot: any = null;
+        if (paths?.jsonPath) {
+          try {
+            snapshot = JSON.parse(await fs.readFile(paths.jsonPath, 'utf8'));
+          } catch {
+            snapshot = null;
+          }
+        }
+        if (!snapshot && this.redis) snapshot = await this.redis.getJson(route);
+        if (!snapshot) continue;
+        const data = snapshot.data && typeof snapshot.data === 'object' ? snapshot.data : snapshot;
+
+        for (const row of routeRows) {
+          const raw = loaded[row.slot] as any;
+          const value = raw && raw.constructor?.name === 'LiveProp' ? raw.value : raw;
+          data[row.slot] = value;
+          this.emitter.emit('patch', createScalarPatch(route, row.slot, value));
+          await this.store.markFresh(route, row.slot);
+        }
+        if ('updatedAt' in snapshot) snapshot.updatedAt = new Date().toISOString();
+        if (paths?.jsonPath) await fs.writeFile(paths.jsonPath, JSON.stringify(snapshot), 'utf8');
+        if (this.redis) await this.redis.setJson(route, snapshot);
+      } catch (error: any) {
+        console.warn(`FSR watcher: loader refresh failed for ${route}:`, error.message);
+      }
+    }
+  }
+
+  private async revalidateLiveList(
+    target: RegisteredLiveListTarget<any>,
+    snapshot: LiveListSnapshot,
+  ): Promise<void> {
     const originalFiles = new Map<string, string>();
-    let originalRedisHtml: string | null = null;
     let originalRedisJson: any | null = null;
 
     try {
       const nextRows = await this.store.executeLiveListQuery(target.query, this.abortController.signal);
       const renderedRows = await target.renderRows(nextRows);
-      const nextRowsByKey = new Map(nextRows.map((row) => [String(target.keyOf(row)), row] as const));
-      const previousHtmlByKey = new Map(snapshot.rows.map((row) => [row.key, row.html] as const));
+      const rowsByKey = new Map(
+        nextRows.map((row) => [String(target.keyOf(row)), row] as const),
+      );
       const patches = reconcileListRows({
         route: snapshot.route,
         list: snapshot.name,
@@ -523,29 +624,21 @@ export class FsrWatcher {
         next: nextRows
       }).map((patch): RenderedListPatch => {
         if (patch.op === 'fields') {
-          const previousHtml = previousHtmlByKey.get(patch.key);
-          const nextHtml = renderedRows.get(patch.key);
-          const nextRow = nextRowsByKey.get(patch.key);
-          if (previousHtml === undefined || nextHtml === undefined || nextRow === undefined) {
+          const html = renderedRows.get(patch.key);
+          const row = rowsByKey.get(patch.key);
+          if (html === undefined || row === undefined) {
             throw new Error(`Live.list renderer did not return HTML for key "${patch.key}"`);
           }
-
-          const containerOpen = `<ul data-kiln-list="${escapeAttribute(snapshot.name)}">`;
-          const patchedHtml = applyListPatchToHtml(`${containerOpen}${previousHtml}</ul>`, patch);
-          if (patchedHtml !== `${containerOpen}${nextHtml}</ul>`) {
-            return {
-              kind: 'list',
-              op: 'replace-row',
-              route: patch.route,
-              list: patch.list,
-              key: patch.key,
-              row: nextRow,
-              html: nextHtml
-            };
-          }
-          return patch;
+          return {
+            kind: 'list',
+            op: 'replace-row',
+            route: patch.route,
+            list: patch.list,
+            key: patch.key,
+            row,
+            html,
+          };
         }
-
         if (patch.op !== 'insert' && patch.op !== 'replace-row') return patch;
         const html = renderedRows.get(patch.key);
         if (html === undefined) {
@@ -563,42 +656,36 @@ export class FsrWatcher {
         return { key, data: row, html };
       });
 
-      let patchedHtml: string | null = null;
       let patchedJson: any | null = null;
-      let needsReregistration = false;
-
-      if (snapshot.htmlPath) {
-        const originalHtml = await fs.readFile(snapshot.htmlPath, 'utf8');
-        originalFiles.set(snapshot.htmlPath, originalHtml);
-        needsReregistration = patches.some(
-          (patch) =>
-            patch.op === 'insert' && !originalHtml.includes(`data-kiln-list="${escapeAttribute(snapshot.name)}"`)
-        );
-        patchedHtml = patches.reduce((html, patch) => applyListPatchToHtml(html, patch), originalHtml);
-      }
 
       if (snapshot.jsonPath) {
         const originalJson = await fs.readFile(snapshot.jsonPath, 'utf8');
         originalFiles.set(snapshot.jsonPath, originalJson);
+        const parsed = JSON.parse(originalJson);
+        const data = parsed.data && typeof parsed.data === 'object' ? parsed.data : parsed;
         patchedJson = patches.reduce(
           (json, patch) => applyListPatchToJson(json, patch, target.keyOf),
-          JSON.parse(originalJson)
+          data,
         );
+        if (parsed.data && typeof parsed.data === 'object') {
+          parsed.data = patchedJson;
+          parsed.lists = {
+            ...(parsed.lists ?? {}),
+            [snapshot.name]: nextSnapshotRows.map((row) => ({ key: row.key, html: row.html })),
+          };
+          parsed.updatedAt = new Date().toISOString();
+          patchedJson = parsed;
+        }
       }
 
       if (this.redis) {
-        originalRedisHtml = await this.redis.getHtml(snapshot.route);
         originalRedisJson = await this.redis.getJson(snapshot.route);
       }
 
-      if (snapshot.htmlPath && patchedHtml !== null) {
-        await fs.writeFile(snapshot.htmlPath, patchedHtml, 'utf8');
-      }
       if (snapshot.jsonPath && patchedJson !== null) {
         await fs.writeFile(snapshot.jsonPath, JSON.stringify(patchedJson), 'utf8');
       }
       if (this.redis) {
-        if (patchedHtml !== null) await this.redis.setHtml(snapshot.route, patchedHtml);
         if (patchedJson !== null) await this.redis.setJson(snapshot.route, patchedJson);
       }
 
@@ -615,34 +702,16 @@ export class FsrWatcher {
         this.emitter.emit('patch', patch);
       }
 
-      if (needsReregistration) {
-        this.unregisterRoute(snapshot.route);
-      }
     } catch (err: any) {
       for (const [filePath, content] of originalFiles.entries()) {
         await fs.writeFile(filePath, content, 'utf8').catch(() => {});
       }
       if (this.redis) {
-        if (originalRedisHtml !== null) {
-          await this.redis.setHtml(snapshot.route, originalRedisHtml).catch(() => {});
-        }
         if (originalRedisJson !== null) {
           await this.redis.setJson(snapshot.route, originalRedisJson).catch(() => {});
         }
       }
       console.warn(`FSR watcher: failed to revalidate Live.list ${snapshot.route}/${snapshot.name}:`, err.message);
-    }
-  }
-
-  private async patchHtmlFileBatchReturning(htmlPath: string, patches: [string, any][]): Promise<string | null> {
-    try {
-      const html = await fs.readFile(htmlPath, 'utf8');
-      const patched = injectFsrSlots(html, patches);
-      await fs.writeFile(htmlPath, patched, 'utf8');
-      return patched;
-    } catch (err: any) {
-      console.warn(`FSR watcher: failed to patch HTML file at ${htmlPath}:`, err.message);
-      return null;
     }
   }
 
@@ -660,9 +729,11 @@ export class FsrWatcher {
       } catch {
         obj = {};
       }
+      const target = obj.data && typeof obj.data === 'object' ? obj.data : obj;
       for (const [slot, value] of patches) {
-        obj[slot] = value;
+        target[slot] = value;
       }
+      if ('updatedAt' in obj) obj.updatedAt = new Date().toISOString();
       await fs.writeFile(jsonPath, JSON.stringify(obj), 'utf8');
     } catch (err: any) {
       console.warn(`FSR watcher: failed to patch JSON file at ${jsonPath}:`, err.message);

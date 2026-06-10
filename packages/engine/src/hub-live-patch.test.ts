@@ -23,6 +23,7 @@ describe('fsrHubStream live patch payloads', () => {
     const received: any[] = [];
     const streamPromise = (async () => {
       for await (const item of gen) {
+        if (item.event === "ready") continue;
         received.push(item);
         if (received.length === 2) break;
       }
@@ -76,9 +77,12 @@ describe('fsrHubStream live patch payloads', () => {
       config: { maxConnections: 10, connectionTtlSecs: 10, keepaliveSecs: 10 }
     });
 
+    const first = await gen.next();
+    expect(first).toEqual({ done: false, value: { event: 'ready', data: '' } });
+    expect(watcher.getEmitter().listenerCount('patch')).toBe(1);
+
     const pending = gen.next();
     await Promise.resolve();
-    expect(watcher.getEmitter().listenerCount('patch')).toBe(1);
 
     controller.abort();
 

@@ -17,18 +17,20 @@ export class LiveProp<T> {
   public value: T;
   public dependsOn: string[];
   public patchDebounce?: number;
+  public revalidateSeconds?: number | false;
   public deliveryTarget: LiveTarget = 'dom';
 
   constructor(
     value: T,
     dependsOn: (string | DependencyKey)[] = [],
-    options?: { patchDebounce?: number; target?: LiveTarget }
+    options?: { patchDebounce?: number; revalidate?: number | false; target?: LiveTarget }
   ) {
     this.value = value;
     this.dependsOn = dependsOn.map((dep) =>
       typeof dep === 'string' ? dep : depToString(dep)
     );
     this.patchDebounce = options?.patchDebounce;
+    this.revalidateSeconds = options?.revalidate;
     if (options?.target) {
       this.deliveryTarget = options.target;
     }
@@ -47,13 +49,18 @@ export class LiveProp<T> {
     this.deliveryTarget = target;
     return this;
   }
+
+  public revalidate(seconds: number | false): this {
+    this.revalidateSeconds = seconds;
+    return this;
+  }
 }
 
 export const Live = {
   value<T>(
     value: T,
     dependsOn: (string | DependencyKey)[] = [],
-    options?: { patchDebounce?: number; target?: LiveTarget }
+    options?: { patchDebounce?: number; revalidate?: number | false; target?: LiveTarget }
   ): LiveProp<T> {
     return new LiveProp(value, dependsOn, options);
   },

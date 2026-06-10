@@ -59,7 +59,6 @@ export function ContactForm({
       <div className="contact-form__heading">
         <a
           href="/contacts"
-          s-html=""
           data-preserve-query
           className="mobile-back"
         >
@@ -94,7 +93,7 @@ export function ContactForm({
       </div>
       <p className="form-error" hidden data-form-message />
       <div className="form-actions">
-        <a className="button" href="/contacts" s-html="" data-preserve-query>
+        <a className="button" href="/contacts" data-preserve-query>
           Cancel
         </a>
         <button
