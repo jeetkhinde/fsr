@@ -28,11 +28,15 @@ This roadmap documents completed milestones, active feature branches, and future
 2.  **Mock Store Implementation**: Add the missing `setBakedPaths` method to the unit test mock store in `packages/routekit/src/boot.test.ts`.
 3.  **Fix Package-Wide No-Emit Errors**: Align typescript buffer typings, fix `drizzle-orm` / `bun-sql` dependencies, and fix CLI file system imports.
 
-### Phase 2: Feature Branch Consolidation
+### Phase 2: Configuration & Hook Hardening (Completed)
+1.  [x] **Remove Hardcoded Absolute Paths**: Replaced all hardcoded absolute repository paths inside `.claude/settings.json`, `.codex/config.toml`, `.codex/hooks.json`, `.gemini/settings.json`, `.mcp.json`, `.opencode.json`, `.vscode/mcp.json`, and Gemini shell hooks with relative (`.`) paths.
+2.  [x] **Standardise Post-Tool Git Hooks**: Created and registered executable Git `post-commit` and `post-merge` hooks running `code-review-graph update`.
+
+### Phase 3: Feature Branch Consolidation
 1.  **Merge i18n & Images**: Review type safety and merge the localisation (`KilnI18n`) and image manipulation (`/_image`) features from the `codex/kiln-v1-freshness` branch into the `main` branch.
 2.  **Export Client Assets**: Standardise package exports for `@kiln/client` so that `silcrow.js` is resolvable under monorepo workspace dependencies.
 
-### Phase 3: Hardening & Scalability
+### Phase 4: Hardening & Scalability
 1.  **Cache Partitioning (Personalisation)**: Introduce key namespaces or user session scopes for cached page artifacts. Since promoted paths bypass `load()`, the cache must be partitioned to prevent serving cached user-specific data to other visitors.
 2.  **External Watcher Pipeline**: Transition the watcher to execute in a decoupled, separate thread/process instead of running embedded in the application thread.
 3.  **Fine-Grained Debounce Scheduling**: Reconcile Redis watcher sweeps so that debounce sweeps correspond precisely to individual field invalidation windows rather than coarse intervals.

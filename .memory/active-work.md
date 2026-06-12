@@ -4,10 +4,10 @@ This file details the active task, branch checkpoints, and developer status.
 
 ## Current Objective
 
-*   **Establish Git-Based Context Persistence**:
-    *   Create a canonical, version-controlled repository memory directory (`.memory/`) containing decisions, system architecture details, known issues, and roadmap goals.
-    *   Eliminate dependency on machine-specific or tool-specific memory folders (e.g. EchoVault caches, untracked local settings, IDE memory states).
-    *   Commit `.memory/` to source control so context is shared across AI models (Gemini, Claude, Codex), workspaces, and branches.
+*   **Establish Git-Based Context Portability (Completed)**:
+    *   [x] Create a canonical, version-controlled repository memory directory (`.memory/`) containing decisions, system architecture details, known issues, and roadmap goals.
+    *   [x] Port all local AI configurations to use relative repository roots, enabling full multi-agent portability on clean checkouts.
+    *   [x] Standardise code-review-graph updates by registering standard Git `post-commit` and `post-merge` hooks.
 
 ---
 
