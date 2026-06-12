@@ -1,0 +1,3304 @@
+commit 2e0a0042ec978c2ee579ff246821c58f56d748e5
+Author: Jagjeet Singh <jeetkhinde@gmail.com>
+Date:   Fri Jun 12 10:23:44 2026 -0400
+
+    feat(fsr): adopt immutable segment shells
+
+diff --git a/examples/address-book/client/address-book.js b/examples/address-book/client/address-book.js
+index e4a98f2..702543d 100644
+--- a/examples/address-book/client/address-book.js
++++ b/examples/address-book/client/address-book.js
+@@ -16,6 +16,9 @@ function applySearch() {
+   const searchValue = input.value.trim();
+   const query = searchValue.toLowerCase();
+   const rows = [...document.querySelectorAll("[data-contact-row]")];
++  const count = document.querySelector("[data-directory-count]");
++  const countText = String(rows.length);
++  if (count && count.textContent !== countText) count.textContent = countText;
+   let visible = 0;
+ 
+   rows.forEach((row) => {
+@@ -230,6 +233,10 @@ function initForms() {
+           },
+         );
+         if (response.data?.ok && response.data.redirect) {
++          document
++            .querySelector('.contact-row[aria-current="page"]')
++            ?.closest("[data-contact-row]")
++            ?.remove();
+           followRedirect(response.data.redirect);
+         }
+       } finally {
+diff --git a/examples/address-book/components/AppShell.tsx b/examples/address-book/components/AppShell.tsx
+index 2189479..af664d7 100644
+--- a/examples/address-book/components/AppShell.tsx
++++ b/examples/address-book/components/AppShell.tsx
+@@ -1,23 +1,21 @@
+ import React from "react";
+-import type { ContactSummary } from "../db/types.js";
++import type { DirectoryContact } from "../db/types.js";
+ import { Directory } from "./Directory.js";
+ 
+ export function AppShell({
+   contacts,
+-  selectedId,
+   query,
+-  focusDetail = false,
++  shellClass,
+   children,
+ }: {
+-  contacts: ContactSummary[];
+-  selectedId?: string;
++  contacts: DirectoryContact[];
+   query: string;
+-  focusDetail?: boolean;
++  shellClass: string;
+   children: React.ReactNode;
+ }) {
+   return (
+-    <main className={`app-shell${focusDetail ? " app-shell--detail" : ""}`}>
+-      <Directory contacts={contacts} selectedId={selectedId} query={query} />
++    <main className={shellClass} data-kiln-attr-class="shellClass">
++      <Directory contacts={contacts} query={query} />
+       <section className="detail-pane" id="detail">
+         {children}
+       </section>
+diff --git a/examples/address-book/components/Avatar.tsx b/examples/address-book/components/Avatar.tsx
+index 945c950..1d0098d 100644
+--- a/examples/address-book/components/Avatar.tsx
++++ b/examples/address-book/components/Avatar.tsx
+@@ -1,40 +1,55 @@
+ import React from "react";
+-import { getContactInitials, getContactName } from "../db/presentation.js";
+-import type { Contact } from "../db/types.js";
+ 
+-type AvatarContact = Pick<
+-  Contact,
+-  "id" | "firstName" | "lastName" | "avatarUrl"
+->;
++interface AvatarView {
++  initials: string;
++  avatarStyle: string;
++  avatarUrl: string;
++  avatarAlt: string;
++  avatarHidden: boolean;
++}
+ 
+ export function Avatar({
+   contact,
++  bindingPrefix,
+   size = "row",
+ }: {
+-  contact: AvatarContact;
++  contact?: AvatarView;
++  bindingPrefix: string;
+   size?: "row" | "hero";
+ }) {
+-  const initials = getContactInitials(contact);
+-  const hue = Number((BigInt(contact.id) * 47n) % 360n);
+-
+   return (
+     <span
+       className={`avatar avatar--${size}`}
+       data-avatar
+-      style={{ "--avatar-hue": hue } as React.CSSProperties}
++      style={
++        contact
++          ? ({
++              "--avatar-hue": contact.avatarStyle
++                .replace("--avatar-hue:", "")
++                .trim(),
++            } as React.CSSProperties)
++          : undefined
++      }
++      data-kiln-attr-style={`${bindingPrefix}.avatarStyle`}
+     >
+-      <span className="avatar__fallback" aria-hidden="true">
+-        {initials}
++      <span
++        className="avatar__fallback"
++        aria-hidden="true"
++        data-kiln-text={`${bindingPrefix}.initials`}
++      >
++        {contact?.initials}
+       </span>
+-      {contact.avatarUrl ? (
+-        <img
+-          className="avatar__image"
+-          src={contact.avatarUrl}
+-          alt={`${getContactName(contact)} portrait`}
+-          loading="lazy"
+-          referrerPolicy="no-referrer"
+-        />
+-      ) : null}
++      <img
++        className="avatar__image"
++        src={contact?.avatarUrl || undefined}
++        alt={contact?.avatarAlt || ""}
++        hidden={contact?.avatarHidden ?? true}
++        loading="lazy"
++        referrerPolicy="no-referrer"
++        data-kiln-attr-src={`${bindingPrefix}.avatarUrl`}
++        data-kiln-attr-alt={`${bindingPrefix}.avatarAlt`}
++        data-kiln-attr-hidden={`${bindingPrefix}.avatarHidden`}
++      />
+     </span>
+   );
+ }
+diff --git a/examples/address-book/components/ContactDetail.tsx b/examples/address-book/components/ContactDetail.tsx
+index 6fe713c..82c9cf1 100644
+--- a/examples/address-book/components/ContactDetail.tsx
++++ b/examples/address-book/components/ContactDetail.tsx
+@@ -1,9 +1,8 @@
+ import React from "react";
+-import { getContactName } from "../db/presentation.js";
+-import type { Contact } from "../db/types.js";
++import type { ContactView } from "../db/types.js";
+ import { Avatar } from "./Avatar.js";
+ 
+-export function ContactDetail({ contact }: { contact: Contact }) {
++export function ContactDetail({ contact }: { contact: ContactView }) {
+   return (
+     <article className="contact-detail">
+       <header className="detail-toolbar">
+@@ -17,8 +16,8 @@ export function ContactDetail({ contact }: { contact: Contact }) {
+         <div className="detail-toolbar__actions">
+           <a
+             className="button"
+-            href={`/contacts/${contact.id}/edit`}
+             data-preserve-query
++            data-kiln-attr-href="contact.editHref"
+           >
+             Edit contact
+           </a>
+@@ -30,57 +29,64 @@ export function ContactDetail({ contact }: { contact: Contact }) {
+         </div>
+       </header>
+       <section className="profile">
+-        <Avatar contact={contact} size="hero" />
++        <Avatar contact={contact} bindingPrefix="contact" size="hero" />
+         <div className="profile__copy">
+           <div className="profile__name">
+-            <h1>{getContactName(contact)}</h1>
++            <h1 data-kiln-text="contact.name">{contact.name}</h1>
+             <form method="post" action="?/favorite" data-favorite-form>
+               <input
+                 type="hidden"
+                 name="favorite"
+-                value={contact.favorite ? "false" : "true"}
++                value={contact.favoriteNextValue}
++                data-kiln-attr-value="contact.favoriteNextValue"
+               />
+               <button
+                 className="favorite-button"
+                 type="submit"
+-                aria-label={
+-                  contact.favorite
+-                    ? "Remove from favorites"
+-                    : "Add to favorites"
+-                }
++                aria-label={contact.favoriteLabel}
+                 aria-pressed={contact.favorite}
++                data-kiln-attr-aria-label="contact.favoriteLabel"
++                data-kiln-attr-aria-pressed="contact.favorite"
++                data-kiln-text="contact.favoriteGlyph"
+               >
+-                {contact.favorite ? "★" : "☆"}
++                {contact.favoriteGlyph}
+               </button>
+             </form>
+           </div>
+-          <p>
+-            {[contact.role, contact.company, contact.location]
+-              .filter(Boolean)
+-              .join(" · ")}
+-          </p>
++          <p data-kiln-text="contact.summary">{contact.summary}</p>
+           <div className="profile__links">
+-            {contact.website ? (
+-              <a href={contact.website} target="_blank" rel="noreferrer">
+-                Website
+-              </a>
+-            ) : null}
+-            {contact.handle ? <span>{contact.handle}</span> : null}
++            <a
++              href={contact.website}
++              target="_blank"
++              rel="noreferrer"
++              hidden={contact.websiteHidden}
++              data-kiln-attr-href="contact.website"
++              data-kiln-attr-hidden="contact.websiteHidden"
++            >
++              Website
++            </a>
++            <span
++              hidden={contact.handleHidden}
++              data-kiln-attr-hidden="contact.handleHidden"
++              data-kiln-text="contact.handle"
++            >
++              {contact.handle}
++            </span>
+           </div>
+         </div>
+       </section>
+       <dl className="contact-info">
+         <div>
+           <dt>Email</dt>
+-          <dd>{contact.email || "Not provided"}</dd>
++          <dd data-kiln-text="contact.emailLabel">{contact.emailLabel}</dd>
+         </div>
+         <div>
+           <dt>Phone</dt>
+-          <dd>{contact.phone || "Not provided"}</dd>
++          <dd data-kiln-text="contact.phoneLabel">{contact.phoneLabel}</dd>
+         </div>
+         <div className="contact-info__notes">
+           <dt>Notes</dt>
+-          <dd>{contact.notes || "No notes yet."}</dd>
++          <dd data-kiln-text="contact.notesLabel">{contact.notesLabel}</dd>
+         </div>
+       </dl>
+     </article>
+diff --git a/examples/address-book/components/ContactForm.tsx b/examples/address-book/components/ContactForm.tsx
+index 5b35344..8032565 100644
+--- a/examples/address-book/components/ContactForm.tsx
++++ b/examples/address-book/components/ContactForm.tsx
+@@ -20,11 +20,13 @@ export function ContactForm({
+   values = emptyValues,
+   errors = {},
+   submitLabel,
++  bindingPrefix,
+ }: {
+   action: string;
+   values?: ContactFormValues;
+   errors?: ContactFieldErrors;
+   submitLabel: string;
++  bindingPrefix?: string;
+ }) {
+   const field = (
+     name: keyof ContactFormValues,
+@@ -37,6 +39,9 @@ export function ContactForm({
+         name={name}
+         type={type}
+         defaultValue={values[name]}
++        data-kiln-attr-value={
++          bindingPrefix ? `${bindingPrefix}.${name}` : undefined
++        }
+         aria-invalid={Boolean(errors[name])}
+         aria-describedby={errors[name] ? `${name}-error` : undefined}
+       />
+@@ -83,6 +88,9 @@ export function ContactForm({
+           <textarea
+             name="notes"
+             defaultValue={values.notes}
++            data-kiln-text={
++              bindingPrefix ? `${bindingPrefix}.notes` : undefined
++            }
+             maxLength={2000}
+             rows={6}
+           />
+diff --git a/examples/address-book/components/Directory.tsx b/examples/address-book/components/Directory.tsx
+index 7274c80..086fd15 100644
+--- a/examples/address-book/components/Directory.tsx
++++ b/examples/address-book/components/Directory.tsx
+@@ -1,19 +1,14 @@
+ import React from "react";
+-import type { ContactSummary } from "../db/types.js";
+-import { getContactName, getContactSearchText } from "../db/presentation.js";
++import type { DirectoryContact } from "../db/types.js";
+ import { Avatar } from "./Avatar.js";
+ 
+ export function Directory({
+   contacts,
+-  selectedId,
+   query,
+ }: {
+-  contacts: ContactSummary[];
+-  selectedId?: string;
++  contacts: DirectoryContact[];
+   query: string;
+ }) {
+-  let previousFavorite: boolean | undefined;
+-
+   return (
+     <aside className="directory" aria-label="Contact directory">
+       <div className="directory__header">
+@@ -35,64 +30,71 @@ export function Directory({
+           type="search"
+           name="q"
+           defaultValue={query}
++          data-kiln-attr-value="query"
+           placeholder="Search people"
+           autoComplete="off"
+           data-contact-search-input
+         />
+       </label>
+       <p className="sr-only" aria-live="polite" data-search-status />
+-      <ul className="directory__list" data-contact-list>
+-        {contacts.map((contact) => {
+-          const showSection = previousFavorite !== contact.favorite;
+-          previousFavorite = contact.favorite;
+-          return (
+-            <li
+-              key={contact.id}
+-              className="directory__item"
+-              data-contact-row
+-              data-search={getContactSearchText(contact)}
++      <ul
++        className="directory__list"
++        data-contact-list
++        data-kiln-list="contacts"
++        data-kiln-live="/contacts"
++      >
++        <template
++          data-kiln-each="contacts"
++          data-kiln-as="contact"
++          data-kiln-key="id"
++        >
++          <li
++            className="directory__item"
++            data-contact-row
++            data-kiln-attr-data-search="contact.searchText"
++          >
++            <span
++              className="directory__section"
++              data-section-label
++              hidden
++              data-kiln-attr-data-section="contact.section"
++              data-kiln-attr-hidden="contact.sectionHidden"
++              data-kiln-text="contact.sectionLabel"
+             >
+-              <span
+-                className="directory__section"
+-                data-section-label
+-                data-section={contact.favorite ? "favorites" : "all"}
+-                hidden={!showSection}
+-              >
+-                {contact.favorite ? "Favorites" : "All contacts"}
++              Section
++            </span>
++            <a
++              className="contact-row"
++              data-preserve-query
++              data-kiln-attr-href="contact.href"
++            >
++              <Avatar bindingPrefix="contact" />
++              <span className="contact-row__copy">
++                <strong data-kiln-text="contact.name">Contact</strong>
++                <small data-kiln-text="contact.subtitle" />
+               </span>
+-              <a
+-                className="contact-row"
+-                href={`/contacts/${contact.id}`}
+-                data-preserve-query
+-                aria-current={selectedId === contact.id ? "page" : undefined}
++              <span
++                className="contact-row__favorite"
++                aria-label="Favorite"
++                hidden
++                data-kiln-attr-hidden="contact.favoriteHidden"
+               >
+-                <Avatar contact={contact} />
+-                <span className="contact-row__copy">
+-                  <strong>{getContactName(contact)}</strong>
+-                  <small>
+-                    {[contact.role, contact.company]
+-                      .filter(Boolean)
+-                      .join(" · ")}
+-                  </small>
+-                </span>
+-                {contact.favorite ? (
+-                  <span className="contact-row__favorite" aria-label="Favorite">
+-                    ★
+-                  </span>
+-                ) : null}
+-              </a>
+-              <span hidden>
+-                {contact.email} {contact.handle}
++                ★
+               </span>
+-            </li>
+-          );
+-        })}
++            </a>
++          </li>
++        </template>
+       </ul>
+       <div className="directory__empty" hidden data-search-empty>
+         No contacts match this search.
+       </div>
+       <footer className="directory__footer">
+-        <span>{contacts.length} people</span>
++        <span>
++          <span data-directory-count data-kiln-text="contacts.length">
++            {contacts.length}
++          </span>{" "}
++          people
++        </span>
+         <span>Live updates enabled</span>
+       </footer>
+     </aside>
+diff --git a/examples/address-book/db/presentation.ts b/examples/address-book/db/presentation.ts
+index 6261024..9b3e35a 100644
+--- a/examples/address-book/db/presentation.ts
++++ b/examples/address-book/db/presentation.ts
+@@ -1,4 +1,9 @@
+-import type { Contact, ContactSummary } from "./types.js";
++import type {
++  Contact,
++  ContactSummary,
++  ContactView,
++  DirectoryContact,
++} from "./types.js";
+ 
+ type SearchableContact = Pick<
+   Contact,
+@@ -49,6 +54,88 @@ export function getContactSearchText(contact: SearchableContact): string {
+     .toLowerCase();
+ }
+ 
++function getAvatarStyle(id: string): string {
++  const hue = id ? Number((BigInt(id) * 47n) % 360n) : 0;
++  return `--avatar-hue: ${hue}`;
++}
++
++export function toDirectoryContacts(
++  contacts: ContactSummary[],
++): DirectoryContact[] {
++  let previousFavorite: boolean | undefined;
++
++  return contacts.map((contact) => {
++    const sectionHidden = previousFavorite === contact.favorite;
++    previousFavorite = contact.favorite;
++    const name = getContactName(contact);
++
++    return {
++      ...contact,
++      name,
++      subtitle: [contact.role, contact.company].filter(Boolean).join(" · "),
++      searchText: getContactSearchText(contact),
++      href: `/contacts/${contact.id}`,
++      initials: getContactInitials(contact),
++      avatarStyle: getAvatarStyle(contact.id),
++      avatarAlt: `${name} portrait`,
++      avatarHidden: !contact.avatarUrl,
++      favoriteHidden: !contact.favorite,
++      section: contact.favorite ? "favorites" : "all",
++      sectionLabel: contact.favorite ? "Favorites" : "All contacts",
++      sectionHidden,
++    };
++  });
++}
++
++const emptyContact: Contact = {
++  id: "",
++  firstName: "",
++  lastName: "",
++  company: "",
++  role: "",
++  email: "",
++  phone: "",
++  location: "",
++  handle: "",
++  website: "",
++  avatarUrl: "",
++  notes: "",
++  favorite: false,
++  createdAt: "",
++  updatedAt: "",
++};
++
++export function toContactView(contact: Contact | null): ContactView {
++  const value = contact ?? emptyContact;
++  const missing = contact === null;
++  const name = getContactName(value);
++
++  return {
++    ...value,
++    name,
++    summary: [value.role, value.company, value.location]
++      .filter(Boolean)
++      .join(" · "),
++    editHref: contact ? `/contacts/${value.id}/edit` : "/contacts",
++    initials: getContactInitials(value),
++    avatarStyle: getAvatarStyle(value.id),
++    avatarAlt: `${name} portrait`,
++    avatarHidden: !value.avatarUrl,
++    favoriteNextValue: value.favorite ? "false" : "true",
++    favoriteLabel: value.favorite
++      ? "Remove from favorites"
++      : "Add to favorites",
++    favoriteGlyph: value.favorite ? "★" : "☆",
++    websiteHidden: !value.website,
++    handleHidden: !value.handle,
++    emailLabel: value.email || "Not provided",
++    phoneLabel: value.phone || "Not provided",
++    notesLabel: value.notes || "No notes yet.",
++    hidden: missing,
++    missingHidden: !missing,
++  };
++}
++
+ export function sortContacts<T extends ContactSummary>(contacts: T[]): T[] {
+   return [...contacts].sort(
+     (left, right) =>
+diff --git a/examples/address-book/db/types.ts b/examples/address-book/db/types.ts
+index e59d38a..60f3471 100644
+--- a/examples/address-book/db/types.ts
++++ b/examples/address-book/db/types.ts
+@@ -29,6 +29,41 @@ export type ContactSummary = Pick<
+   | "favorite"
+ >;
+ 
++export interface DirectoryContact extends ContactSummary {
++  name: string;
++  subtitle: string;
++  searchText: string;
++  href: string;
++  initials: string;
++  avatarStyle: string;
++  avatarAlt: string;
++  avatarHidden: boolean;
++  favoriteHidden: boolean;
++  section: "favorites" | "all";
++  sectionLabel: "Favorites" | "All contacts";
++  sectionHidden: boolean;
++}
++
++export interface ContactView extends Contact {
++  name: string;
++  summary: string;
++  editHref: string;
++  initials: string;
++  avatarStyle: string;
++  avatarAlt: string;
++  avatarHidden: boolean;
++  favoriteNextValue: string;
++  favoriteLabel: string;
++  favoriteGlyph: string;
++  websiteHidden: boolean;
++  handleHidden: boolean;
++  emailLabel: string;
++  phoneLabel: string;
++  notesLabel: string;
++  hidden: boolean;
++  missingHidden: boolean;
++}
++
+ export type ContactInput = Omit<
+   Contact,
+   "id" | "favorite" | "createdAt" | "updatedAt"
+diff --git a/examples/address-book/features/contacts/live.ts b/examples/address-book/features/contacts/live.ts
+index 5e5d495..e112c85 100644
+--- a/examples/address-book/features/contacts/live.ts
++++ b/examples/address-book/features/contacts/live.ts
+@@ -1,12 +1,14 @@
+ import type { SQL } from "bun";
+ import { Live } from "@kiln/core";
+ import { listContactSummaries } from "../../db/contacts.js";
+-import type { ContactSummary } from "../../db/types.js";
++import { toDirectoryContacts } from "../../db/presentation.js";
++import type { DirectoryContact } from "../../db/types.js";
+ 
+ export function contactsLiveList() {
+-  return Live.list<ContactSummary>({
++  return Live.list<DirectoryContact>({
+     key: (contact) => contact.id,
+     dependsOn: "contact_events",
+-    query: async ({ sql }) => listContactSummaries(sql as SQL),
++    query: async ({ sql }) =>
++      toDirectoryContacts(await listContactSummaries(sql as SQL)),
+   });
+ }
+diff --git a/examples/address-book/package.json b/examples/address-book/package.json
+index 85ed624..262f4ea 100644
+--- a/examples/address-book/package.json
++++ b/examples/address-book/package.json
+@@ -7,7 +7,7 @@
+     "dev": "bun --watch src/main.ts",
+     "build": "tsc --noEmit",
+     "db:migrate": "bun scripts/migrate.ts",
+-    "test": "bun test db/validation.test.ts tests/routes.test.ts",
++    "test": "bun test db/validation.test.ts tests/routes.test.ts tests/fsr-dx.test.tsx",
+     "test:db": "bun --env-file=.env db/contacts.integration.test.ts",
+     "test:e2e": "playwright test"
+   },
+diff --git a/examples/address-book/pages/contacts/[id]/edit.tsx b/examples/address-book/pages/contacts/[id]/edit.tsx
+index b8f3445..d258894 100644
+--- a/examples/address-book/pages/contacts/[id]/edit.tsx
++++ b/examples/address-book/pages/contacts/[id]/edit.tsx
+@@ -4,11 +4,12 @@ import { ContactForm } from "../../../components/ContactForm.js";
+ import { EmptyDetail } from "../../../components/EmptyDetail.js";
+ import { sql } from "../../../db/client.js";
+ import { getContact, updateContact } from "../../../db/contacts.js";
++import { toContactView } from "../../../db/presentation.js";
+ import { validateContactForm } from "../../../db/validation.js";
+ 
+ export async function load(req: KilnRequest) {
+   return {
+-    contact: await getContact(sql, req.params.id),
++    contact: toContactView(await getContact(sql, req.params.id)),
+   };
+ }
+ 
+@@ -36,13 +37,27 @@ export const actions = {
+ export default function EditContactPage({
+   contact,
+ }: Awaited<ReturnType<typeof load>>) {
+-  return contact ? (
+-    <ContactForm
+-      action="?/update"
+-      submitLabel="Save changes"
+-      values={contact}
+-    />
+-  ) : (
+-    <EmptyDetail missing />
++  return (
++    <>
++      <div
++        hidden={contact.hidden}
++        data-kiln-attr-hidden="contact.hidden"
++        style={{ display: "contents" }}
++      >
++        <ContactForm
++          action="?/update"
++          submitLabel="Save changes"
++          values={contact}
++          bindingPrefix="contact"
++        />
++      </div>
++      <div
++        hidden={contact.missingHidden}
++        data-kiln-attr-hidden="contact.missingHidden"
++        style={{ display: "contents" }}
++      >
++        <EmptyDetail missing />
++      </div>
++    </>
+   );
+ }
+diff --git a/examples/address-book/pages/contacts/[id]/index.tsx b/examples/address-book/pages/contacts/[id]/index.tsx
+index f14a8a9..104abfa 100644
+--- a/examples/address-book/pages/contacts/[id]/index.tsx
++++ b/examples/address-book/pages/contacts/[id]/index.tsx
+@@ -8,10 +8,11 @@ import {
+   getContact,
+   toggleFavorite,
+ } from "../../../db/contacts.js";
++import { toContactView } from "../../../db/presentation.js";
+ 
+ export async function load(req: KilnRequest) {
+   return {
+-    contact: await getContact(sql, req.params.id),
++    contact: toContactView(await getContact(sql, req.params.id)),
+   };
+ }
+ 
+@@ -39,5 +40,22 @@ export const actions = {
+ export default function ContactPage({
+   contact,
+ }: Awaited<ReturnType<typeof load>>) {
+-  return contact ? <ContactDetail contact={contact} /> : <EmptyDetail missing />;
++  return (
++    <>
++      <div
++        hidden={contact.hidden}
++        data-kiln-attr-hidden="contact.hidden"
++        style={{ display: "contents" }}
++      >
++        <ContactDetail contact={contact} />
++      </div>
++      <div
++        hidden={contact.missingHidden}
++        data-kiln-attr-hidden="contact.missingHidden"
++        style={{ display: "contents" }}
++      >
++        <EmptyDetail missing />
++      </div>
++    </>
++  );
+ }
+diff --git a/examples/address-book/pages/contacts/_layout.tsx b/examples/address-book/pages/contacts/_layout.tsx
+index 63b9714..83e3dc7 100644
+--- a/examples/address-book/pages/contacts/_layout.tsx
++++ b/examples/address-book/pages/contacts/_layout.tsx
+@@ -12,24 +12,22 @@ export function load(req: KilnRequest) {
+   return {
+     contacts: contactsLiveList(),
+     query: req.query.q ?? "",
+-    selectedId: req.params.id,
+-    focusDetail: req.path !== "/contacts",
++    shellClass:
++      req.path === "/contacts" ? "app-shell" : "app-shell app-shell--detail",
+   };
+ }
+ 
+ export default function ContactsLayout({
+   contacts,
+   query,
+-  selectedId,
+-  focusDetail,
++  shellClass,
+   children,
+ }: Awaited<ReturnType<typeof load>> & { children: React.ReactNode }) {
+   return (
+     <AppShell
+       contacts={contacts}
+       query={query}
+-      selectedId={selectedId}
+-      focusDetail={focusDetail}
++      shellClass={shellClass}
+     >
+       {children}
+     </AppShell>
+diff --git a/examples/address-book/playwright.config.ts b/examples/address-book/playwright.config.ts
+index 8a05f39..47a8033 100644
+--- a/examples/address-book/playwright.config.ts
++++ b/examples/address-book/playwright.config.ts
+@@ -1,5 +1,8 @@
+ import { defineConfig, devices } from "@playwright/test";
+ 
++const port = Number(process.env.PORT ?? 3100);
++const baseURL = `http://127.0.0.1:${port}`;
++
+ export default defineConfig({
+   testDir: "./tests",
+   testMatch: "address-book.spec.ts",
+@@ -7,12 +10,12 @@ export default defineConfig({
+   fullyParallel: false,
+   workers: 1,
+   use: {
+-    baseURL: "http://127.0.0.1:3100",
++    baseURL,
+     trace: "retain-on-failure",
+   },
+   webServer: {
+     command: "bun run db:migrate && bun run dev",
+-    url: "http://127.0.0.1:3100/contacts",
++    url: `${baseURL}/contacts`,
+     reuseExistingServer: true,
+     timeout: 60_000,
+   },
+diff --git a/examples/address-book/tests/address-book.spec.ts b/examples/address-book/tests/address-book.spec.ts
+index 986cad1..2459995 100644
+--- a/examples/address-book/tests/address-book.spec.ts
++++ b/examples/address-book/tests/address-book.spec.ts
+@@ -1,5 +1,7 @@
+ import { expect, test } from "@playwright/test";
+ 
++const liveTimeout = 25_000;
++
+ test("search synchronizes q and filters rows", async ({ page }) => {
+   await page.goto("/contacts");
+   const search = page.getByPlaceholder("Search people");
+@@ -32,14 +34,16 @@ test("navigation preserves the contacts layout and fetches a fragment", async ({
+ });
+ 
+ test("creates, edits, favorites, and deletes a contact", async ({ page }) => {
++  const lastName = `Stone-${crypto.randomUUID().slice(0, 8)}`;
++  const displayName = `Avery ${lastName}`;
+   await page.goto("/contacts/new");
+   await page.getByLabel("First name").fill("Avery");
+-  await page.getByLabel("Last name").fill("Stone");
++  await page.getByLabel("Last name").fill(lastName);
+   await page.getByLabel("Role").fill("Editor");
+   await page.getByRole("button", { name: "Create contact" }).click();
+   await expect(page).toHaveURL(/\/contacts\/\d+$/);
+   await expect(
+-    page.getByRole("heading", { name: "Avery Stone" }),
++    page.getByRole("heading", { name: displayName }),
+   ).toBeVisible();
+ 
+   await page.getByRole("link", { name: "Edit contact" }).click();
+@@ -57,7 +61,9 @@ test("creates, edits, favorites, and deletes a contact", async ({ page }) => {
+   page.once("dialog", (dialog) => dialog.accept());
+   await page.getByRole("button", { name: "Delete" }).click();
+   await expect(page).toHaveURL("/contacts");
+-  await expect(page.getByRole("link", { name: /Avery Stone/ })).toHaveCount(0);
++  await expect(
++    page.getByRole("link", { name: new RegExp(displayName) }),
++  ).toHaveCount(0, { timeout: liveTimeout });
+ });
+ 
+ test("shows validation errors and portrait fallback", async ({ page }) => {
+@@ -77,7 +83,10 @@ test("reconciles insert, update, reorder, and delete across tabs", async ({
+   browser,
+ }) => {
+   test.setTimeout(75_000);
+-  const liveTimeout = 15_000;
++  const lastName = `Aaron-${crypto.randomUUID().slice(0, 8)}`;
++  const displayName = `Cross ${lastName}`;
++  const contactLink = (page: import("@playwright/test").Page) =>
++    page.getByRole("link", { name: new RegExp(displayName) });
+   const context = await browser.newContext();
+   const left = await context.newPage();
+   const right = await context.newPage();
+@@ -85,30 +94,30 @@ test("reconciles insert, update, reorder, and delete across tabs", async ({
+ 
+   await left.goto("/contacts/new");
+   await left.getByLabel("First name").fill("Cross");
+-  await left.getByLabel("Last name").fill("Aaron");
++  await left.getByLabel("Last name").fill(lastName);
+   await left.getByRole("button", { name: "Create contact" }).click();
+ 
+-  await expect(right.getByRole("link", { name: /Cross Aaron/ })).toBeVisible({
++  await expect(contactLink(right)).toBeVisible({
+     timeout: liveTimeout,
+   });
+ 
+   await left.getByRole("link", { name: "Edit contact" }).click();
+   await left.getByLabel("Role").fill("Cross-tab Director");
+   await left.getByRole("button", { name: "Save changes" }).click();
+-  await expect(right.getByRole("link", { name: /Cross Aaron/ })).toContainText(
++  await expect(contactLink(right)).toContainText(
+     "Cross-tab Director",
+     { timeout: liveTimeout },
+   );
+ 
+   await left.getByRole("button", { name: "Add to favorites" }).click();
+   await expect(right.locator("[data-contact-row]").first()).toContainText(
+-    "Cross Aaron",
++    displayName,
+     { timeout: liveTimeout },
+   );
+ 
+   left.once("dialog", (dialog) => dialog.accept());
+   await left.getByRole("button", { name: "Delete" }).click();
+-  await expect(right.getByRole("link", { name: /Cross Aaron/ })).toHaveCount(0, {
++  await expect(contactLink(right)).toHaveCount(0, {
+     timeout: liveTimeout,
+   });
+ 
+diff --git a/examples/address-book/tests/fsr-dx.test.tsx b/examples/address-book/tests/fsr-dx.test.tsx
+new file mode 100644
+index 0000000..1d2d540
+--- /dev/null
++++ b/examples/address-book/tests/fsr-dx.test.tsx
+@@ -0,0 +1,102 @@
++import { describe, expect, it } from "bun:test";
++import {
++  bakeFragment,
++  createBakedSnapshot,
++  createImmutableShell,
++  materializeBakedShell,
++} from "@kiln/engine";
++import { ContactDetail } from "../components/ContactDetail.js";
++import { Directory } from "../components/Directory.js";
++import {
++  toContactView,
++  toDirectoryContacts,
++} from "../db/presentation.js";
++import type { Contact } from "../db/types.js";
++import ContactPage from "../pages/contacts/[id]/index.js";
++
++const ada: Contact = {
++  id: "42",
++  firstName: "Ada",
++  lastName: "Lovelace",
++  company: "Analytical Engines",
++  role: "Programmer",
++  email: "ada@example.com",
++  phone: "+44 20 7946 0958",
++  location: "London",
++  handle: "@ada",
++  website: "https://example.com/ada",
++  avatarUrl: "https://images.example.com/ada.jpg",
++  notes: "Writes programs for engines.",
++  favorite: true,
++  createdAt: "2026-01-01T00:00:00.000Z",
++  updatedAt: "2026-01-01T00:00:00.000Z",
++};
++
++describe("address book FSR authoring contract", () => {
++  it("authors the directory as an immutable keyed collection shell", async () => {
++    const contacts = toDirectoryContacts([ada]);
++    const rendered = await bakeFragment(Directory, {
++      contacts,
++      query: "Ada",
++    });
++    const shell = createImmutableShell(rendered);
++
++    expect(shell).toContain('data-kiln-list="contacts"');
++    expect(shell).toContain('data-kiln-live="/contacts"');
++    expect(shell).toContain('template data-kiln-each="contacts"');
++    expect(shell).toContain('data-kiln-key="id"');
++    expect(shell).toContain('data-kiln-text="contact.name"');
++    expect(shell).toContain(
++      'data-kiln-attr-data-search="contact.searchText"',
++    );
++    expect(shell).not.toContain("Ada Lovelace");
++
++    const materialized = materializeBakedShell(
++      shell,
++      createBakedSnapshot({ contacts, query: "Ada" }),
++    );
++    expect(materialized).toContain('data-kiln-key="42"');
++    expect(materialized).toContain("Ada Lovelace");
++    expect(materialized).toContain('href="/contacts/42"');
++  });
++
++  it("authors contact details as scalar and attribute bindings", async () => {
++    const contact = toContactView(ada);
++    const rendered = await bakeFragment(ContactDetail, { contact });
++    const shell = createImmutableShell(rendered);
++
++    expect(shell).toContain('data-kiln-text="contact.name"');
++    expect(shell).toContain('data-kiln-attr-href="contact.editHref"');
++    expect(shell).toContain(
++      'data-kiln-attr-aria-pressed="contact.favorite"',
++    );
++    expect(shell).not.toContain("Ada Lovelace");
++
++    const materialized = materializeBakedShell(
++      shell,
++      createBakedSnapshot({ contact }),
++    );
++    expect(materialized).toContain("Ada Lovelace");
++    expect(materialized).toContain('href="/contacts/42/edit"');
++    expect(materialized).toContain("aria-pressed");
++    expect(materialized).toContain(
++      'src="https://images.example.com/ada.jpg"',
++    );
++    expect(materialized).not.toContain("/ src=");
++  });
++
++  it("keeps the dynamic contact route shell identical for found and missing rows", async () => {
++    const foundShell = createImmutableShell(
++      await bakeFragment(ContactPage, { contact: toContactView(ada) }),
++    );
++    const missingShell = createImmutableShell(
++      await bakeFragment(ContactPage, { contact: toContactView(null) }),
++    );
++
++    expect(foundShell).toBe(missingShell);
++    expect(foundShell).toContain('data-kiln-attr-hidden="contact.hidden"');
++    expect(foundShell).toContain(
++      'data-kiln-attr-hidden="contact.missingHidden"',
++    );
++  });
++});
+diff --git a/examples/address-book/tests/routes.test.ts b/examples/address-book/tests/routes.test.ts
+index a86d815..b89ad7c 100644
+--- a/examples/address-book/tests/routes.test.ts
++++ b/examples/address-book/tests/routes.test.ts
+@@ -52,6 +52,7 @@ describe("address book routes", () => {
+       path: "/contacts/999999999",
+       params: { id: "999999999" },
+     } as any);
+-    expect(result.contact).toBeNull();
++    expect(result.contact.hidden).toBe(true);
++    expect(result.contact.missingHidden).toBe(false);
+   });
+ });
+diff --git a/packages/client/src/live-patch-runtime.test.ts b/packages/client/src/live-patch-runtime.test.ts
+index b4ef949..35a025d 100644
+--- a/packages/client/src/live-patch-runtime.test.ts
++++ b/packages/client/src/live-patch-runtime.test.ts
+@@ -14,8 +14,15 @@ describe("@kiln/client live patch runtime", () => {
+     expect(runtime).toContain("data-kiln-field");
+     expect(runtime).toContain("data-kiln-list");
+     expect(runtime).toContain("data-kiln-key");
++    expect(runtime).toContain("data-kiln-text");
++    expect(runtime).toContain("data-kiln-each");
++    expect(runtime).toContain("function parseBindings(el)");
++    expect(runtime).toContain("for (const { path, prop } of parseBindings(el))");
++    expect(runtime).toContain("matchingRows.slice(1)");
++    expect(runtime).toContain("matchingRows.forEach(function(node) { node.remove(); })");
+     expect(runtime).toContain("el.querySelectorAll('[data-kiln-list]')");
+     expect(runtime).toContain("data-kiln-live-lists");
+-    expect(runtime).toContain("location.reload()");
++    expect(runtime).not.toContain("safeSetHTML(insertBox, data.html)");
++    expect(runtime).not.toContain("safeSetHTML(replaceBox, data.html)");
+   });
+ });
+diff --git a/packages/client/src/silcrow.js b/packages/client/src/silcrow.js
+index 39634b7..0dc0689 100644
+--- a/packages/client/src/silcrow.js
++++ b/packages/client/src/silcrow.js
+@@ -707,9 +707,23 @@ function setValue(el, prop, value) {
+   }
+ }
+ 
+-function parseBind(el) {
++function parseBindings(el) {
++  const bindings = [];
++  const kilnText = el.getAttribute("data-kiln-text");
++  if (kilnText) bindings.push({ path: kilnText, prop: "text" });
++
++  for (const attr of el.attributes) {
++    if (attr.name.startsWith("data-kiln-attr-")) {
++      bindings.push({
++        path: attr.value,
++        prop: attr.name.slice("data-kiln-attr-".length),
++      });
++    }
++  }
++  if (bindings.length > 0) return bindings;
++
+   const spreadPath = el.getAttribute("s-use");
+-  if (spreadPath) return { path: spreadPath, prop: null };
++  if (spreadPath) return [{ path: spreadPath, prop: null }];
+ 
+   for (const attr of el.attributes) {
+     if (attr.name.startsWith(":") && attr.name !== ":key") {
+@@ -718,34 +732,39 @@ function parseBind(el) {
+         warn('Blocked dangerous binding: :' + prop);
+         continue;
+       }
+-      return { path: attr.value, prop };
++      bindings.push({ path: attr.value, prop });
+     }
+   }
+-  return null;
++  return bindings;
+ }
+ 
+ function scanBindings(root, alias = null) {
+   const bindings = new Map();
+-  const selector = '[s-use], [\\:text], [\\:class], [\\:style], [\\:show], [\\:value], [\\:disabled], [\\:hidden]';
++  const selector = '[s-use], [\\:text], [\\:class], [\\:style], [\\:show], [\\:value], [\\:disabled], [\\:hidden], [data-kiln-text]';
+   
+-  const elements = [];
+-  if (root.matches && root.matches(selector)) elements.push(root);
+-  elements.push(...root.querySelectorAll(selector));
++  const elements = new Set();
++  if (root.matches && root.matches(selector)) elements.add(root);
++  root.querySelectorAll(selector).forEach(el => elements.add(el));
++  const candidates = [];
++  if (root.matches) candidates.push(root);
++  candidates.push(...root.querySelectorAll("*"));
++  candidates.forEach(el => {
++    if (Array.from(el.attributes || []).some(attr => attr.name.startsWith("data-kiln-attr-"))) {
++      elements.add(el);
++    }
++  });
+ 
+   for (const el of elements) {
+     if (el.closest("template")) continue;
+-    const parsed = parseBind(el);
+-    if (!parsed) continue;
+-
+-    const { path, prop } = parsed;
+-
+-    if (alias && path.startsWith(alias + ".")) {
+-      const field = path.substring(alias.length + 1);
+-      if (!bindings.has(field)) bindings.set(field, []);
+-      bindings.get(field).push({ el, prop });
+-    } else if (!alias) {
+-      if (!bindings.has(path)) bindings.set(path, []);
+-      bindings.get(path).push({ el, prop });
++    for (const { path, prop } of parseBindings(el)) {
++      if (alias && path.startsWith(alias + ".")) {
++        const field = path.substring(alias.length + 1);
++        if (!bindings.has(field)) bindings.set(field, []);
++        bindings.get(field).push({ el, prop });
++      } else if (!alias) {
++        if (!bindings.has(path)) bindings.set(path, []);
++        bindings.get(path).push({ el, prop });
++      }
+     }
+   }
+   return bindings;
+@@ -753,10 +772,10 @@ function scanBindings(root, alias = null) {
+ 
+ // ── Collection Engine ───────────────────────────────────────
+ 
+-function reconcile(container, template, items, alias, keyPath) {
++function reconcile(container, template, items, alias, keyPath, kilnBindings = false) {
+   const existingBlocks = new Map();
+   for (const child of container.children) {
+-    const k = child.getAttribute(":key");
++    const k = child.getAttribute(kilnBindings ? "data-kiln-key" : ":key");
+     if (k) {
+       if (!existingBlocks.has(k)) existingBlocks.set(k, []);
+       existingBlocks.get(k).push(child);
+@@ -778,7 +797,7 @@ function reconcile(container, template, items, alias, keyPath) {
+     if (!block) {
+       const frag = template.content.cloneNode(true);
+       block = Array.from(frag.children).filter(n => n.nodeType === 1);
+-      block.forEach(el => el.setAttribute(":key", key));
++      block.forEach(el => el.setAttribute(kilnBindings ? "data-kiln-key" : ":key", key));
+     }
+ 
+     block.forEach(node => {
+@@ -805,20 +824,20 @@ function patchItem(node, item, alias) {
+   }
+ }
+ 
+-function mergeOrRemoveItem(container, template, item, alias, keyPath) {
++function mergeOrRemoveItem(container, template, item, alias, keyPath, kilnBindings = false) {
+   const key = String(resolvePath(item, keyPath));
+   if (!key) return;
+ 
+   if (item._remove) {
+     for (const child of [...container.children]) {
+-      if (child.getAttribute(":key") === key) child.remove();
++      if (child.getAttribute(kilnBindings ? "data-kiln-key" : ":key") === key) child.remove();
+     }
+     return;
+   }
+ 
+   const existing = [];
+   for (const child of container.children) {
+-    if (child.getAttribute(":key") === key) existing.push(child);
++    if (child.getAttribute(kilnBindings ? "data-kiln-key" : ":key") === key) existing.push(child);
+   }
+ 
+   if (existing.length > 0) {
+@@ -827,7 +846,7 @@ function mergeOrRemoveItem(container, template, item, alias, keyPath) {
+     const frag = template.content.cloneNode(true);
+     const block = Array.from(frag.children).filter(n => n.nodeType === 1);
+     block.forEach(el => {
+-      el.setAttribute(":key", key);
++      el.setAttribute(kilnBindings ? "data-kiln-key" : ":key", key);
+       patchItem(el, item, alias);
+       container.appendChild(el);
+     });
+@@ -845,7 +864,16 @@ function buildMaps(root) {
+       ? keyAttr.substring(expr.alias.length + 1) 
+       : keyAttr;
+       
+-    collections.push({path: expr.path, tpl, alias: expr.alias, keyPath});
++    collections.push({path: expr.path, tpl, alias: expr.alias, keyPath, kilnBindings: false});
++  });
++  root.querySelectorAll("template[data-kiln-each]").forEach(tpl => {
++    collections.push({
++      path: tpl.getAttribute("data-kiln-each"),
++      tpl,
++      alias: tpl.getAttribute("data-kiln-as") || "item",
++      keyPath: tpl.getAttribute("data-kiln-key") || "id",
++      kilnBindings: true,
++    });
+   });
+   return {scalars: scanBindings(root), collections};
+ }
+@@ -893,9 +921,9 @@ function patch(data, root, options = {}) {
+   instance.collections.forEach(col => {
+     const val = resolvePath(transformedData, col.path);
+     if (Array.isArray(val)) {
+-      reconcile(col.tpl.parentElement, col.tpl, val, col.alias, col.keyPath);
++      reconcile(col.tpl.parentElement, col.tpl, val, col.alias, col.keyPath, col.kilnBindings);
+     } else if (val && typeof val === "object" && col.keyPath) {
+-      mergeOrRemoveItem(col.tpl.parentElement, col.tpl, val, col.alias, col.keyPath);
++      mergeOrRemoveItem(col.tpl.parentElement, col.tpl, val, col.alias, col.keyPath, col.kilnBindings);
+     }
+   });
+ 
+@@ -2853,23 +2881,43 @@ function applyKilnListPatch(data) {
+     return;
+   }
+   sessionStorage.removeItem('kiln-live-list-reload:' + location.pathname + ':' + listName);
+-  var rowEl = listEl.querySelector('[data-kiln-key="' + CSS.escape(String(key)) + '"]');
++  var matchingRows = Array.from(
++    listEl.querySelectorAll('[data-kiln-key="' + CSS.escape(String(key)) + '"]')
++  );
++  var rowEl = matchingRows[0] || null;
++  var template = listEl.querySelector('template[data-kiln-each="' + CSS.escape(listName) + '"]');
++  var alias = template ? (template.getAttribute('data-kiln-as') || 'item') : 'item';
+   if (data.op === 'insert') {
+-    if (!data.html) return;
+-    var insertBox = document.createElement('div');
+-    safeSetHTML(insertBox, data.html);
+-    var insertNode = insertBox.firstElementChild;
+-    if (!insertNode) return;
++    if (!template || !data.row) return;
++    if (rowEl) {
++      patchItem(rowEl, data.row, alias);
++      matchingRows.slice(1).forEach(function(node) { node.remove(); });
++      var existingRows = Array.from(listEl.querySelectorAll('[data-kiln-key]')).filter(function(node) {
++        return node !== rowEl;
++      });
++      var existingIndex = Math.max(0, Math.min(Number(data.index) || 0, existingRows.length));
++      listEl.insertBefore(rowEl, existingRows[existingIndex] || null);
++      return;
++    }
++    var insertFragment = template.content.cloneNode(true);
++    var insertNodes = Array.from(insertFragment.children).filter(function(n) { return n.nodeType === 1; });
++    insertNodes.forEach(function(node) {
++      node.setAttribute('data-kiln-key', String(key));
++      patchItem(node, data.row, alias);
++    });
+     var rows = listEl.querySelectorAll('[data-kiln-key]');
+     var index = Math.max(0, Math.min(Number(data.index) || 0, rows.length));
+-    listEl.insertBefore(insertNode, rows[index] || null);
++    insertNodes.forEach(function(node) {
++      listEl.insertBefore(node, rows[index] || null);
++    });
+     return;
+   }
+   if (!rowEl) return;
+   if (data.op === 'remove') {
+-    rowEl.remove();
++    matchingRows.forEach(function(node) { node.remove(); });
+     return;
+   }
++  matchingRows.slice(1).forEach(function(node) { node.remove(); });
+   if (data.op === 'move') {
+     var moveRows = Array.from(listEl.querySelectorAll('[data-kiln-key]')).filter(function(n) { return n !== rowEl; });
+     var to = Math.max(0, Math.min(Number(data.to) || 0, moveRows.length));
+@@ -2877,16 +2925,13 @@ function applyKilnListPatch(data) {
+     return;
+   }
+   if (data.op === 'replace-row') {
+-    if (!data.html) return;
+-    var replaceBox = document.createElement('div');
+-    safeSetHTML(replaceBox, data.html);
+-    var replaceNode = replaceBox.firstElementChild;
+-    if (replaceNode) rowEl.replaceWith(replaceNode);
++    if (data.row) patchItem(rowEl, data.row, alias);
+     return;
+   }
+   if (data.op === 'fields' || !data.op) {
+     var changes = data.changes;
+     if (!changes) return;
++    patchItem(rowEl, changes, alias);
+     Object.keys(changes).forEach(function(field) {
+       rowEl.querySelectorAll('[data-kiln-field="' + CSS.escape(field) + '"],[data-kiln-live-field="' + CSS.escape(field) + '"]').forEach(function(n) {
+         n.textContent = changes[field] == null ? '' : String(changes[field]);
+diff --git a/packages/engine/src/assembler.test.ts b/packages/engine/src/assembler.test.ts
+index 0f2850c..134ac08 100644
+--- a/packages/engine/src/assembler.test.ts
++++ b/packages/engine/src/assembler.test.ts
+@@ -26,13 +26,13 @@ describe('assembleFragments', () => {
+ });
+ 
+ describe('injectJsonSeed', () => {
+-  it('injects window.__kiln_seed before </body>', () => {
++  it('injects the data-only Silcrow seed before </body>', () => {
+     const html = '<html><body><p>hi</p></body></html>';
+     const seed = { '/contacts': { contacts: [] } };
+     const result = injectJsonSeed(html, seed);
+-    expect(result).toContain('window.__kiln_seed');
++    expect(result).toContain('window.__psData');
+     expect(result).toContain('"/contacts"');
+-    expect(result.indexOf('</body>')).toBeGreaterThan(result.indexOf('__kiln_seed'));
++    expect(result.indexOf('</body>')).toBeGreaterThan(result.indexOf('__psData'));
+   });
+ });
+ 
+diff --git a/packages/engine/src/assembler.ts b/packages/engine/src/assembler.ts
+index d4666bf..825dc8b 100644
+--- a/packages/engine/src/assembler.ts
++++ b/packages/engine/src/assembler.ts
+@@ -16,10 +16,11 @@ export function assembleFragments(layoutHtmls: string[], pageHtml: string): stri
+ }
+ 
+ /**
+- * Inject <script>window.__kiln_seed = {...}</script> before </body>.
++ * Inject the data-only Silcrow seed before </body>.
+  */
+ export function injectJsonSeed(html: string, seed: Record<string, unknown>): string {
+-  const tag = `<script>window.__kiln_seed=${JSON.stringify(seed)}</script>`;
++  const json = JSON.stringify(seed).replace(/</g, '\\u003c');
++  const tag = `<script>window.__psData=${json}</script>`;
+   const idx = html.lastIndexOf('</body>');
+   if (idx === -1) return html + tag;
+   return html.slice(0, idx) + tag + html.slice(idx);
+diff --git a/packages/engine/src/baking.test.ts b/packages/engine/src/baking.test.ts
+index 5685ed1..0b9521a 100644
+--- a/packages/engine/src/baking.test.ts
++++ b/packages/engine/src/baking.test.ts
+@@ -1,5 +1,11 @@
+ import assert from 'node:assert/strict';
+-import { injectFsrSlots, findSLiveSlots } from './baking.js';
++import {
++  createBakedSnapshot,
++  createImmutableShell,
++  findSLiveSlots,
++  injectFsrSlots,
++  materializeBakedShell,
++} from './baking.js';
+ 
+ function runTests() {
+   console.log('Running FSR baking tests...');
+@@ -121,6 +127,58 @@ function runTests() {
+     console.log('✅ patches_generated_data_kiln_live_field_markers passed');
+   }
+ 
++  // 14. materializes_data_kiln_bindings_from_data_only_json
++  {
++    const shell = [
++      '<main>',
++      '<h1 data-kiln-text="title"></h1>',
++      '<a data-kiln-attr-href="profileUrl">Profile</a>',
++      '<ul><template data-kiln-each="contacts" data-kiln-as="contact" data-kiln-key="id">',
++      '<li><span data-kiln-text="contact.name"></span></li>',
++      '</template></ul>',
++      '</main>',
++    ].join('');
++    const snapshot = createBakedSnapshot({
++      title: 'Contacts',
++      profileUrl: '/contacts/1',
++      contacts: [
++        { id: '1', name: 'Ada' },
++        { id: '2', name: '<Grace>' },
++      ],
++    });
++    const result = materializeBakedShell(shell, snapshot);
++    assert.ok(result?.includes('<h1 data-kiln-text="title">Contacts</h1>'));
++    assert.ok(result?.includes('href="/contacts/1"'));
++    assert.ok(result?.includes('data-kiln-key="1"'));
++    assert.ok(result?.includes('&lt;Grace&gt;'));
++    assert.ok(!JSON.stringify(snapshot).includes('<li'));
++    console.log('✅ materializes_data_kiln_bindings_from_data_only_json passed');
++  }
++
++  // 15. immutable_shell_removes_bound_values_but_preserves_structure
++  {
++    const rendered = '<h1 data-kiln-text="title">Stale</h1><a href="/old" data-kiln-attr-href="url">Open</a>';
++    assert.equal(
++      createImmutableShell(rendered),
++      '<h1 data-kiln-text="title"></h1><a data-kiln-attr-href="url">Open</a>',
++    );
++    console.log('✅ immutable_shell_removes_bound_values_but_preserves_structure passed');
++  }
++
++  // 16. materializes_attributes_before_self_closing_slashes
++  {
++    const shell = '<img data-kiln-attr-src="avatarUrl"/>';
++    const result = materializeBakedShell(
++      shell,
++      createBakedSnapshot({ avatarUrl: 'https://example.com/avatar.jpg' }),
++    );
++    assert.equal(
++      result,
++      '<img data-kiln-attr-src="avatarUrl" src="https://example.com/avatar.jpg"/>',
++    );
++    console.log('✅ materializes_attributes_before_self_closing_slashes passed');
++  }
++
+   console.log('🎉 All FSR baking tests passed!');
+ }
+ 
+diff --git a/packages/engine/src/baking.ts b/packages/engine/src/baking.ts
+index 2e953bc..b1ac281 100644
+--- a/packages/engine/src/baking.ts
++++ b/packages/engine/src/baking.ts
+@@ -1,5 +1,4 @@
+ import { applyScalarPatchToHtml, createScalarPatch } from '@kiln/live';
+-import { applyListPatchToHtml } from '@kiln/live';
+ 
+ export const BAKED_SNAPSHOT_VERSION = 1;
+ export const BAKED_RENDER_VERSION = 1;
+@@ -8,19 +7,14 @@ export interface BakedSnapshot {
+   schemaVersion: number;
+   renderVersion: number;
+   data: Record<string, unknown>;
+-  lists?: Record<string, Array<{ key: string; html: string }>>;
+   updatedAt: string;
+ }
+ 
+-export function createBakedSnapshot(
+-  data: Record<string, unknown>,
+-  lists?: BakedSnapshot['lists'],
+-): BakedSnapshot {
++export function createBakedSnapshot(data: Record<string, unknown>): BakedSnapshot {
+   return {
+     schemaVersion: BAKED_SNAPSHOT_VERSION,
+     renderVersion: BAKED_RENDER_VERSION,
+     data,
+-    lists,
+     updatedAt: new Date().toISOString(),
+   };
+ }
+@@ -28,21 +22,7 @@ export function createBakedSnapshot(
+ export function materializeBakedShell(shell: string, rawSnapshot: unknown): string | null {
+   const snapshot = normalizeSnapshot(rawSnapshot);
+   if (!snapshot) return null;
+-  let html = injectFsrSlots(shell, Object.entries(snapshot.data));
+-  for (const [list, rows] of Object.entries(snapshot.lists ?? {})) {
+-    for (const row of rows) {
+-      html = applyListPatchToHtml(html, {
+-        kind: 'list',
+-        route: '',
+-        list,
+-        key: row.key,
+-        op: 'replace-row',
+-        row: null,
+-        html: row.html,
+-      });
+-    }
+-  }
+-  return html;
++  return materializeBindings(shell, snapshot.data);
+ }
+ 
+ function normalizeSnapshot(raw: unknown): BakedSnapshot | null {
+@@ -68,6 +48,144 @@ export function injectFsrSlots(shell: string, slots: [string, any][]): string {
+   return result;
+ }
+ 
++export function createImmutableShell(renderedHtml: string): string {
++  let shell = renderedHtml.replace(
++    /(<([A-Za-z][A-Za-z0-9:-]*)\b[^>]*\bdata-kiln-text="[^"]*"[^>]*>)[\s\S]*?(<\/\2>)/gi,
++    '$1$3',
++  );
++  shell = shell.replace(
++    /<([A-Za-z][A-Za-z0-9:-]*)\b([^>]*)\b(?:s-live|data-kiln-live-field)="([^"]+)"([^>]*)>[\s\S]*?<\/\1>/gi,
++    (_source, tag, before, path, after) => {
++      const attrs = `${before}${after}`;
++      const binding = attrs.includes('data-kiln-text=')
++        ? ''
++        : ` data-kiln-text="${escapeAttribute(path)}"`;
++      return `<${tag}${attrs}${binding}></${tag}>`;
++    },
++  );
++
++  shell = shell.replace(/<([A-Za-z][A-Za-z0-9:-]*)\b([^>]*)>/g, (tag, name, attrs) => {
++    let nextAttrs = String(attrs);
++    const boundAttributes = Array.from(
++      nextAttrs.matchAll(/\bdata-kiln-attr-([A-Za-z_:][-A-Za-z0-9_:.]*)="[^"]*"/g),
++      (match) => match[1],
++    );
++    for (const attribute of boundAttributes) {
++      nextAttrs = removeAttribute(nextAttrs, attribute);
++    }
++    return `<${name}${nextAttrs}>`;
++  });
++
++  return shell;
++}
++
++function materializeBindings(shell: string, data: Record<string, unknown>): string {
++  let html = materializeTextBindings(shell, data);
++  html = materializeAttributeBindings(html, data);
++  html = materializeCollections(html, data);
++  return injectFsrSlots(html, Object.entries(data));
++}
++
++function materializeCollections(html: string, data: Record<string, unknown>): string {
++  const templatePattern = /<template\b([^>]*)\bdata-kiln-each="([^"]+)"([^>]*)>([\s\S]*?)<\/template>/gi;
++  return html.replace(templatePattern, (template, before, path, after, body) => {
++    const attrs = `${before}${after}`;
++    const alias = readAttribute(attrs, 'data-kiln-as') ?? 'item';
++    const keyPath = readAttribute(attrs, 'data-kiln-key') ?? 'id';
++    const rows = resolvePath(data, path);
++    if (!Array.isArray(rows)) return template;
++
++    const renderedRows = rows.map((row) => {
++      const context = { ...data, [alias]: row };
++      const key = resolvePath(row, keyPath);
++      let rendered = materializeTextBindings(body, context);
++      rendered = materializeAttributeBindings(rendered, context);
++      return addAttributeToFirstElement(rendered, 'data-kiln-key', key == null ? '' : String(key));
++    });
++    return template + renderedRows.join('');
++  });
++}
++
++function materializeTextBindings(html: string, data: Record<string, unknown>): string {
++  return html.replace(
++    /(<([A-Za-z][A-Za-z0-9:-]*)\b[^>]*\bdata-kiln-text="([^"]+)"[^>]*>)[\s\S]*?(<\/\2>)/gi,
++    (_source, open, _tag, path, close) => {
++      const value = resolvePath(data, path);
++      return `${open}${escapeHtml(value == null ? '' : String(value))}${close}`;
++    },
++  );
++}
++
++function materializeAttributeBindings(html: string, data: Record<string, unknown>): string {
++  return html.replace(/<([A-Za-z][A-Za-z0-9:-]*)\b([^>]*)>/g, (tag, name, attrs) => {
++    let next = String(attrs);
++    const bindings = Array.from(
++      next.matchAll(/\bdata-kiln-attr-([A-Za-z_:][-A-Za-z0-9_:.]*)="([^"]+)"/g),
++    );
++    for (const binding of bindings) {
++      const attribute = binding[1];
++      const value = resolvePath(data, binding[2]);
++      next = setAttribute(next, attribute, value);
++    }
++    return `<${name}${next}>`;
++  });
++}
++
++function resolvePath(value: unknown, path: string): unknown {
++  if (!path) return value;
++  return path.split('.').reduce<unknown>((current, part) => {
++    if (current === null || typeof current !== 'object') return undefined;
++    return (current as Record<string, unknown>)[part];
++  }, value);
++}
++
++function readAttribute(attrs: string, name: string): string | null {
++  return attrs.match(new RegExp(`\\b${escapeRegExp(name)}="([^"]*)"`))?.[1] ?? null;
++}
++
++function setAttribute(attrs: string, name: string, value: unknown): string {
++  const selfClosing = attrs.match(/(\s*\/\s*)$/)?.[1] ?? '';
++  const attributeBody = selfClosing
++    ? attrs.slice(0, -selfClosing.length)
++    : attrs;
++  const pattern = new RegExp(`\\s${escapeRegExp(name)}="[^"]*"`);
++  if (value === null || value === undefined || value === false) {
++    return attributeBody.replace(pattern, '') + selfClosing;
++  }
++  const serialized = value === true ? '' : `="${escapeAttribute(String(value))}"`;
++  if (pattern.test(attributeBody)) {
++    return attributeBody.replace(pattern, ` ${name}${serialized}`) + selfClosing;
++  }
++  return `${attributeBody} ${name}${serialized}${selfClosing}`;
++}
++
++function removeAttribute(attrs: string, name: string): string {
++  return attrs.replace(new RegExp(`\\s${escapeRegExp(name)}(?:="[^"]*")?`, 'g'), '');
++}
++
++function addAttributeToFirstElement(html: string, name: string, value: string): string {
++  return html.replace(
++    /<([A-Za-z][A-Za-z0-9:-]*)\b([^>]*)>/,
++    (_tag, tagName, attrs) => `<${tagName}${setAttribute(attrs, name, value)}>`,
++  );
++}
++
++function escapeAttribute(value: string): string {
++  return escapeHtml(value).replace(/'/g, '&#39;');
++}
++
++function escapeHtml(value: string): string {
++  return value
++    .replace(/&/g, '&amp;')
++    .replace(/</g, '&lt;')
++    .replace(/>/g, '&gt;')
++    .replace(/"/g, '&quot;');
++}
++
++function escapeRegExp(value: string): string {
++  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
++}
++
+ export function findSLiveSlots(html: string): string[] {
+   const names: string[] = [];
+   let remaining = html;
+diff --git a/packages/engine/src/cache.test.ts b/packages/engine/src/cache.test.ts
+index 04c9f18..49fab2f 100644
+--- a/packages/engine/src/cache.test.ts
++++ b/packages/engine/src/cache.test.ts
+@@ -17,37 +17,33 @@ describe('KilnCache', () => {
+     await fs.rm(tmpDir, { recursive: true, force: true });
+   });
+ 
+-  it('returns null for unknown key (disk-only mode)', async () => {
+-    const result = await cache.getHtml('/contacts');
++  it('returns null for an unknown segment shell', async () => {
++    const result = await cache.getSegmentShell('page', '/contacts');
+     expect(result).toBeNull();
+   });
+ 
+-  it('round-trips HTML to disk', async () => {
+-    await cache.setHtml('/contacts', '<ul>list</ul>');
+-    const result = await cache.getHtml('/contacts');
++  it('round-trips immutable segment HTML to disk', async () => {
++    await cache.saveSegmentShell('page', '/contacts', '<ul>list</ul>');
++    const result = await cache.getSegmentShell('page', '/contacts');
+     expect(result).toBe('<ul>list</ul>');
+   });
+ 
+-  it('round-trips JSON to disk', async () => {
+-    await cache.setJson('/contacts', { contacts: [{ id: '1' }] });
+-    const result = await cache.getJson('/contacts');
++  it('round-trips segment JSON to disk', async () => {
++    await cache.setSegmentJson('page', '/contacts', { contacts: [{ id: '1' }] });
++    const result = await cache.getSegmentJson('page', '/contacts');
+     expect(result).toEqual({ contacts: [{ id: '1' }] });
+   });
+ 
+-  it('delete removes both html and json', async () => {
+-    await cache.setHtml('/contacts', '<ul></ul>');
+-    await cache.setJson('/contacts', {});
+-    await cache.delete('/contacts');
+-    expect(await cache.getHtml('/contacts')).toBeNull();
+-    expect(await cache.getJson('/contacts')).toBeNull();
+-  });
+-
+-  it('normalises dynamic route to safe disk path', () => {
+-    // /contacts/123 → contacts/123/index.html (no colon in filename)
+-    const htmlPath = cache.diskHtmlPath('/contacts/123');
+-    expect(htmlPath).toContain('contacts');
+-    expect(htmlPath).toContain('123');
+-    expect(htmlPath).toEndWith('index.html');
+-    expect(htmlPath).not.toContain(':');
++  it('stores immutable page and layout shells independently from route JSON', async () => {
++    await cache.saveSegmentShell('page', '/contacts/:id', '<article data-kiln-text="name"></article>');
++    await cache.saveSegmentShell('layout', '/contacts', '<section>__OUTLET__</section>');
++    await cache.setSegmentJson('page', '/contacts/42', { data: { name: 'Ada' } });
++    await cache.setSegmentJson('layout', '/contacts', { data: { heading: 'People' } });
++
++    expect(await cache.getSegmentShell('page', '/contacts/:id')).toContain('data-kiln-text');
++    expect(await cache.getSegmentShell('layout', '/contacts')).toContain('__OUTLET__');
++    expect(await cache.getSegmentJson('page', '/contacts/42')).toEqual({ data: { name: 'Ada' } });
++    expect(await cache.getSegmentJson('layout', '/contacts')).toEqual({ data: { heading: 'People' } });
++    expect(await Bun.file(path.join(tmpDir, 'contacts', '42', 'index.html')).exists()).toBe(false);
+   });
+ });
+diff --git a/packages/engine/src/cache.ts b/packages/engine/src/cache.ts
+index 626689f..627f9e8 100644
+--- a/packages/engine/src/cache.ts
++++ b/packages/engine/src/cache.ts
+@@ -8,6 +8,8 @@ export interface KilnCacheOptions {
+   ttlSecs: number;
+ }
+ 
++export type SegmentKind = 'page' | 'layout';
++
+ export class KilnCache {
+   private redis: RedisClient | null;
+   private readonly cacheDir: string;
+@@ -19,83 +21,83 @@ export class KilnCache {
+     this.ttlSecs = opts.ttlSecs;
+   }
+ 
+-  diskHtmlPath(route: string): string {
+-    const safe = route === '/' ? 'index' : route.replace(/^\//, '').replace(/\//g, path.sep);
+-    return path.join(this.cacheDir, safe, 'index.html');
++  diskSegmentShellPath(kind: SegmentKind, pattern: string): string {
++    const safe = safeRoutePath(pattern);
++    return path.join(this.cacheDir, 'segments', `${kind}s`, safe, 'shell.html');
+   }
+ 
+-  diskGenericShellPath(pattern: string): string {
+-    const safe = pattern === '/' ? 'index' : pattern.replace(/^\//, '').replace(/\//g, path.sep);
+-    return path.join(this.cacheDir, 'pages', safe, 'shell.html');
++  diskSegmentJsonPath(kind: SegmentKind, route: string): string {
++    const safe = safeRoutePath(route);
++    return path.join(this.cacheDir, 'segments', `${kind}s`, safe, 'data.json');
+   }
+ 
+-  async saveGenericShell(pattern: string, html: string): Promise<void> {
+-    const p = this.diskGenericShellPath(pattern);
+-    const f = Bun.file(p);
+-    if (!(await f.exists())) {
+-      await atomicWrite(p, html);
++  async saveSegmentShell(kind: SegmentKind, pattern: string, html: string): Promise<void> {
++    const shellPath = this.diskSegmentShellPath(kind, pattern);
++    const file = Bun.file(shellPath);
++    if (!(await file.exists())) {
++      await atomicWrite(shellPath, html);
++      if (this.redis) {
++        try {
++          await this.redis.set(this.segmentShellKey(kind, pattern), html);
++        } catch {
++          this.redis = null;
++        }
++      }
+     }
+   }
+ 
+-  async getGenericShell(pattern: string): Promise<string | null> {
+-    const f = Bun.file(this.diskGenericShellPath(pattern));
+-    return (await f.exists()) ? f.text() : null;
+-  }
+-
+-  diskJsonPath(route: string): string {
+-    return this.diskHtmlPath(route).replace(/\.html$/, '.json');
+-  }
+-
+-  private redisHtmlKey(route: string): string { return `kiln:html:${route}`; }
+-  private redisJsonKey(route: string): string { return `kiln:json:${route}`; }
+-
+-  async getHtml(route: string): Promise<string | null> {
++  async getSegmentShell(kind: SegmentKind, pattern: string): Promise<string | null> {
+     if (this.redis) {
+       try {
+-        const v = await this.redis.get(this.redisHtmlKey(route));
+-        if (v != null) return v;
+-      } catch { this.redis = null; }
++        const cached = await this.redis.get(this.segmentShellKey(kind, pattern));
++        if (cached !== null) return cached;
++      } catch {
++        this.redis = null;
++      }
+     }
+-    const f = Bun.file(this.diskHtmlPath(route));
+-    return (await f.exists()) ? f.text() : null;
++    const file = Bun.file(this.diskSegmentShellPath(kind, pattern));
++    return (await file.exists()) ? file.text() : null;
+   }
+ 
+-  async setHtml(route: string, html: string, pinInRedis: boolean = false): Promise<void> {
+-    const diskPath = this.diskHtmlPath(route);
+-    await atomicWrite(diskPath, html);
+-    if (this.redis && pinInRedis) {
+-      try {
+-        await this.redis.set(this.redisHtmlKey(route), html);
+-        // Intentionally skip expire() to pin it permanently
+-      } catch { this.redis = null; }
+-    }
+-  }
+-
+-  async getJson(route: string): Promise<unknown | null> {
++  async setSegmentJson(kind: SegmentKind, route: string, data: unknown): Promise<void> {
++    const json = JSON.stringify(data);
++    await atomicWrite(this.diskSegmentJsonPath(kind, route), json);
+     if (this.redis) {
+       try {
+-        const v = await this.redis.get(this.redisJsonKey(route));
+-        if (v != null) return JSON.parse(v);
+-      } catch { this.redis = null; }
++        const key = this.segmentJsonKey(kind, route);
++        await this.redis.set(key, json);
++        if (this.ttlSecs > 0) await this.redis.expire(key, this.ttlSecs);
++      } catch {
++        this.redis = null;
++      }
+     }
+-    const f = Bun.file(this.diskJsonPath(route));
+-    if (!(await f.exists())) return null;
+-    try { return JSON.parse(await f.text()); } catch { return null; }
+   }
+ 
+-  async setJson(route: string, data: unknown): Promise<void> {
+-    const json = JSON.stringify(data);
+-    await atomicWrite(this.diskJsonPath(route), json);
++  async getSegmentJson(kind: SegmentKind, route: string): Promise<unknown | null> {
+     if (this.redis) {
+       try {
+-        await this.redis.set(this.redisJsonKey(route), json);
+-        if (this.ttlSecs > 0) await this.redis.expire(this.redisJsonKey(route), this.ttlSecs);
+-      } catch { this.redis = null; }
++        const cached = await this.redis.get(this.segmentJsonKey(kind, route));
++        if (cached !== null) return JSON.parse(cached);
++      } catch {
++        this.redis = null;
++      }
++    }
++    const file = Bun.file(this.diskSegmentJsonPath(kind, route));
++    if (!(await file.exists())) return null;
++    try {
++      return JSON.parse(await file.text());
++    } catch {
++      return null;
+     }
+   }
+ 
+-  async patchJsonField(route: string, field: string, value: unknown): Promise<void> {
+-    const existing = (await this.getJson(route)) as Record<string, unknown> | null;
++  async patchSegmentJsonField(
++    kind: SegmentKind,
++    route: string,
++    field: string,
++    value: unknown,
++  ): Promise<void> {
++    const existing = (await this.getSegmentJson(kind, route)) as Record<string, unknown> | null;
+     if (!existing) return;
+     const target =
+       existing.data && typeof existing.data === 'object' && !Array.isArray(existing.data)
+@@ -103,28 +105,27 @@ export class KilnCache {
+         : existing;
+     target[field] = value;
+     if ('updatedAt' in existing) existing.updatedAt = new Date().toISOString();
+-    await this.setJson(route, existing);
++    await this.setSegmentJson(kind, route, existing);
+   }
+ 
+-  async delete(route: string): Promise<void> {
+-    const htmlPath = this.diskHtmlPath(route);
+-    const jsonPath = this.diskJsonPath(route);
+-    await Promise.allSettled([
+-      fs.unlink(htmlPath).catch(() => {}),
+-      fs.unlink(jsonPath).catch(() => {}),
+-    ]);
+-    if (this.redis) {
+-      try {
+-        await this.redis.send('DEL', [this.redisHtmlKey(route), this.redisJsonKey(route)]);
+-      } catch { this.redis = null; }
+-    }
++  getClient(): RedisClient | null { return this.redis; }
++
++  private segmentShellKey(kind: SegmentKind, pattern: string): string {
++    return `kiln:shell:${kind}:${pattern}`;
+   }
+ 
+-  async purgeRoute(route: string): Promise<void> {
+-    await this.delete(route);
++  private segmentJsonKey(kind: SegmentKind, route: string): string {
++    return `kiln:json:${kind}:${route}`;
+   }
++}
+ 
+-  getClient(): RedisClient | null { return this.redis; }
++function safeRoutePath(route: string): string {
++  if (route === '/') return 'index';
++  return route
++    .split('/')
++    .filter(Boolean)
++    .map((segment) => encodeURIComponent(segment))
++    .join(path.sep);
+ }
+ 
+ async function atomicWrite(filePath: string, content: string): Promise<void> {
+@@ -161,51 +162,10 @@ export class RedisCache {
+     return this.client;
+   }
+ 
+-  private htmlKey(route: string): string {
+-    return `kiln:html:${route}`;
+-  }
+-
+-  private slotKey(route: string): string {
+-    return `kiln:slot:${route}`;
+-  }
+-
+   private jsonKey(route: string): string {
+     return `kiln:json:${route}`;
+   }
+ 
+-  async getHtml(route: string): Promise<string | null> {
+-    return this.client.get(this.htmlKey(route));
+-  }
+-
+-  async setHtml(route: string, html: string): Promise<void> {
+-    const key = this.htmlKey(route);
+-    if (this.artifactTtlSecs > 0) {
+-      await Promise.all([
+-        this.client.set(key, html),
+-        this.client.expire(key, this.artifactTtlSecs),
+-      ]);
+-    } else {
+-      await this.client.set(key, html);
+-    }
+-  }
+-
+-  async patchSlot(route: string, slot: string, value: string): Promise<void> {
+-    const key = this.slotKey(route);
+-    if (this.artifactTtlSecs > 0) {
+-      await Promise.all([
+-        this.client.send('HSET', [key, slot, value]),
+-        this.client.expire(key, this.artifactTtlSecs),
+-      ]);
+-    } else {
+-      await this.client.send('HSET', [key, slot, value]);
+-    }
+-  }
+-
+-  async getSlots(route: string): Promise<Record<string, string>> {
+-    const result = await this.client.send('HGETALL', [this.slotKey(route)]);
+-    return (result as Record<string, string>) || {};
+-  }
+-
+   async setJson(route: string, json: any): Promise<void> {
+     const key = this.jsonKey(route);
+     const value = typeof json === 'string' ? json : JSON.stringify(json);
+@@ -238,7 +198,7 @@ export class RedisCache {
+   }
+ 
+   async deleteRouteKeys(route: string): Promise<void> {
+-    await this.client.send('DEL', [this.htmlKey(route), this.slotKey(route), this.jsonKey(route)]);
++    await this.client.send('DEL', [this.jsonKey(route)]);
+   }
+ 
+   async disconnect(): Promise<void> {
+diff --git a/packages/engine/src/hub-patch.test.ts b/packages/engine/src/hub-patch.test.ts
+index 9b5236d..779ffbe 100644
+--- a/packages/engine/src/hub-patch.test.ts
++++ b/packages/engine/src/hub-patch.test.ts
+@@ -9,9 +9,9 @@ describe('patchBakedFiles', () => {
+   it('updates json field in baked file', async () => {
+     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-hub-'));
+     const cache = new KilnCache({ redis: null, cacheDir: tmpDir, ttlSecs: 0 });
+-    await cache.setJson('/contacts', { count: 5, name: 'Alice' });
++    await cache.setSegmentJson('page', '/contacts', { count: 5, name: 'Alice' });
+     await patchBakedFiles(cache, '/contacts', 'count', 10);
+-    const result = await cache.getJson('/contacts') as any;
++    const result = await cache.getSegmentJson('page', '/contacts') as any;
+     expect(result.count).toBe(10);
+     expect(result.name).toBe('Alice');
+     await fs.rm(tmpDir, { recursive: true });
+@@ -21,9 +21,10 @@ describe('patchBakedFiles', () => {
+     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-hub-'));
+     const cache = new KilnCache({ redis: null, cacheDir: tmpDir, ttlSecs: 0 });
+     const html = '<div><span s-live="count">5</span></div>';
+-    await cache.setHtml('/contacts', html);
++    await cache.saveSegmentShell('page', '/contacts', html);
++    await cache.setSegmentJson('page', '/contacts', { count: 5 });
+     await patchBakedFiles(cache, '/contacts', 'count', '10');
+-    const result = await cache.getHtml('/contacts');
++    const result = await cache.getSegmentShell('page', '/contacts');
+     expect(result).toBe(html);
+     await fs.rm(tmpDir, { recursive: true });
+   });
+diff --git a/packages/engine/src/hub.ts b/packages/engine/src/hub.ts
+index c1ce12b..8ac6f98 100644
+--- a/packages/engine/src/hub.ts
++++ b/packages/engine/src/hub.ts
+@@ -2,7 +2,7 @@ import { FsrStore } from './store.js';
+ import { FsrWatcher, type LivePatch, type SlotPatch } from './watcher.js';
+ import { SSEEvent } from '@kiln/core';
+ import { KilnCache } from './cache.js';
+-import { isScalarPatch, type RenderedListPatch, type ScalarPatch } from '@kiln/live';
++import { isScalarPatch, type ListPatch, type ScalarPatch } from '@kiln/live';
+ 
+ export interface FsrHubConfig {
+   maxConnections: number;
+@@ -32,7 +32,7 @@ export async function patchBakedFiles(
+   slot: string,
+   value: unknown
+ ): Promise<void> {
+-  await cache.patchJsonField(route, slot, value);
++  await cache.patchSegmentJsonField('page', route, slot, value);
+ }
+ 
+ export interface FsrHubStreamOptions {
+@@ -194,7 +194,7 @@ function normalizeScalarPatch(patch: SlotPatch | LivePatch): ScalarPatch | null
+   };
+ }
+ 
+-function isListPatch(value: unknown): value is RenderedListPatch {
++function isListPatch(value: unknown): value is ListPatch {
+   return Boolean(
+     value &&
+     typeof value === 'object' &&
+diff --git a/packages/engine/src/list-store.test.ts b/packages/engine/src/list-store.test.ts
+index f3bfcbb..c4083c8 100644
+--- a/packages/engine/src/list-store.test.ts
++++ b/packages/engine/src/list-store.test.ts
+@@ -34,8 +34,8 @@ async function runTests() {
+       name: "todos",
+       dependsOn: ["todo_events"],
+       rows: [
+-        { key: "2", data: { id: 2, title: "Second" }, html: "<li>Second</li>" },
+-        { key: "1", data: { id: 1, title: "First" }, html: "<li>First</li>" },
++        { key: "2", data: { id: 2, title: "Second" } },
++        { key: "1", data: { id: 1, title: "First" } },
+       ],
+       htmlPath: "/tmp/todos.html",
+       jsonPath: "/tmp/todos.json",
+@@ -52,7 +52,7 @@ async function runTests() {
+       name: "todos",
+       dependsOn: ["todo_events"],
+       rows: [
+-        { key: "3", data: { id: 3, title: "Premature" }, html: "<li>Premature</li>" },
++        { key: "3", data: { id: 3, title: "Premature" } },
+       ],
+     });
+     const preserved = await store.lists.getSnapshot("/todos", "todos");
+@@ -65,7 +65,7 @@ async function runTests() {
+     assert.equal(stale[0].version, 1);
+ 
+     await store.lists.markFresh("/todos", "todos", [
+-      { key: "1", data: { id: 1, title: "Updated" }, html: "<li>Updated</li>" },
++      { key: "1", data: { id: 1, title: "Updated" } },
+     ]);
+     assert.equal((await store.lists.getSnapshot("/todos", "todos"))?.stale, false);
+ 
+diff --git a/packages/engine/src/list-store.ts b/packages/engine/src/list-store.ts
+index adb5e49..b7651b0 100644
+--- a/packages/engine/src/list-store.ts
++++ b/packages/engine/src/list-store.ts
+@@ -3,7 +3,6 @@ import type { BunSqlClient } from './store.js';
+ export interface LiveListSnapshotRow<T = unknown> {
+   key: string;
+   data: T;
+-  html: string;
+ }
+ 
+ export interface LiveListSnapshot<T = unknown> {
+diff --git a/packages/engine/src/list-watcher.test.ts b/packages/engine/src/list-watcher.test.ts
+index 1a7efbd..5622d68 100644
+--- a/packages/engine/src/list-watcher.test.ts
++++ b/packages/engine/src/list-watcher.test.ts
+@@ -149,14 +149,7 @@ async function runTests() {
+       name: 'todos',
+       dependsOn: ['todo_events'],
+       keyOf: (row: any) => row.id,
+-      query: () => nextRows,
+-      renderRows: async (rows: any[]) =>
+-        new Map(
+-          rows.map((row) => [
+-            row.id,
+-            `<li data-kiln-key="${row.id}"><span data-kiln-field="title">${row.title}</span><span data-kiln-field="status">${row.status}</span></li>`
+-          ])
+-        )
++      query: () => nextRows
+     },
+     {
+       route: '/todos',
+@@ -164,8 +157,7 @@ async function runTests() {
+       dependsOn: ['todo_events'],
+       rows: initialRows.map((row) => ({
+         key: row.id,
+-        data: row,
+-        html: initialHtml.match(new RegExp(`<li data-kiln-key="${row.id}">.*?</li>`))?.[0] ?? ''
++        data: row
+       })),
+       htmlPath,
+       jsonPath
+@@ -178,7 +170,7 @@ async function runTests() {
+ 
+   assert.deepEqual(
+     patches.map((patch: any) => patch.op),
+-    ["remove", "insert", "move", "replace-row"],
++    ["remove", "insert", "move", "fields"],
+   );
+   assert.equal(events[0], 'emit:list:remove');
+   assert.equal(store.lists.events[0], 'persist:/todos:todos');
+@@ -251,15 +243,13 @@ async function runTests() {
+       name: 'first',
+       dependsOn: ['first_events'],
+       keyOf: (row: any) => row.id,
+-      query: () => [{ id: '1', value: 'updated' }],
+-      renderRows: async () =>
+-        new Map([['1', '<li data-kiln-key="1"><span data-kiln-field="value">updated</span></li>']])
++      query: () => [{ id: '1', value: 'updated' }]
+     },
+     {
+       route: '/multi',
+       name: 'first',
+       dependsOn: ['first_events'],
+-      rows: [{ key: '1', data: { id: '1', value: 'old' }, html: '<li>old</li>' }]
++      rows: [{ key: '1', data: { id: '1', value: 'old' } }]
+     }
+   );
+   await isolatedWatcher.registerLiveList(
+@@ -270,8 +260,7 @@ async function runTests() {
+       keyOf: (row: any) => row.id,
+       query: () => {
+         throw new Error('second list should not execute');
+-      },
+-      renderRows: async () => new Map()
++      }
+     },
+     {
+       route: '/multi',
+@@ -280,8 +269,7 @@ async function runTests() {
+       rows: [
+         {
+           key: '2',
+-          data: { id: '2', value: 'unchanged' },
+-          html: '<li>unchanged</li>'
++          data: { id: '2', value: 'unchanged' }
+         }
+       ]
+     }
+@@ -303,14 +291,13 @@ async function runTests() {
+     name: 'contacts',
+     dependsOn: ['contact_events'],
+     keyOf: (row: any) => row.id,
+-    query: () => [],
+-    renderRows: async () => new Map()
++    query: () => []
+   };
+   await registrationWatcher.registerLiveList(registrationTarget, {
+     route: '/registration',
+     name: 'contacts',
+     dependsOn: ['contact_events'],
+-    rows: [{ key: '1', data: { id: '1', name: 'Ada' }, html: '<li data-kiln-key="1">Ada</li>' }]
++    rows: [{ key: '1', data: { id: '1', name: 'Ada' } }]
+   });
+   await registrationWatcher.registerLiveList(registrationTarget, {
+     route: '/registration',
+@@ -333,11 +320,7 @@ async function runTests() {
+       name: 'contacts',
+       dependsOn: ['contact_events'],
+       keyOf: (row: any) => row.id,
+-      query: () => [{ id: '1', role: 'Director' }],
+-      renderRows: async () =>
+-        new Map([
+-          ['1', '<li data-kiln-key="1" data-search="director"><span data-kiln-field="role">Director</span></li>']
+-        ])
++      query: () => [{ id: '1', role: 'Director' }]
+     },
+     {
+       route: '/derived',
+@@ -346,8 +329,7 @@ async function runTests() {
+       rows: [
+         {
+           key: '1',
+-          data: { id: '1', role: '' },
+-          html: '<li data-kiln-key="1" data-search=""><span data-kiln-field="role"></span></li>'
++          data: { id: '1', role: '' }
+         }
+       ]
+     }
+@@ -356,9 +338,10 @@ async function runTests() {
+   await derivedWatcher.runOnce();
+   assert.deepEqual(
+     derivedPatches.map((patch) => patch.op),
+-    ['replace-row']
++    ['fields']
+   );
+-  assert.ok(derivedPatches[0].html.includes('data-search="director"'));
++  assert.deepEqual(derivedPatches[0].changes, { role: 'Director' });
++  assert.equal('html' in derivedPatches[0], false);
+ 
+   const redisHtmlPath = path.join(tempDir, 'redis.html');
+   const redisJsonPath = path.join(tempDir, 'redis.json');
+@@ -378,14 +361,13 @@ async function runTests() {
+       name: 'todos',
+       dependsOn: ['todo_events'],
+       keyOf: (row: any) => row.id,
+-      query: () => [{ id: '1', status: 'fresh' }],
+-      renderRows: async () => new Map([['1', '<li data-kiln-key="1"><span data-kiln-field="status">fresh</span></li>']])
++      query: () => [{ id: '1', status: 'fresh' }]
+     },
+     {
+       route: '/redis',
+       name: 'todos',
+       dependsOn: ['todo_events'],
+-      rows: [{ key: '1', data: { id: '1', status: 'old' }, html: '<li>old</li>' }],
++      rows: [{ key: '1', data: { id: '1', status: 'old' } }],
+       htmlPath: redisHtmlPath,
+       jsonPath: redisJsonPath
+     }
+@@ -408,8 +390,7 @@ async function runTests() {
+       name: 'todos',
+       dependsOn: ['todo_events'],
+       keyOf: (row: any) => row.id,
+-      query: () => [{ id: '1', title: 'First' }],
+-      renderRows: async () => new Map([['1', '<li data-kiln-key="1"><span data-kiln-field="title">First</span></li>']])
++      query: () => [{ id: '1', title: 'First' }]
+     },
+     {
+       route: '/empty',
+diff --git a/packages/engine/src/live-list-runtime.ts b/packages/engine/src/live-list-runtime.ts
+index f3944b2..d18a256 100644
+--- a/packages/engine/src/live-list-runtime.ts
++++ b/packages/engine/src/live-list-runtime.ts
+@@ -8,7 +8,6 @@ export interface RegisteredLiveListTarget<T = unknown> {
+   revalidate?: number | false;
+   keyOf(row: T): string;
+   query(ctx: LiveListQueryContext): Promise<T[]> | T[];
+-  renderRows(rows: T[]): Promise<Map<string, string>>;
+ }
+ 
+ export function liveListTargetKey(route: string, name: string): string {
+diff --git a/packages/engine/src/store.test.ts b/packages/engine/src/store.test.ts
+index 854e36d..03de393 100644
+--- a/packages/engine/src/store.test.ts
++++ b/packages/engine/src/store.test.ts
+@@ -133,14 +133,6 @@ async function runTests() {
+ 
+     // 8. Redis Cache tests directly
+     console.log('Testing RedisCache directly...');
+-    await redisCache.setHtml('/test-route-1', '<div>test</div>');
+-    const cachedHtml = await redisCache.getHtml('/test-route-1');
+-    assert.equal(cachedHtml, '<div>test</div>');
+-
+-    await redisCache.patchSlot('/test-route-1', 'slot_a', 'new_val');
+-    const slotsMap = await redisCache.getSlots('/test-route-1');
+-    assert.deepEqual(slotsMap, { slot_a: 'new_val' });
+-
+     await redisCache.setJson('/test-route-1', { score: 100 });
+     const cachedJson = await redisCache.getJson('/test-route-1');
+     assert.deepEqual(cachedJson, { score: 100 });
+@@ -158,10 +150,6 @@ async function runTests() {
+     rows = await store.fetchAllForInspect();
+     assert.equal(rows.every(r => r.stale === false), true);
+ 
+-    const clearedHtml = await redisCache.getHtml('/test-route-1');
+-    assert.equal(clearedHtml, null);
+-    const clearedSlots = await redisCache.getSlots('/test-route-1');
+-    assert.deepEqual(clearedSlots, {});
+     const clearedJson = await redisCache.getJson('/test-route-1');
+     assert.equal(clearedJson, null);
+ 
+diff --git a/packages/engine/src/store.ts b/packages/engine/src/store.ts
+index 63c6179..943770a 100644
+--- a/packages/engine/src/store.ts
++++ b/packages/engine/src/store.ts
+@@ -346,7 +346,7 @@ export class FsrStore {
+     return row ? { htmlPath: row.htmlPath, jsonPath: row.jsonPath } : null;
+   }
+ 
+-  async setBakedPaths(route: string, htmlPath: string, jsonPath: string | null): Promise<void> {
++  async setBakedPaths(route: string, htmlPath: string | null, jsonPath: string | null): Promise<void> {
+     await this.sql`
+       UPDATE kiln_fsr
+       SET html_path = ${htmlPath}, json_path = ${jsonPath}
+diff --git a/packages/engine/src/watcher.test.ts b/packages/engine/src/watcher.test.ts
+index 81fe622..126369c 100644
+--- a/packages/engine/src/watcher.test.ts
++++ b/packages/engine/src/watcher.test.ts
+@@ -106,13 +106,7 @@ async function runTests() {
+     const jsonContent = await fs.readFile(tempJsonPath, 'utf8');
+     assert.deepEqual(JSON.parse(jsonContent), { test_slot: 'original_val' });
+ 
+-    // Redis values should be updated too
+-    const redisHtml = await redis.getHtml(route);
+-    assert.equal(redisHtml, null);
+-
+-    const redisSlots = await redis.getSlots(route);
+-    assert.deepEqual(redisSlots, { test_slot: 'original_val' });
+-
++    // Redis JSON should be updated too.
+     const redisJson = await redis.getJson(route);
+     assert.deepEqual(redisJson, { test_slot: 'original_val' });
+ 
+@@ -130,9 +124,8 @@ async function runTests() {
+     const updatedJson = await fs.readFile(tempJsonPath, 'utf8');
+     assert.deepEqual(JSON.parse(updatedJson), { test_slot: 'updated_val' });
+ 
+-    // Redis should be updated
+-    const updatedRedisSlots = await redis.getSlots(route);
+-    assert.deepEqual(updatedRedisSlots, { test_slot: 'updated_val' });
++    const updatedRedisJson = await redis.getJson(route);
++    assert.deepEqual(updatedRedisJson, { test_slot: 'updated_val' });
+ 
+     // 5. Test Scheduled Invalidation
+     console.log('Verifying scheduled invalidations...');
+@@ -187,8 +180,6 @@ async function runTests() {
+     assert.equal(jsonExists, false);
+ 
+     // Redis keys evicted
+-    assert.equal(await redis.getHtml(route), null);
+-    assert.deepEqual(await redis.getSlots(route), {});
+     assert.equal(await redis.getJson(route), null);
+     console.log('🎉 FsrWatcher integration tests PASSED!');
+   } finally {
+diff --git a/packages/engine/src/watcher.ts b/packages/engine/src/watcher.ts
+index f22aab5..c4d6843 100644
+--- a/packages/engine/src/watcher.ts
++++ b/packages/engine/src/watcher.ts
+@@ -3,12 +3,11 @@ import fs from 'node:fs/promises';
+ import { FsrStore, StaleSlot } from './store.js';
+ import { RedisCache } from './cache.js';
+ import {
+-  applyListPatchToHtml,
+   applyListPatchToJson,
+   createScalarPatch,
+   isScalarPatch,
+   reconcileListRows,
+-  type RenderedListPatch,
++  type ListPatch,
+   type ScalarPatch
+ } from '@kiln/live';
+ import type { LiveListSnapshot, LiveListSnapshotRow, UpsertLiveListSnapshot } from './list-store.js';
+@@ -39,7 +38,7 @@ export interface SlotPatch {
+   value: any;
+ }
+ 
+-export type LivePatch = ScalarPatch | RenderedListPatch;
++export type LivePatch = ScalarPatch | ListPatch;
+ 
+ interface RegisteredLoaderTarget {
+   route: string;
+@@ -109,35 +108,13 @@ export class FsrWatcher {
+     target: RegisteredLiveListTarget<T>,
+     previousSnapshot: LiveListSnapshot,
+     initialSnapshot: UpsertLiveListSnapshot<T>
+-  ): RenderedListPatch<T>[] {
+-    const nextRowsByKey = new Map(initialSnapshot.rows.map((row) => [row.key, row] as const));
++  ): ListPatch<T>[] {
+     return reconcileListRows({
+       route: initialSnapshot.route,
+       list: initialSnapshot.name,
+       keyOf: target.keyOf,
+       previous: previousSnapshot.rows.map((row) => row.data as T),
+       next: initialSnapshot.rows.map((row) => row.data)
+-    }).map((patch): RenderedListPatch<T> => {
+-      if (patch.op !== 'insert' && patch.op !== 'fields' && patch.op !== 'replace-row') {
+-        return patch;
+-      }
+-
+-      const next = nextRowsByKey.get(patch.key);
+-      if (!next) {
+-        throw new Error(`Live.list renderer did not return HTML for key "${patch.key}"`);
+-      }
+-      if (patch.op === 'insert') {
+-        return { ...patch, html: next.html };
+-      }
+-      return {
+-        kind: 'list',
+-        op: 'replace-row',
+-        route: patch.route,
+-        list: patch.list,
+-        key: patch.key,
+-        row: next.data,
+-        html: next.html
+-      };
+     });
+   }
+ 
+@@ -506,23 +483,11 @@ export class FsrWatcher {
+       }
+     }
+ 
+-    // Phase 2d: update Redis HASH, Redis HTML, publish, SSE, mark fresh
++    // Phase 2d: publish data patches, emit SSE, and mark fresh.
+     for (const { slotRow, value, err } of results) {
+       if (err) continue;
+ 
+       if (this.redis) {
+-        let valStr = '';
+-        if (value === null || value === undefined) valStr = '';
+-        else if (typeof value === 'string') valStr = value;
+-        else if (typeof value === 'object') valStr = JSON.stringify(value);
+-        else valStr = String(value);
+-
+-        try {
+-          await this.redis.patchSlot(slotRow.route, slotRow.slot, valStr);
+-        } catch (e: any) {
+-          console.warn(`FSR watcher: Redis patchSlot failed for ${slotRow.route}/${slotRow.slot}:`, e.message);
+-        }
+-
+         try {
+           await this.redis.publishPatch(toLegacySlotPatch(createWatcherPatch(slotRow, value)));
+         } catch (e: any) {
+@@ -612,49 +577,18 @@ export class FsrWatcher {
+ 
+     try {
+       const nextRows = await this.store.executeLiveListQuery(target.query, this.abortController.signal);
+-      const renderedRows = await target.renderRows(nextRows);
+-      const rowsByKey = new Map(
+-        nextRows.map((row) => [String(target.keyOf(row)), row] as const),
+-      );
+       const patches = reconcileListRows({
+         route: snapshot.route,
+         list: snapshot.name,
+         keyOf: target.keyOf,
+         previous: snapshot.rows.map((row) => row.data),
+         next: nextRows
+-      }).map((patch): RenderedListPatch => {
+-        if (patch.op === 'fields') {
+-          const html = renderedRows.get(patch.key);
+-          const row = rowsByKey.get(patch.key);
+-          if (html === undefined || row === undefined) {
+-            throw new Error(`Live.list renderer did not return HTML for key "${patch.key}"`);
+-          }
+-          return {
+-            kind: 'list',
+-            op: 'replace-row',
+-            route: patch.route,
+-            list: patch.list,
+-            key: patch.key,
+-            row,
+-            html,
+-          };
+-        }
+-        if (patch.op !== 'insert' && patch.op !== 'replace-row') return patch;
+-        const html = renderedRows.get(patch.key);
+-        if (html === undefined) {
+-          throw new Error(`Live.list renderer did not return HTML for key "${patch.key}"`);
+-        }
+-        return { ...patch, html };
+       });
+ 
+-      const nextSnapshotRows: LiveListSnapshotRow[] = nextRows.map((row) => {
+-        const key = String(target.keyOf(row));
+-        const html = renderedRows.get(key);
+-        if (html === undefined) {
+-          throw new Error(`Live.list renderer did not return HTML for key "${key}"`);
+-        }
+-        return { key, data: row, html };
+-      });
++      const nextSnapshotRows: LiveListSnapshotRow[] = nextRows.map((row) => ({
++        key: String(target.keyOf(row)),
++        data: row,
++      }));
+ 
+       let patchedJson: any | null = null;
+ 
+@@ -669,10 +603,6 @@ export class FsrWatcher {
+         );
+         if (parsed.data && typeof parsed.data === 'object') {
+           parsed.data = patchedJson;
+-          parsed.lists = {
+-            ...(parsed.lists ?? {}),
+-            [snapshot.name]: nextSnapshotRows.map((row) => ({ key: row.key, html: row.html })),
+-          };
+           parsed.updatedAt = new Date().toISOString();
+           patchedJson = parsed;
+         }
+diff --git a/packages/live/src/contract.test.ts b/packages/live/src/contract.test.ts
+index be5608a..aa8a47f 100644
+--- a/packages/live/src/contract.test.ts
++++ b/packages/live/src/contract.test.ts
+@@ -1,6 +1,5 @@
+ import { describe, expect, it } from "bun:test";
+ import {
+-  applyListPatchToHtml,
+   applyListPatchToJson,
+   reconcileListRows,
+   todosAfterStatusChange,
+@@ -8,7 +7,7 @@ import {
+ } from "./index.js";
+ 
+ describe("live patch contract", () => {
+-  it("uses one small row fields patch for JSON and HTML status updates", () => {
++  it("uses one small data-only row fields patch", () => {
+     const [patch] = reconcileListRows({
+       route: "/tasks",
+       list: "todos",
+@@ -37,16 +36,5 @@ describe("live patch contract", () => {
+     expect(json.todos[0].status).toBe("complete");
+     expect(json.todos[0].title).toBe("Ship");
+ 
+-    const html = [
+-      '<ul data-kiln-list="todos">',
+-      '<li data-kiln-key="1"><span data-kiln-field="title">Ship</span><span data-kiln-field="status">in_progress</span></li>',
+-      '<li data-kiln-key="2"><span data-kiln-field="title">Review</span><span data-kiln-field="status">queued</span></li>',
+-      "</ul>",
+-    ].join("");
+-    const patchedHtml = applyListPatchToHtml(html, patch);
+-
+-    expect(patchedHtml).toContain('<span data-kiln-field="status">complete</span>');
+-    expect(patchedHtml).toContain('<span data-kiln-field="title">Ship</span>');
+-    expect(patchedHtml).toContain('<li data-kiln-key="2"><span data-kiln-field="title">Review</span><span data-kiln-field="status">queued</span></li>');
+   });
+ });
+diff --git a/packages/live/src/html.test.ts b/packages/live/src/html.test.ts
+index 7e517ea..8fc77eb 100644
+--- a/packages/live/src/html.test.ts
++++ b/packages/live/src/html.test.ts
+@@ -1,5 +1,5 @@
+ import { describe, expect, it } from "bun:test";
+-import { applyListPatchToHtml, applyScalarPatchToHtml, createScalarPatch, type ListPatch } from "./index.js";
++import { applyScalarPatchToHtml, createScalarPatch } from "./index.js";
+ 
+ describe("live HTML patching", () => {
+   it("patches legacy scalar s-live markers", () => {
+@@ -25,79 +25,4 @@ describe("live HTML patching", () => {
+     expect(result).toContain("&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;");
+     expect(result).not.toContain("<script>");
+   });
+-
+-  it("patches only matching list row fields", () => {
+-    const html = [
+-      '<ul data-kiln-list="todos">',
+-      '<li data-kiln-key="42" class="row">',
+-      '<input data-kiln-field="completed" type="checkbox">',
+-      '<span data-kiln-field="title">Ship</span>',
+-      '<span data-kiln-field="status">in_progress</span>',
+-      "</li>",
+-      '<li data-kiln-key="43"><span data-kiln-field="status">queued</span></li>',
+-      "</ul>",
+-    ].join("");
+-    const patch: ListPatch = {
+-      kind: "list",
+-      op: "fields",
+-      route: "/tasks",
+-      list: "todos",
+-      key: "42",
+-      changes: { status: "complete" },
+-    };
+-
+-    const result = applyListPatchToHtml(html, patch);
+-
+-    expect(result).toContain('<span data-kiln-field="title">Ship</span>');
+-    expect(result).toContain('<input data-kiln-field="completed" type="checkbox">');
+-    expect(result).toContain('<span data-kiln-field="status">complete</span>');
+-    expect(result).toContain('<li data-kiln-key="43"><span data-kiln-field="status">queued</span></li>');
+-  });
+-
+-  it("removes and moves list row elements", () => {
+-    const html = '<ul data-kiln-list="todos"><li data-kiln-key="1">one</li><li data-kiln-key="2">two</li></ul>';
+-
+-    const removed = applyListPatchToHtml(html, { kind: "list", op: "remove", route: "/tasks", list: "todos", key: "1" });
+-    expect(removed).toBe('<ul data-kiln-list="todos"><li data-kiln-key="2">two</li></ul>');
+-
+-    const moved = applyListPatchToHtml(html, { kind: "list", op: "move", route: "/tasks", list: "todos", key: "2", from: 1, to: 0 });
+-    expect(moved).toBe('<ul data-kiln-list="todos"><li data-kiln-key="2">two</li><li data-kiln-key="1">one</li></ul>');
+-  });
+-
+-  it("inserts and replaces rows only when rendered row HTML is supplied", () => {
+-    const html = '<ul data-kiln-list="todos"><li data-kiln-key="1">one</li></ul>';
+-    const unchanged = applyListPatchToHtml(html, {
+-      kind: "list",
+-      op: "insert",
+-      route: "/tasks",
+-      list: "todos",
+-      key: "2",
+-      index: 1,
+-      row: { id: 2 },
+-    });
+-    expect(unchanged).toBe(html);
+-
+-    const inserted = applyListPatchToHtml(html, {
+-      kind: "list",
+-      op: "insert",
+-      route: "/tasks",
+-      list: "todos",
+-      key: "2",
+-      index: 1,
+-      row: { id: 2 },
+-      html: '<li data-kiln-key="2">two</li>',
+-    });
+-    expect(inserted).toBe('<ul data-kiln-list="todos"><li data-kiln-key="1">one</li><li data-kiln-key="2">two</li></ul>');
+-
+-    const replaced = applyListPatchToHtml(inserted, {
+-      kind: "list",
+-      op: "replace-row",
+-      route: "/tasks",
+-      list: "todos",
+-      key: "2",
+-      row: { id: 2 },
+-      html: '<li data-kiln-key="2">TWO</li>',
+-    });
+-    expect(replaced).toBe('<ul data-kiln-list="todos"><li data-kiln-key="1">one</li><li data-kiln-key="2">TWO</li></ul>');
+-  });
+ });
+diff --git a/packages/live/src/html.ts b/packages/live/src/html.ts
+index 7e7ff3b..9df5499 100644
+--- a/packages/live/src/html.ts
++++ b/packages/live/src/html.ts
+@@ -1,5 +1,4 @@
+ import type { ScalarPatch } from "./scalar.js";
+-import type { RenderedListPatch } from "./patch.js";
+ 
+ interface ElementRange {
+   start: number;
+@@ -16,70 +15,6 @@ export function applyScalarPatchToHtml(html: string, patch: ScalarPatch): string
+   return result;
+ }
+ 
+-export function applyListPatchToHtml(html: string, patch: RenderedListPatch): string {
+-  const container = findElementByAttr(html, "data-kiln-list", patch.list);
+-  if (!container) return html;
+-
+-  const containerHtml = html.slice(container.contentStart, container.contentEnd);
+-  const row = findElementByAttr(containerHtml, "data-kiln-key", patch.key);
+-  if (!row && patch.op !== "insert") return html;
+-
+-  let patchedContainerHtml = containerHtml;
+-  switch (patch.op) {
+-    case "fields":
+-      patchedContainerHtml = applyFieldPatchToRow(containerHtml, row!, patch.changes);
+-      break;
+-    case "remove":
+-      patchedContainerHtml = containerHtml.slice(0, row!.start) + containerHtml.slice(row!.end);
+-      break;
+-    case "move":
+-      patchedContainerHtml = moveRowHtml(containerHtml, row!, patch.to);
+-      break;
+-    case "insert":
+-      if (!("html" in patch)) return html;
+-      patchedContainerHtml = insertRowHtml(containerHtml, patch.html, patch.index);
+-      break;
+-    case "replace-row":
+-      if (!("html" in patch)) return html;
+-      patchedContainerHtml = containerHtml.slice(0, row!.start) + patch.html + containerHtml.slice(row!.end);
+-      break;
+-  }
+-
+-  return html.slice(0, container.contentStart) + patchedContainerHtml + html.slice(container.contentEnd);
+-}
+-
+-function insertRowHtml(containerHtml: string, rowHtml: string, index: number): string {
+-  const rows = findElementsByAttr(containerHtml, "data-kiln-key");
+-  const insertIndex = Math.max(0, Math.min(index, rows.length));
+-  if (rows.length === 0 || insertIndex >= rows.length) {
+-    return containerHtml + rowHtml;
+-  }
+-  const target = rows[insertIndex];
+-  return containerHtml.slice(0, target.start) + rowHtml + containerHtml.slice(target.start);
+-}
+-
+-function applyFieldPatchToRow(containerHtml: string, row: ElementRange, changes: Record<string, unknown>): string {
+-  let rowHtml = containerHtml.slice(row.start, row.end);
+-  for (const [field, value] of Object.entries(changes)) {
+-    rowHtml = patchElementsWithAttr(rowHtml, "data-kiln-field", field, escapeHtml(valueToText(value)));
+-  }
+-  return containerHtml.slice(0, row.start) + rowHtml + containerHtml.slice(row.end);
+-}
+-
+-function moveRowHtml(containerHtml: string, row: ElementRange, to: number): string {
+-  const rowHtml = containerHtml.slice(row.start, row.end);
+-  const withoutRow = containerHtml.slice(0, row.start) + containerHtml.slice(row.end);
+-  const rows = findElementsByAttr(withoutRow, "data-kiln-key");
+-  const insertIndex = Math.max(0, Math.min(to, rows.length));
+-
+-  if (rows.length === 0 || insertIndex >= rows.length) {
+-    return withoutRow + rowHtml;
+-  }
+-
+-  const target = rows[insertIndex];
+-  return withoutRow.slice(0, target.start) + rowHtml + withoutRow.slice(target.start);
+-}
+-
+ function patchElementsWithAttr(html: string, attrName: string, attrValue: string, escapedReplacement: string): string {
+   const ranges = findElementsByAttr(html, attrName, attrValue);
+   if (ranges.length === 0) return html;
+diff --git a/packages/live/src/patch.ts b/packages/live/src/patch.ts
+index fca5fec..b4f2655 100644
+--- a/packages/live/src/patch.ts
++++ b/packages/live/src/patch.ts
+@@ -7,11 +7,6 @@ export type ListPatch<T = unknown> =
+   | { kind: "list"; op: "fields"; route: string; list: string; key: string; changes: Record<string, unknown> }
+   | { kind: "list"; op: "replace-row"; route: string; list: string; key: string; row: T };
+ 
+-export type RenderedListPatch<T = unknown> =
+-  | ListPatch<T>
+-  | { kind: "list"; op: "insert"; route: string; list: string; key: string; index: number; row: T; html: string }
+-  | { kind: "list"; op: "replace-row"; route: string; list: string; key: string; row: T; html: string };
+-
+ export interface ReconcileListRowsInput<T> {
+   route: string;
+   list: string;
+diff --git a/packages/routekit/src/boot.test.ts b/packages/routekit/src/boot.test.ts
+index bac3675..7567e5e 100644
+--- a/packages/routekit/src/boot.test.ts
++++ b/packages/routekit/src/boot.test.ts
+@@ -80,7 +80,13 @@ describe('buildPageHandler', () => {
+ 
+     const second = makeRes();
+     await handler(makeReq({ path: '/lifecycle' }) as any, second);
+-    expect(await Bun.file(path.join(tmpDir, 'lifecycle', 'index.html')).exists()).toBe(true);
++    expect(await Bun.file(path.join(tmpDir, 'lifecycle', 'index.html')).exists()).toBe(false);
++    expect(await Bun.file(path.join(tmpDir, 'segments', 'pages', 'lifecycle', 'shell.html')).exists()).toBe(true);
++    const storedShell = await Bun.file(
++      path.join(tmpDir, 'segments', 'pages', 'lifecycle', 'shell.html')
++    ).text();
++    expect(storedShell).toContain('data-kiln-text="title"');
++    expect(storedShell).not.toContain('render-1');
+ 
+     const third = makeRes();
+     await handler(makeReq({ path: '/lifecycle' }) as any, third);
+@@ -94,9 +100,9 @@ describe('buildPageHandler', () => {
+     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
+     const { KilnCache, createBakedSnapshot } = await import('@kiln/engine');
+     const cache = new KilnCache({ cacheDir: tmpDir, ttlSecs: 0, redis: null });
+-    const shell = '<main><h1 s-live="title">Old</h1></main>';
+-    await cache.setHtml('/fresh', shell);
+-    await cache.setJson('/fresh', createBakedSnapshot({ title: 'Current' }));
++    const shell = '<main><h1 data-kiln-text="title"></h1></main>';
++    await cache.saveSegmentShell('page', '/fresh', shell);
++    await cache.setSegmentJson('page', '/fresh', createBakedSnapshot({ title: 'Current' }));
+     const handler = buildPageHandler(
+       { load: () => { throw new Error('loader must not run'); }, default: () => { throw new Error('React must not run'); } },
+       { pattern: '/fresh', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+@@ -113,7 +119,8 @@ describe('buildPageHandler', () => {
+     const res = makeRes();
+     await handler(makeReq({ path: '/fresh' }) as any, res);
+     expect(res.captured.body).toContain('Current');
+-    expect(await cache.getHtml('/fresh')).toBe(shell);
++    expect(await cache.getSegmentShell('page', '/fresh')).toBe(shell);
++    expect(await Bun.file(path.join(tmpDir, 'fresh', 'index.html')).exists()).toBe(false);
+     await fs.rm(tmpDir, { recursive: true });
+   });
+ 
+@@ -145,6 +152,66 @@ describe('buildPageHandler', () => {
+     expect(res.captured.body).toContain('Detail');
+     await fs.rm(tmpDir, { recursive: true });
+   });
++
++  it('stores page and layout shells independently and keeps JSON data-only', async () => {
++    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
++    const layoutPath = path.join(tmpDir, '_layout.tsx');
++    const reactUrl = import.meta.resolve('react');
++    await Bun.write(layoutPath, `
++      import { createElement } from '${reactUrl}';
++      export async function load() { return { heading: 'People' }; }
++      export default function Layout({ heading, children }) {
++        return createElement('section', null,
++          createElement('h1', { 'data-kiln-text': 'heading' }, heading),
++          children
++        );
++      }
++    `);
++    const { createElement } = await import('react');
++    const handler = buildPageHandler(
++      {
++        load: async () => ({ name: 'Ada' }),
++        default: ({ name }: any) =>
++          createElement('article', { 'data-kiln-text': 'name' }, name)
++      },
++      {
++        pattern: '/contacts/:id',
++        layouts: [layoutPath],
++        liveFields: [],
++        hasEntries: false,
++        filePath: '',
++        relativePath: ''
++      },
++      [{ pattern: '/contacts', filePath: layoutPath, relativePath: '_layout.tsx', hasLoad: true }],
++      { cacheDir: tmpDir, ttlSecs: 0, redis: null }
++    );
++
++    const res = makeRes();
++    await handler(makeReq({ path: '/contacts/42' }) as any, res);
++
++    const pageShell = await Bun.file(
++      path.join(tmpDir, 'segments', 'pages', 'contacts', '%3Aid', 'shell.html')
++    ).text();
++    const layoutShell = await Bun.file(
++      path.join(tmpDir, 'segments', 'layouts', 'contacts', 'shell.html')
++    ).text();
++    const pageJson = await Bun.file(
++      path.join(tmpDir, 'segments', 'pages', 'contacts', '42', 'data.json')
++    ).text();
++    const layoutJson = await Bun.file(
++      path.join(tmpDir, 'segments', 'layouts', 'contacts', 'data.json')
++    ).text();
++
++    expect(pageShell).toBe('<article data-kiln-text="name"></article>');
++    expect(layoutShell).toContain('data-kiln-text="heading"></h1>');
++    expect(layoutShell).toContain('__KILN_OUTLET_7f3a9c4b__');
++    expect(pageJson).not.toContain('<article');
++    expect(layoutJson).not.toContain('<section');
++    expect(res.captured.body).toContain('People');
++    expect(res.captured.body).toContain('Ada');
++    expect(await Bun.file(path.join(tmpDir, 'contacts', '42', 'index.html')).exists()).toBe(false);
++    await fs.rm(tmpDir, { recursive: true });
++  });
+   it('returns JSON when Accept: application/json', async () => {
+     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
+     const pageModule = {
+@@ -305,7 +372,8 @@ describe('buildPageHandler', () => {
+     expect(res.captured.body).toContain('data-kiln-list="todos"');
+     expect(res.captured.body).toContain('data-kiln-live="/todos"');
+     expect(res.captured.body).toContain('data-kiln-key="1"');
+-    expect(res.captured.body).toContain('data-kiln-field="status"');
++    expect(res.captured.body).toContain('data-kiln-text="item.status"');
++    expect(res.captured.body).toContain('in_progress');
+     await fs.rm(tmpDir, { recursive: true });
+   });
+ 
+@@ -362,9 +430,11 @@ describe('buildPageHandler', () => {
+     expect(res.captured.body).toContain('From query');
+     expect(registrations).toHaveLength(1);
+     expect(registrations[0].snapshot.rows[0].key).toBe('1');
+-    expect(registrations[0].snapshot.rows[0].html).toContain('data-kiln-key="1"');
+-    const rerendered = await registrations[0].target.renderRows([{ id: 2, title: 'Later' }]);
+-    expect(rerendered.get('2')).toContain('Later');
++    expect(registrations[0].snapshot.rows[0]).toEqual({
++      key: '1',
++      data: { id: 1, title: 'From query' }
++    });
++    expect(registrations[0].target.renderRows).toBeUndefined();
+     await fs.rm(tmpDir, { recursive: true });
+   });
+ 
+diff --git a/packages/routekit/src/boot.ts b/packages/routekit/src/boot.ts
+index 5cbf90a..21602a4 100644
+--- a/packages/routekit/src/boot.ts
++++ b/packages/routekit/src/boot.ts
+@@ -1,7 +1,7 @@
+ import * as path from 'path';
+ import { pathToFileURL, fileURLToPath } from 'url';
+ import { KILN_LIVE_CLIENT_SCRIPT } from './live-client-script.js';
+-import { applyLiveListMarkers, extractLiveListRowHtml } from './live-list-render.js';
++import { applyLiveListMarkers, createLiveListShell } from './live-list-render.js';
+ 
+ import { discoverRoutes } from './discover.js';
+ import { extractPageOptions, extractLiveFields } from './page-options.js';
+@@ -26,6 +26,7 @@ import {
+   bakeSegment,
+   OUTLET_TOKEN,
+   createBakedSnapshot,
++  createImmutableShell,
+   hoistHeadTags,
+   injectJsonSeed,
+   injectKilnScript,
+@@ -169,34 +170,59 @@ export function buildPageHandler(
+       return;
+     }
+ 
+-    // 3. HTML cache check
+-    const cachedHtml = promoted ? await cache.getHtml(req.path) : null;
+-    if (promoted && !cachedHtml) {
++    // 3. Promoted requests assemble immutable segment shells with fresh JSON.
++    const useCachedArtifacts = promoted && hitStatus !== 'JustPromoted';
++    const cachedPage = useCachedArtifacts
++      ? await materializeCachedSegment(cache, 'page', pageMeta.pattern, req.path)
++      : null;
++    const cachedLayouts = useCachedArtifacts
++      ? await Promise.all(
++          layoutPatterns.map((pattern) => materializeCachedSegment(cache, 'layout', pattern, pattern)),
++        )
++      : [];
++    const hasCompleteArtifactSet =
++      cachedPage !== null && cachedLayouts.every((layout) => layout !== null);
++    const materialized = hasCompleteArtifactSet
++      ? assembleMaterializedSegments(
++          pageMeta.pattern,
++          cachedPage,
++          layoutPatterns,
++          cachedLayouts as string[],
++        )
++      : null;
++    if (promoted && !materialized) {
+       hitStatus = 'JustPromoted';
+       promoted = false;
+     }
+-    const cachedSnapshot = cachedHtml ? await cache.getJson(req.path) : null;
+-    const materialized = cachedHtml ? materializeBakedShell(cachedHtml, cachedSnapshot) : null;
+-    if (cachedHtml && !materialized) {
+-      await cache.delete(req.path);
+-      hitStatus = 'JustPromoted';
+-      promoted = false;
+-    }
+-    if (materialized) {
++    if (materialized && cachedPage) {
+       if (kilnConfig?.fsr?.watcher === 'external') {
+         const loaded = await loadPageProps();
+         if (loaded === null) return;
+       }
+       if (!watcher || watcher.hasRegisteredRoute(req.path)) {
+         await store?.touchRoute?.(req.path);
+-        respondWithNavigationShape(res, req, layoutPatterns, pageMeta.pattern, materialized);
++        respondWithNavigationShape(
++          res,
++          req,
++          layoutPatterns,
++          pageMeta.pattern,
++          finalizeDocument(materialized, {}),
++          wrapPageSegment(pageMeta.pattern, cachedPage),
++        );
+         return;
+       }
+       const loaded = await loadPageProps();
+       if (loaded === null) return;
+       if (!hasLiveLists(loaded)) {
+         await store?.touchRoute?.(req.path);
+-        respondWithNavigationShape(res, req, layoutPatterns, pageMeta.pattern, materialized);
++        respondWithNavigationShape(
++          res,
++          req,
++          layoutPatterns,
++          pageMeta.pattern,
++          finalizeDocument(materialized, loaded),
++          wrapPageSegment(pageMeta.pattern, cachedPage),
++        );
+         return;
+       }
+     }
+@@ -249,9 +275,20 @@ export function buildPageHandler(
+       applyLiveListMarkers(pageBaked.html, rawPageProps, req.path),
+       rawPageProps,
+     );
+-    const pageFragment = wrapPageSegment(pageMeta.pattern, markedPageHtml);
+-    let html = pageFragment;
+-    for (let index = layoutBaked.length - 1; index >= 0; index--) {
++    const generatedPageShell = createImmutableShell(
++      createLiveListShell(markedPageHtml, rawPageProps),
++    );
++    await cache.saveSegmentShell('page', pageMeta.pattern, generatedPageShell);
++    const pageShell = (await cache.getSegmentShell('page', pageMeta.pattern)) ?? generatedPageShell;
++    const pageSnapshot = createBakedSnapshot(pageProps);
++    await cache.setSegmentJson('page', req.path, pageSnapshot);
++    const materializedPage = materializeBakedShell(pageShell, pageSnapshot);
++    if (materializedPage === null) {
++      throw new Error(`Failed to materialize page artifact for ${req.path}`);
++    }
++
++    const materializedLayouts: string[] = [];
++    for (let index = 0; index < layoutBaked.length; index++) {
+       const layoutRoute = layoutPatterns[index] ?? '/';
+       const markedLayoutHtml = applyLivePropMarkers(
+         applyLiveListMarkers(
+@@ -261,67 +298,44 @@ export function buildPageHandler(
+         ),
+         rawLayoutPropsArr[index],
+       );
+-      html = materializeLayoutSegment(
+-        layoutRoute,
+-        markedLayoutHtml,
+-        html,
++      const generatedLayoutShell = createImmutableShell(
++        createLiveListShell(markedLayoutHtml, rawLayoutPropsArr[index]),
+       );
++      await cache.saveSegmentShell('layout', layoutRoute, generatedLayoutShell);
++      const layoutShell =
++        (await cache.getSegmentShell('layout', layoutRoute)) ?? generatedLayoutShell;
++      const layoutSnapshot = createBakedSnapshot(layoutPropsArr[index]);
++      await cache.setSegmentJson('layout', layoutRoute, layoutSnapshot);
++      const materializedLayout = materializeBakedShell(layoutShell, layoutSnapshot);
++      if (materializedLayout === null) {
++        throw new Error(`Failed to materialize layout artifact for ${layoutRoute}`);
++      }
++      materializedLayouts.push(materializedLayout);
+     }
+-    const rawSnapshotProps = Object.assign({}, ...rawLayoutPropsArr, rawPageProps);
+     const snapshotProps = Object.assign({}, ...layoutPropsArr, pageProps);
++    const pageFragment = wrapPageSegment(pageMeta.pattern, materializedPage);
++    let html = assembleMaterializedSegments(
++      pageMeta.pattern,
++      materializedPage,
++      layoutPatterns,
++      materializedLayouts,
++    );
+ 
+     // 7b. Hoist React 19 metadata (<title>/<meta>/<link>) from body into <head>
+     html = hoistHeadTags(html);
+ 
+-    // 8. Inject JSON seed before </body>
+-    html = injectJsonSeed(html, snapshotProps);
+-
+-    // 9. Optionally inject Kiln client script
+-    const clientSrc = '/_silcrow/silcrow.js';
+-    if (!html.includes(`src="${clientSrc}"`)) {
+-      html = injectKilnScript(html, clientSrc);
+-    }
+-
+-    // 10. Wrap with doctype if it looks like a full page
+-    const finalHtml = html.startsWith('<html') ? '<!DOCTYPE html>' + html : html;
+-
+-    const pinInRedis = options.pinInRedis ?? false;
++    const finalHtml = finalizeDocument(html, snapshotProps);
+ 
+     // 11. Caching & Persistence
+-    let htmlPath: string | null = null;
+-    let jsonPath: string | null = null;
+-
+-    // A. Eagerly save generic shell (once per pattern)
+-    await cache.saveGenericShell(pageMeta.pattern, finalHtml);
+-
+-    // B. Eagerly save JSON (once per concrete route)
+-    const existingJson = await cache.getJson(req.path);
+-    if (!existingJson) {
+-      await cache.setJson(req.path, createBakedSnapshot(snapshotProps));
+-      jsonPath = cache.diskJsonPath(req.path);
+-      if (store) {
+-        await store.setBakedPaths(req.path, null, jsonPath);
+-      }
+-    } else {
+-      jsonPath = cache.diskJsonPath(req.path);
+-    }
+-
+-    // C. Save Fully Baked HTML if promoted
+-    if (hitStatus === 'JustPromoted') {
+-      await cache.setHtml(req.path, finalHtml, pinInRedis);
+-      htmlPath = cache.diskHtmlPath(req.path);
+-      if (store) {
+-        await store.setBakedPaths(req.path, htmlPath, jsonPath);
+-      }
++    const jsonPath = cache.diskSegmentJsonPath('page', req.path);
++    if (store && typeof store.setBakedPaths === 'function') {
++      await store.setBakedPaths(req.path, null, jsonPath);
+     }
+ 
+     if (watcher) {
+       await registerLiveLists({
+         route: req.path,
+-        pageComponent,
+         pageProps: rawPageProps,
+-        finalHtml,
+-        htmlPath,
+         jsonPath,
+         watcher,
+         defaultDebounce: options.debounce ?? kilnConfig?.fsr?.patchDebounceSecs,
+@@ -332,13 +346,9 @@ export function buildPageHandler(
+         const layoutOptions = extractPageOptions(layoutEntries[index].module);
+         await registerLiveLists({
+           route: layoutRoute,
+-          pageComponent: layoutEntries[index].module.default,
+           pageProps: rawLayoutPropsArr[index],
+-          finalHtml,
+-          htmlPath: cache.diskHtmlPath(layoutRoute),
+-          jsonPath: cache.diskJsonPath(layoutRoute),
++          jsonPath: cache.diskSegmentJsonPath('layout', layoutRoute),
+           watcher,
+-          isLayout: true,
+           defaultDebounce: layoutOptions.debounce ?? kilnConfig?.fsr?.patchDebounceSecs,
+           defaultRevalidate: layoutOptions.revalidate ?? kilnConfig?.fsr?.revalidateSeconds,
+         });
+@@ -389,6 +399,42 @@ function materializeLayoutSegment(pattern: string, shell: string, child: string)
+   return `<div data-ps-layout="${escapeAttribute(pattern)}" style="display:contents">${rendered}</div>`;
+ }
+ 
++function assembleMaterializedSegments(
++  pagePattern: string,
++  pageHtml: string,
++  layoutPatterns: string[],
++  layoutHtmls: string[],
++): string {
++  let html = wrapPageSegment(pagePattern, pageHtml);
++  for (let index = layoutHtmls.length - 1; index >= 0; index--) {
++    html = materializeLayoutSegment(layoutPatterns[index] ?? '/', layoutHtmls[index], html);
++  }
++  return html;
++}
++
++async function materializeCachedSegment(
++  cache: KilnCache,
++  kind: 'page' | 'layout',
++  pattern: string,
++  dataRoute: string,
++): Promise<string | null> {
++  const [shell, snapshot] = await Promise.all([
++    cache.getSegmentShell(kind, pattern),
++    cache.getSegmentJson(kind, dataRoute),
++  ]);
++  return shell ? materializeBakedShell(shell, snapshot) : null;
++}
++
++function finalizeDocument(html: string, seed: Record<string, unknown>): string {
++  let result = hoistHeadTags(html);
++  result = injectJsonSeed(result, seed);
++  const clientSrc = '/_silcrow/silcrow.js';
++  if (!result.includes(`src="${clientSrc}"`)) {
++    result = injectKilnScript(result, clientSrc);
++  }
++  return result.startsWith('<html') ? '<!DOCTYPE html>' + result : result;
++}
++
+ function respondWithNavigationShape(
+   res: KilnResponse,
+   req: KilnRequest,
+@@ -571,13 +617,10 @@ export async function startKiln(
+             for (const entry of entries) {
+               // Entries provide path param mappings — build the concrete path
+               const concretePath = Object.entries(entry).reduce((p, [k, v]) => p.replace(`:${k}`, v), page.pattern);
+-              // Skip if already cached
+-              const existing = await cache.getHtml(concretePath);
+-              if (!existing) {
+-                // Warm up: fire a synthetic prebake request
+-                // (Full bake requires a real req context; we just note intent here)
+-                await cache.setJson(concretePath, entry);
+-              }
++              // A concrete artifact requires the page shell and loader output.
++              // Startup discovery records entries, while the first real request
++              // performs the bake with a complete request context.
++              await cache.getSegmentShell('page', page.pattern);
+             }
+           } catch {
+             // Non-fatal: startup prebake failure
+@@ -712,13 +755,9 @@ function hasLiveLists(loadResult: any): boolean {
+ 
+ async function registerLiveLists(input: {
+   route: string;
+-  pageComponent: any;
+   pageProps: Record<string, unknown>;
+-  finalHtml: string;
+-  htmlPath: string | null;
+   jsonPath: string | null;
+   watcher: FsrWatcher;
+-  isLayout?: boolean;
+   defaultDebounce?: number;
+   defaultRevalidate?: number | false;
+ }): Promise<void> {
+@@ -727,15 +766,7 @@ async function registerLiveLists(input: {
+     const meta = getLiveListMeta(value);
+     if (!meta) continue;
+     const rows = value as unknown[];
+-    const rendered = extractLiveListRowHtml(input.finalHtml, name);
+-    const snapshotRows = rows.map((row) => {
+-      const key = meta.keyOf(row);
+-      const html = rendered.get(key);
+-      if (html === undefined) {
+-        throw new Error(`Live.list "${name}" did not render keyed HTML for row "${key}"`);
+-      }
+-      return { key, data: row, html };
+-    });
++    const snapshotRows = rows.map((row) => ({ key: meta.keyOf(row), data: row }));
+ 
+     await input.watcher.registerLiveList(
+       {
+@@ -746,15 +777,6 @@ async function registerLiveLists(input: {
+         revalidate: meta.revalidate ?? input.defaultRevalidate,
+         keyOf: meta.keyOf,
+         query: meta.query,
+-        renderRows: async (replacementRows) => {
+-          const replacementProps = unwrapLiveProps({
+-            ...input.pageProps,
+-            [name]: cloneLiveListRows(value as LiveList<unknown>, replacementRows),
+-          });
+-          const baked = await bakeSegment(input.pageComponent, replacementProps, input.isLayout ?? false);
+-          const marked = applyLiveListMarkers(baked.html, replacementProps, input.route);
+-          return extractLiveListRowHtml(marked, name);
+-        }
+       },
+       {
+         route: input.route,
+@@ -763,7 +785,7 @@ async function registerLiveLists(input: {
+         debounceSecs: meta.debounce ?? input.defaultDebounce,
+         revalidateSecs: meta.revalidate ?? input.defaultRevalidate,
+         rows: snapshotRows,
+-        htmlPath: input.htmlPath,
++        htmlPath: null,
+         jsonPath: input.jsonPath
+       }
+     );
+diff --git a/packages/routekit/src/live-client-script.ts b/packages/routekit/src/live-client-script.ts
+index e06d1b2..e309d2e 100644
+--- a/packages/routekit/src/live-client-script.ts
++++ b/packages/routekit/src/live-client-script.ts
+@@ -38,6 +38,44 @@ function _setText(node,value){
+   node.textContent=value==null?'':String(value);
+ }
+ 
++function _setAttr(node,name,value){
++  if(value==null||value===false){
++    node.removeAttribute(name);
++  }else if(value===true){
++    node.setAttribute(name,'');
++  }else{
++    node.setAttribute(name,String(value));
++  }
++}
++
++function _rowValue(row,path){
++  var parts=String(path||'').split('.');
++  if(parts.length>1)parts.shift();
++  var value=row;
++  for(var i=0;i<parts.length;i++){
++    if(value==null)return undefined;
++    value=value[parts[i]];
++  }
++  return value;
++}
++
++function _bindRow(root,row){
++  var nodes=[root];
++  root.querySelectorAll('*').forEach(function(node){nodes.push(node);});
++  nodes.forEach(function(node){
++    var textPath=node.getAttribute&&node.getAttribute('data-kiln-text');
++    if(textPath){
++      var textValue=_rowValue(row,textPath);
++      if(textValue!==undefined)_setText(node,textValue);
++    }
++    Array.prototype.forEach.call(node.attributes||[],function(attr){
++      if(attr.name.indexOf('data-kiln-attr-')!==0)return;
++      var value=_rowValue(row,attr.value);
++      if(value!==undefined)_setAttr(node,attr.name.slice(15),value);
++    });
++  });
++}
++
+ function _patchScalar(field,value){
+   document.querySelectorAll('[s-live="'+field+'"],[data-kiln-live-field="'+field+'"]').forEach(function(el){
+     _setText(el,value);
+@@ -57,13 +95,23 @@ function _patchList(data){
+     return;
+   }
+   sessionStorage.removeItem('kiln-live-list-reload:'+window.location.pathname+':'+data.list);
+-  var row=list.querySelector('[data-kiln-key="'+data.key+'"]');
++  var matchingRows=Array.prototype.slice.call(list.querySelectorAll('[data-kiln-key="'+data.key+'"]'));
++  var row=matchingRows[0]||null;
++  var template=list.querySelector('template[data-kiln-each="'+data.list+'"]');
+   if(data.op==='insert'){
+-    if(!data.html)return;
+-    var box=document.createElement('div');
+-    box.innerHTML=data.html;
+-    var node=box.firstElementChild;
++    if(!template||!data.row)return;
++    if(row){
++      _bindRow(row,data.row);
++      matchingRows.slice(1).forEach(function(node){node.remove();});
++      var existingRows=Array.prototype.filter.call(list.querySelectorAll('[data-kiln-key]'),function(node){return node!==row;});
++      var existingIndex=Math.max(0,Math.min(Number(data.index)||0,existingRows.length));
++      list.insertBefore(row,existingRows[existingIndex]||null);
++      return;
++    }
++    var node=template.content.firstElementChild.cloneNode(true);
+     if(!node)return;
++    node.setAttribute('data-kiln-key',String(data.key));
++    _bindRow(node,data.row);
+     var rows=list.querySelectorAll('[data-kiln-key]');
+     var index=Math.max(0,Math.min(Number(data.index)||0,rows.length));
+     list.insertBefore(node,rows[index]||null);
+@@ -71,9 +119,10 @@ function _patchList(data){
+   }
+   if(!row)return;
+   if(data.op==='remove'){
+-    row.remove();
++    matchingRows.forEach(function(node){node.remove();});
+     return;
+   }
++  matchingRows.slice(1).forEach(function(node){node.remove();});
+   if(data.op==='move'){
+     var moveRows=Array.prototype.filter.call(list.querySelectorAll('[data-kiln-key]'),function(n){return n!==row;});
+     var to=Math.max(0,Math.min(Number(data.to)||0,moveRows.length));
+@@ -81,14 +130,11 @@ function _patchList(data){
+     return;
+   }
+   if(data.op==='replace-row'){
+-    if(!data.html)return;
+-    var replaceBox=document.createElement('div');
+-    replaceBox.innerHTML=data.html;
+-    var replaceNode=replaceBox.firstElementChild;
+-    if(replaceNode)row.replaceWith(replaceNode);
++    if(data.row)_bindRow(row,data.row);
+     return;
+   }
+   if(data.op&&data.op!=='fields')return;
++  _bindRow(row,data.changes||{});
+   Object.keys(data.changes||{}).forEach(function(field){
+     row.querySelectorAll('[data-kiln-field="'+field+'"],[data-kiln-live-field="'+field+'"]').forEach(function(el){
+       _setText(el,data.changes[field]);
+diff --git a/packages/routekit/src/live-client.test.ts b/packages/routekit/src/live-client.test.ts
+index 767a5c9..554d82a 100644
+--- a/packages/routekit/src/live-client.test.ts
++++ b/packages/routekit/src/live-client.test.ts
+@@ -52,10 +52,15 @@ run('script applies list field patch envelopes', () => {
+   assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("data-kiln-list"));
+   assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("data-kiln-key"));
+   assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("data-kiln-field"));
++  assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("data-kiln-attr-"));
++  assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("function _setAttr"));
++  assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("matchingRows.slice(1)"));
++  assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("matchingRows.forEach"));
+   assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("data.op==='insert'"));
+   assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("data.op==='remove'"));
+   assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("data.op==='move'"));
+   assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("data.op==='replace-row'"));
++  assert.ok(!KILN_LIVE_CLIENT_SCRIPT.includes('data.html'));
+ });
+ 
+ run('script subscribes to generated list names', () => {
+diff --git a/packages/routekit/src/live-list-render.ts b/packages/routekit/src/live-list-render.ts
+index 05ae4e2..542b026 100644
+--- a/packages/routekit/src/live-list-render.ts
++++ b/packages/routekit/src/live-list-render.ts
+@@ -52,6 +52,37 @@ export function extractLiveListRowHtml(html: string, listName: string): Map<stri
+   return result;
+ }
+ 
++export function createLiveListShell(html: string, loadResult: Record<string, unknown>): string {
++  let result = html;
++  for (const target of extractListTargets(loadResult)) {
++    if (target.rows.length === 0) continue;
++    const container = findElementByAttribute(result, "data-kiln-list", target.name);
++    if (!container) continue;
++
++    const firstRow = target.rows[0];
++    const key = target.keyOf(firstRow);
++    const row = findElementByAttribute(
++      result.slice(container.openEnd, container.closeStart),
++      "data-kiln-key",
++      key,
++    );
++    if (!row) continue;
++
++    const content = result.slice(container.openEnd, container.closeStart);
++    const rowHtml = content.slice(row.start, row.end);
++    const templateRow = convertRowToBindings(rowHtml, "item");
++    const keyPath = inferKeyPath(firstRow, key);
++    const template =
++      `<template data-kiln-each="${escapeAttr(target.name)}" ` +
++      `data-kiln-as="item" data-kiln-key="${escapeAttr(keyPath)}">${templateRow}</template>`;
++    result =
++      result.slice(0, container.openEnd) +
++      template +
++      result.slice(container.closeStart);
++  }
++  return result;
++}
++
+ function extractListTargets(loadResult: Record<string, unknown>): ListRenderTarget[] {
+   const targets: ListRenderTarget[] = [];
+   for (const [name, value] of Object.entries(loadResult ?? {})) {
+@@ -156,6 +187,34 @@ function markRowFields(rowHtml: string, row: unknown): string {
+   return result;
+ }
+ 
++function convertRowToBindings(rowHtml: string, alias: string): string {
++  let result = rowHtml.replace(/\sdata-kiln-key="[^"]*"/, "");
++  const fields = Array.from(
++    new Set(Array.from(result.matchAll(/\bdata-kiln-field="([^"]+)"/g), (match) => match[1])),
++  );
++  for (const field of fields) {
++    const fieldPattern = new RegExp(
++      `<([A-Za-z][A-Za-z0-9:-]*)([^>]*)\\bdata-kiln-field="${escapeRegExp(field)}"([^>]*)>[\\s\\S]*?<\\/\\1>`,
++      "g",
++    );
++    result = result.replace(fieldPattern, (_source, tag, before, after) => {
++      const attrs = `${before}${after}`
++        .replace(/\sdata-kiln-live-field="[^"]*"/g, "")
++        .replace(/\sdata-kiln-field="[^"]*"/g, "");
++      return `<${tag}${attrs} data-kiln-text="${escapeAttr(`${alias}.${field}`)}"></${tag}>`;
++    });
++  }
++  return result;
++}
++
++function inferKeyPath(row: unknown, expectedKey: string): string {
++  if (!isRecord(row)) return "id";
++  for (const [field, value] of Object.entries(row)) {
++    if (String(value) === expectedKey) return field;
++  }
++  return "id";
++}
++
+ function rowTextValues(row: unknown): string[] {
+   if (!isRecord(row)) return [];
+   return Object.entries(row)
