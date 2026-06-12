@@ -8,6 +8,7 @@ This file details the active task, branch checkpoints, and developer status.
     *   [x] Create a canonical, version-controlled repository memory directory (`.memory/`) containing decisions, system architecture details, known issues, and roadmap goals.
     *   [x] Port all local AI configurations to use relative repository roots, enabling full multi-agent portability on clean checkouts.
     *   [x] Standardise code-review-graph updates by registering standard Git `post-commit` and `post-merge` hooks.
+    *   [x] Consolidate root rule files (CLAUDE.md, GEMINI.md, .codex/AGENTS.md) into a single Agents.md entrypoint redirecting to .memory/agent-rules.md.
 
 ---
 
