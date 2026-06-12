@@ -9,12 +9,16 @@ export const GraphifyPlugin = async ({ directory }) => {
   return {
     "tool.execute.before": async (input, output) => {
       if (reminded) return;
-      if (!existsSync(join(directory, "graphify-out", "graph.json"))) return;
-
       if (input.tool === "bash") {
-        output.args.command =
-          'echo "[graphify] Knowledge graph available. Read graphify-out/GRAPH_REPORT.md for god nodes and architecture context before searching files." && ' +
-          output.args.command;
+        let lines = [];
+        if (existsSync(join(directory, "graphify-out", "graph.json"))) {
+          lines.push("[graphify] Knowledge graph available. Read graphify-out/GRAPH_REPORT.md for god nodes and architecture context.");
+        }
+        lines.push("[echovault] Run 'memory context --project' at start to load past decisions, bugs, and learning context.");
+        lines.push("[continuity] Check .codebase-memory/adr.md for decisions and .remember/now.md for active tasks.");
+
+        let echoCmd = lines.map(line => `echo "${line}"`).join(" && ");
+        output.args.command = `${echoCmd} && ${output.args.command}`;
         reminded = true;
       }
     },

@@ -29,7 +29,7 @@ approval_mode = "approve"
 [mcp_servers.code-review-graph]
 command = "uvx"
 args = ["code-review-graph", "serve"]
-cwd = "/Users/jagjeet/Development/workspaces/Kiln"
+cwd = "."
 
 [mcp_servers.code-review-graph.tools.list_graph_stats_tool]
 approval_mode = "approve"

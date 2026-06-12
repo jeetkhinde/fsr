@@ -18,7 +18,7 @@
         "code-review-graph",
         "serve"
       ],
-      "cwd": "/Users/jagjeet/Development/workspaces/Kiln",
+      "cwd": ".",
       "type": "stdio"
     }
   }

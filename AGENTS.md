@@ -67,3 +67,28 @@ Rules:
 - IF graphify-out/wiki/index.md EXISTS, navigate it instead of reading raw files
 - For cross-module "how does X relate to Y" questions, prefer `graphify query "<question>"`, `graphify path "<A>" "<B>"`, or `graphify explain "<concept>"` over grep — these traverse the graph's EXTRACTED + INFERRED edges instead of scanning files
 - After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+
+## EchoVault: Persistent Memory
+
+**IMPORTANT: Every agent session MUST retrieve previous memory context at start and save discoveries/decisions at end. This ensures decisions are shared across Codex, Claude, OpenCode, Antigravity, and Gemini CLI.**
+
+### Session Start Checklist
+Before writing code or running analysis, retrieve the project context:
+1. Run `memory context --project` in bash, or call the `echovault/memory_context` MCP tool.
+2. Search for related terms using `memory search "<terms>"` or `echovault/memory_search`.
+3. When details are available, load them with `memory details <id>` to understand prior findings, blockers, and bug reports.
+
+### Session End Checklist
+Before ending a session where changes, bug fixes, design decisions, or discoveries were made, you MUST save a memory:
+- Run the `memory save` CLI command (using the format in `.codex/skills/echovault/SKILL.md`) or call the `echovault/memory_save` MCP tool.
+- Specify categories such as `decision`, `bug`, `pattern`, `learning`, or `context`.
+
+## Architectural Continuity & ADRs
+- All major architecture decisions are documented in the [adr.md](file:///Users/jagjeet/Development/workspaces/Kiln/.codebase-memory/adr.md) file.
+- **Rule:** Before proposing or implementing design changes, read the ADR file to ensure your approach conforms to established patterns (e.g. required Redis caching, 3-layer storage, `promote_after` lifecycles).
+
+## Task Continuity & Active Work
+- The current active task context is located in [now.md](file:///Users/jagjeet/Development/workspaces/Kiln/.remember/now.md).
+- Active project implementation plans are stored in the [docs/superpowers/plans/](file:///Users/jagjeet/Development/workspaces/Kiln/docs/superpowers/plans/) directory.
+- **Rule:** Keep `.remember/now.md` updated with your active/completed progress before completing the session.
+
