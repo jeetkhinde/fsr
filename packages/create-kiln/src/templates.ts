@@ -55,7 +55,7 @@ export default defineConfig({
   pagesDir: './pages',
   apiDir: './api',
   fsr: {
-    promoteAfterHits: 1,
+    promoteAfterHits: 2,
     maxSseConnections: 1000,
     connectionTtlSecs: 3600,
     keepaliveSecs: 30,
@@ -267,7 +267,7 @@ async function main() {
     const store = new FsrStore(bunSql);
     const watcher = new FsrWatcher(store, null, {
       pollIntervalMs: 1000,
-      promoteAfterHits: config.fsr?.promoteAfterHits ?? 1,
+      promoteAfterHits: config.fsr?.promoteAfterHits ?? 2,
       patchDebounceSecs: 0,
       purgeAfterSeconds: 3600,
       scheduledInvalidations: [],

@@ -50,4 +50,13 @@ describe('KilnCache', () => {
     expect(htmlPath).toEndWith('index.html');
     expect(htmlPath).not.toContain(':');
   });
+
+  it('maps root route "/" to index/index.html (not a bare file)', () => {
+    const htmlPath = cache.diskHtmlPath('/');
+    expect(htmlPath).toContain('index');
+    expect(htmlPath).toEndWith('index.html');
+    // Confirm there is a directory segment before index.html
+    const jsonPath = cache.diskJsonPath('/');
+    expect(jsonPath).toEndWith('index.json');
+  });
 });

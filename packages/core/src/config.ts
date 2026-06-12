@@ -141,14 +141,14 @@ export const DEFAULT_CONFIG: KilnConfig = {
     inlineRuntime: false,
   },
   live: {
-    promoteAfterHits: 100,
+    promoteAfterHits: 2,
     patchDebounceSeconds: 30,
     purgeAfterSeconds: 2_592_000, // 30 days
   },
   fsr: {
     watcher: 'embedded',
     pollIntervalMs: 500,
-    promoteAfterHits: 100,
+    promoteAfterHits: 2,
     patchDebounceSecs: 0,
     purgeAfterSeconds: 2_592_000,
     maxSseConnections: 1000,

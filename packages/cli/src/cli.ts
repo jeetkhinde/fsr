@@ -71,7 +71,7 @@ const devCommand = defineCommand({
 
       watcher = new FsrWatcher(store, redisCache, {
         pollIntervalMs: 1000,
-        promoteAfterHits: config.fsr.promoteAfterHits ?? 1,
+        promoteAfterHits: config.fsr.promoteAfterHits ?? 2,
         patchDebounceSecs: 0,
         purgeAfterSeconds: 3600,
         scheduledInvalidations: [],

@@ -369,4 +369,131 @@ describe('buildPageHandler', () => {
     );
     await fs.rm(tmpDir, { recursive: true });
   });
+
+  it('writes scoped HTML and JSON to disk when promoteAfter is set', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
+    const { createElement } = await import('react');
+    const { KilnCache } = await import('@kiln/engine');
+
+    const pageModule = {
+      promoteAfter: 0,
+      load: async () => ({ greeting: 'hello', count: 42 }),
+      default: ({ greeting, count }: any) =>
+        createElement('div', null, `${greeting}-${count}`)
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      {
+        pattern: '/bake-test',
+        layouts: [],
+        liveFields: [],
+        hasEntries: false,
+        filePath: '',
+        relativePath: ''
+      },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null }
+    );
+
+    const req = makeReq({ path: '/bake-test' });
+    const res = makeRes();
+    await handler(req as any, res as any);
+
+    // The response should be HTML
+    expect(res.captured.type).toBe('html');
+    expect(res.captured.body).toContain('hello-42');
+
+    // Scoped HTML must be written to disk
+    const cache = new KilnCache({ redis: null, cacheDir: tmpDir, ttlSecs: 0 });
+    const htmlOnDisk = await cache.getHtml('/bake-test');
+    expect(htmlOnDisk).not.toBeNull();
+    expect(htmlOnDisk).toContain('hello-42');
+
+    // Scoped JSON must be written to disk
+    const jsonOnDisk = await cache.getJson('/bake-test') as any;
+    expect(jsonOnDisk).not.toBeNull();
+    expect(jsonOnDisk.greeting).toBe('hello');
+    expect(jsonOnDisk.count).toBe(42);
+
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it('does not write baked files to disk when promoteAfter is not set', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
+    const { createElement } = await import('react');
+    const { KilnCache } = await import('@kiln/engine');
+
+    // No promoteAfter on module
+    const pageModule = {
+      load: async () => ({ greeting: 'world' }),
+      default: ({ greeting }: any) => createElement('p', null, greeting)
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      {
+        pattern: '/no-bake',
+        layouts: [],
+        liveFields: [],
+        hasEntries: false,
+        filePath: '',
+        relativePath: ''
+      },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null }
+    );
+
+    await handler(makeReq({ path: '/no-bake' }) as any, makeRes());
+
+    // Neither scoped HTML nor JSON should exist on disk
+    const cache = new KilnCache({ redis: null, cacheDir: tmpDir, ttlSecs: 0 });
+    expect(await cache.getHtml('/no-bake')).toBeNull();
+    expect(await cache.getJson('/no-bake')).toBeNull();
+
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it('serves pre-baked scoped HTML from disk on the next request', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
+    const { createElement } = await import('react');
+    const { KilnCache } = await import('@kiln/engine');
+
+    // Pre-write a known HTML file to the cache
+    const cache = new KilnCache({ redis: null, cacheDir: tmpDir, ttlSecs: 0 });
+    const prebakedHtml = '<html><body><p>pre-baked content</p></body></html>';
+    await cache.setHtml('/cached-route', prebakedHtml);
+
+    let loadCallCount = 0;
+    const pageModule = {
+      promoteAfter: 0,
+      load: async () => {
+        loadCallCount++;
+        return { greeting: 'fresh render' };
+      },
+      default: ({ greeting }: any) => createElement('p', null, greeting)
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      {
+        pattern: '/cached-route',
+        layouts: [],
+        liveFields: [],
+        hasEntries: false,
+        filePath: '',
+        relativePath: ''
+      },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null }
+    );
+
+    const res = makeRes();
+    await handler(makeReq({ path: '/cached-route' }) as any, res as any);
+
+    // The pre-baked content should be served
+    expect(res.captured.type).toBe('html');
+    expect(res.captured.body).toContain('pre-baked content');
+    // load() should not have been called (cache hit bypasses SSR)
+    expect(loadCallCount).toBe(0);
+
+    await fs.rm(tmpDir, { recursive: true });
+  });
 });

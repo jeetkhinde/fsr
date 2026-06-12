@@ -39,18 +39,27 @@ export class KilnCache {
       } catch { this.redis = null; }
     }
     const f = Bun.file(this.diskHtmlPath(route));
-    return (await f.exists()) ? f.text() : null;
-  }
-
-  async setHtml(route: string, html: string): Promise<void> {
-    const diskPath = this.diskHtmlPath(route);
-    await Bun.write(diskPath, html);
+    if (!(await f.exists())) return null;
+    
+    const html = await f.text();
     if (this.redis) {
       try {
         await this.redis.set(this.redisHtmlKey(route), html);
         if (this.ttlSecs > 0) await this.redis.expire(this.redisHtmlKey(route), this.ttlSecs);
       } catch { this.redis = null; }
     }
+    return html;
+  }
+
+  async setHtml(route: string, html: string): Promise<void> {
+    if (this.redis) {
+      try {
+        await this.redis.set(this.redisHtmlKey(route), html);
+        if (this.ttlSecs > 0) await this.redis.expire(this.redisHtmlKey(route), this.ttlSecs);
+      } catch { this.redis = null; }
+    }
+    const diskPath = this.diskHtmlPath(route);
+    await Bun.write(diskPath, html);
   }
 
   async getJson(route: string): Promise<unknown | null> {
@@ -62,18 +71,30 @@ export class KilnCache {
     }
     const f = Bun.file(this.diskJsonPath(route));
     if (!(await f.exists())) return null;
-    try { return JSON.parse(await f.text()); } catch { return null; }
+    
+    let parsed: unknown = null;
+    try { 
+      const jsonStr = await f.text();
+      parsed = JSON.parse(jsonStr); 
+      if (this.redis) {
+        try {
+          await this.redis.set(this.redisJsonKey(route), jsonStr);
+          if (this.ttlSecs > 0) await this.redis.expire(this.redisJsonKey(route), this.ttlSecs);
+        } catch { this.redis = null; }
+      }
+    } catch { return null; }
+    return parsed;
   }
 
   async setJson(route: string, data: unknown): Promise<void> {
     const json = JSON.stringify(data);
-    await Bun.write(this.diskJsonPath(route), json);
     if (this.redis) {
       try {
         await this.redis.set(this.redisJsonKey(route), json);
         if (this.ttlSecs > 0) await this.redis.expire(this.redisJsonKey(route), this.ttlSecs);
       } catch { this.redis = null; }
     }
+    await Bun.write(this.diskJsonPath(route), json);
   }
 
   async patchJsonField(route: string, field: string, value: unknown): Promise<void> {
