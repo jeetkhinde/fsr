@@ -1,1 +1,1 @@
-Read AGENTS.MD file
+Read Agents.md file

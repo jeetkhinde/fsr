@@ -2,7 +2,7 @@
 
 # Codex Instructions
 
-**MANDATORY:** Always read the root [AGENTS.md](file:///Users/jagjeet/Development/workspaces/Kiln/AGENTS.md) file first before doing any work. It contains the execution style rules, codebase graph guidelines, EchoVault memory protocols, and task tracking details.
+**MANDATORY:** Always read the root [Agents.md](file:///Users/jagjeet/Development/workspaces/Kiln/Agents.md) file first before doing any work. It contains the execution style rules, codebase graph guidelines, EchoVault memory protocols, and task tracking details.
 
 ## EchoVault — Persistent Memory
 
