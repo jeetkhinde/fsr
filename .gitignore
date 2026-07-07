@@ -13,3 +13,4 @@ graphify-out/
 # Local Superpowers design companion artifacts
 .superpowers/
 .kiln-cache/
+.aider*

@@ -125,7 +125,13 @@ export function buildPageHandler(
     let promoted = false;
 
     if (store && typeof store.ensureRouteRow === 'function' && typeof store.incrementHit === 'function') {
-      await store.ensureRouteRow(req.path, promoteAfter === false ? null : promoteAfter, revalidate === false ? 0 : revalidate, purgeAfter);
+      await store.ensureRouteRow(
+        req.path,
+        promoteAfter === false ? null : promoteAfter,
+        revalidate === false ? 0 : revalidate,
+        purgeAfter,
+        options.patchMode
+      );
       hitStatus = await store.incrementHit(req.path);
       promoted = hitStatus === 'JustPromoted' || await store.isPromoted?.(req.path) === true;
     } else {
@@ -194,7 +200,19 @@ export function buildPageHandler(
       }
       const loaded = await loadPageProps();
       if (loaded === null) return;
-      if (!hasLiveLists(loaded)) {
+
+      const liveFields = extractLiveFields(rawPageProps);
+      if (store && watcher && liveFields.length > 0) {
+        watcher.registerLoader({
+          route: req.path,
+          load: async () => {
+            const l = typeof module.load === 'function' ? await module.load(req) : {};
+            return l as Record<string, unknown>;
+          },
+        });
+      }
+
+      if (!hasLiveLists(rawPageProps) && liveFields.length === 0) {
         await store?.touchRoute?.(req.path);
         respondWithNavigationShape(res, req, layoutPatterns, pageMeta.pattern, materialized);
         return;

@@ -428,6 +428,18 @@ export class FsrWatcher {
       await this.patchJsonFileBatch(jsonPath, patches);
     }
 
+    const htmlToMaterialize = new Set<string>();
+    for (const { slotRow, err } of results) {
+      if (err) continue;
+      if (slotRow.promoted && slotRow.patchMode === 'both' && slotRow.htmlPath && slotRow.jsonPath) {
+        htmlToMaterialize.add(JSON.stringify({ htmlPath: slotRow.htmlPath, jsonPath: slotRow.jsonPath }));
+      }
+    }
+    for (const pairStr of htmlToMaterialize) {
+      const { htmlPath, jsonPath } = JSON.parse(pairStr);
+      await this.materializeHtmlFile(htmlPath, jsonPath);
+    }
+
     // Phase 2c: broadcast SSE and mark fresh
     for (const { slotRow, value, err } of results) {
       if (err) continue;
@@ -489,6 +501,18 @@ export class FsrWatcher {
     // Phase 2b: patch files
     for (const [jsonPath, patches] of jsonPatches.entries()) {
       await this.patchJsonFileBatch(jsonPath, patches);
+    }
+
+    const htmlToMaterialize = new Set<string>();
+    for (const { slotRow, err } of results) {
+      if (err) continue;
+      if (slotRow.promoted && slotRow.patchMode === 'both' && slotRow.htmlPath && slotRow.jsonPath) {
+        htmlToMaterialize.add(JSON.stringify({ htmlPath: slotRow.htmlPath, jsonPath: slotRow.jsonPath }));
+      }
+    }
+    for (const pairStr of htmlToMaterialize) {
+      const { htmlPath, jsonPath } = JSON.parse(pairStr);
+      await this.materializeHtmlFile(htmlPath, jsonPath);
     }
 
     // Phase 2c: Redis JSON read/merge/write
@@ -597,6 +621,11 @@ export class FsrWatcher {
         if ('updatedAt' in snapshot) snapshot.updatedAt = new Date().toISOString();
         if (paths?.jsonPath) await fs.writeFile(paths.jsonPath, JSON.stringify(snapshot), 'utf8');
         if (this.redis) await this.redis.setJson(route, snapshot);
+
+        const patchMode = await this.store.getRoutePatchMode(route);
+        if (patchMode === 'both' && paths?.htmlPath && paths?.jsonPath) {
+          await this.materializeHtmlFile(paths.htmlPath, paths.jsonPath);
+        }
       } catch (error: any) {
         console.warn(`FSR watcher: loader refresh failed for ${route}:`, error.message);
       }
@@ -689,6 +718,11 @@ export class FsrWatcher {
         if (patchedJson !== null) await this.redis.setJson(snapshot.route, patchedJson);
       }
 
+      const patchMode = await this.store.getRoutePatchMode(snapshot.route);
+      if (patchMode === 'both' && snapshot.htmlPath && snapshot.jsonPath) {
+        await this.materializeHtmlFile(snapshot.htmlPath, snapshot.jsonPath);
+      }
+
       await this.store.lists.markFresh(snapshot.route, snapshot.name, nextSnapshotRows);
 
       if (this.redis) {
@@ -737,6 +771,23 @@ export class FsrWatcher {
       await fs.writeFile(jsonPath, JSON.stringify(obj), 'utf8');
     } catch (err: any) {
       console.warn(`FSR watcher: failed to patch JSON file at ${jsonPath}:`, err.message);
+    }
+  }
+
+  private async materializeHtmlFile(htmlPath: string, jsonPath: string): Promise<void> {
+    try {
+      const htmlShell = await fs.readFile(htmlPath, 'utf8');
+      const jsonStr = await fs.readFile(jsonPath, 'utf8');
+      const jsonSnapshot = JSON.parse(jsonStr);
+      
+      const { materializeBakedShell } = await import('./baking.js');
+      const materialized = materializeBakedShell(htmlShell, jsonSnapshot);
+      
+      if (materialized) {
+        await fs.writeFile(htmlPath, materialized, 'utf8');
+      }
+    } catch (err: any) {
+      console.warn(`FSR watcher: failed to materialize HTML file at ${htmlPath}:`, err.message);
     }
   }
 }

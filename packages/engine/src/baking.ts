@@ -65,6 +65,20 @@ export function injectFsrSlots(shell: string, slots: [string, any][]): string {
     result = applyScalarPatchToHtml(result, createScalarPatch('', slotName, jsonVal));
   }
 
+  const seedMatch = result.match(/<script>window\.__kiln_seed=(.*?)<\/script>/);
+  if (seedMatch) {
+    try {
+      const seed = JSON.parse(seedMatch[1]);
+      for (const [slotName, jsonVal] of slots) {
+        seed[slotName] = jsonVal;
+      }
+      result = result.replace(
+        seedMatch[0],
+        `<script>window.__kiln_seed=${JSON.stringify(seed)}</script>`
+      );
+    } catch (e) {}
+  }
+
   return result;
 }
 

@@ -20,6 +20,7 @@ export interface StaleSlot {
   htmlPath: string | null;
   jsonPath: string | null;
   columnName: string | null;
+  patchMode: 'json' | 'both' | null;
 }
 
 export interface EvictedRoute {
@@ -77,15 +78,17 @@ export class FsrStore {
     promoteAfter: number | null = 2,
     revalidateSecs = 300,
     purgeAfterSecs = 2_592_000,
+    patchMode: 'json' | 'both' | null = 'json',
   ): Promise<void> {
     await this.sql`
       INSERT INTO kiln_fsr
-        (route, slot, promote_after, revalidate_secs, purge_after_secs, last_requested_at)
-      VALUES (${route}, '', ${promoteAfter}, ${revalidateSecs}, ${purgeAfterSecs}, NOW())
+        (route, slot, promote_after, revalidate_secs, purge_after_secs, patch_mode, last_requested_at)
+      VALUES (${route}, '', ${promoteAfter}, ${revalidateSecs}, ${purgeAfterSecs}, ${patchMode}, NOW())
       ON CONFLICT (route, slot) DO UPDATE SET
         promote_after = EXCLUDED.promote_after,
         revalidate_secs = ${revalidateSecs},
-        purge_after_secs = ${purgeAfterSecs}
+        purge_after_secs = ${purgeAfterSecs},
+        patch_mode = ${patchMode}
     `;
   }
 
@@ -319,7 +322,7 @@ export class FsrStore {
       RETURNING s.route, s.slot, s.query, s.query_params as "queryParams",
                 s.depends_on as "dependsOn", r.promoted,
                 s.debounce_secs as "debounceSecs", r.html_path as "htmlPath",
-                r.json_path as "jsonPath", s.column_name as "columnName"
+                r.json_path as "jsonPath", s.column_name as "columnName", r.patch_mode as "patchMode"
     `;
     
     return rows.map((r: any) => ({
@@ -332,7 +335,8 @@ export class FsrStore {
       debounceSecs: r.debounceSecs,
       htmlPath: r.htmlPath,
       jsonPath: r.jsonPath,
-      columnName: r.columnName
+      columnName: r.columnName,
+      patchMode: r.patchMode
     }));
   }
 
@@ -346,7 +350,7 @@ export class FsrStore {
     return row ? { htmlPath: row.htmlPath, jsonPath: row.jsonPath } : null;
   }
 
-  async setBakedPaths(route: string, htmlPath: string, jsonPath: string | null): Promise<void> {
+  async setBakedPaths(route: string, htmlPath: string | null, jsonPath: string | null): Promise<void> {
     await this.sql`
       UPDATE kiln_fsr
       SET html_path = ${htmlPath}, json_path = ${jsonPath}
@@ -418,7 +422,7 @@ export class FsrStore {
       rows = await this.sql`
         SELECT s.route, s.slot, s.query, s.query_params as "queryParams", s.depends_on as "dependsOn", 
                r.promoted, s.debounce_secs as "debounceSecs", r.html_path as "htmlPath", 
-               r.json_path as "jsonPath", s.column_name as "columnName"
+               r.json_path as "jsonPath", s.column_name as "columnName", r.patch_mode as "patchMode"
         FROM kiln_fsr s
         JOIN kiln_fsr r ON s.route = r.route AND r.slot = ''
         WHERE s.route = ${route} AND s.slot != ''
@@ -428,7 +432,7 @@ export class FsrStore {
       rows = await this.sql`
         SELECT s.route, s.slot, s.query, s.query_params as "queryParams", s.depends_on as "dependsOn", 
                r.promoted, s.debounce_secs as "debounceSecs", r.html_path as "htmlPath", 
-               r.json_path as "jsonPath", s.column_name as "columnName"
+               r.json_path as "jsonPath", s.column_name as "columnName", r.patch_mode as "patchMode"
         FROM kiln_fsr s
         JOIN kiln_fsr r ON s.route = r.route AND r.slot = ''
         WHERE s.route = ${route} AND s.slot != '' AND s.slot = ANY(ARRAY(SELECT jsonb_array_elements_text(${slots}::jsonb)))
@@ -446,7 +450,8 @@ export class FsrStore {
       debounceSecs: r.debounceSecs,
       htmlPath: r.htmlPath,
       jsonPath: r.jsonPath,
-      columnName: r.columnName
+      columnName: r.columnName,
+      patchMode: r.patchMode
     }));
   }
 
@@ -505,5 +510,13 @@ export class FsrStore {
       eventType: r.eventType,
       payload: r.payload,
     }));
+  }
+
+  async getRoutePatchMode(route: string): Promise<'json' | 'both' | null> {
+    const rows = await this.sql`
+      SELECT patch_mode as "patchMode" FROM kiln_fsr WHERE route = ${route} AND slot = ''
+    `;
+    const row = rows[0] as any;
+    return row ? row.patchMode : null;
   }
 }

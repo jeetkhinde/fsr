@@ -7,6 +7,7 @@ export interface PageOptions {
   debounce?: number;
   purgeAfter?: number;
   pinInRedis?: boolean;
+  patchMode?: 'json' | 'both';
 }
 
 export interface LiveListFieldMeta {
@@ -21,6 +22,13 @@ export function extractPageOptions(module: any): PageOptions {
     console.warn('[kiln] promoteAfter is deprecated; export promote_after instead');
     promoteAfter = module.promoteAfter;
   }
+  
+  let patchMode = module.patch_mode;
+  if (patchMode === undefined && module.patchMode) {
+    console.warn('[kiln] patchMode is deprecated; export patch_mode instead');
+    patchMode = module.patchMode;
+  }
+
   return {
     promoteAfter:
       typeof promoteAfter === 'number' || promoteAfter === false
@@ -33,6 +41,7 @@ export function extractPageOptions(module: any): PageOptions {
     debounce: typeof module.debounce === 'number' ? module.debounce : undefined,
     purgeAfter: typeof module.purge_after === 'number' ? module.purge_after : undefined,
     pinInRedis: typeof module.pinInRedis === 'boolean' ? module.pinInRedis : undefined,
+    patchMode: patchMode === 'both' ? 'both' : (patchMode === 'json' ? 'json' : undefined),
   };
 }
 

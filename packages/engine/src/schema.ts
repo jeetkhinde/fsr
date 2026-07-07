@@ -21,6 +21,7 @@ export const KILN_FSR_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS kiln_fsr (
   purge_after_secs INTEGER,
   refresh_claimed_until TIMESTAMP,
   last_patched_at TIMESTAMP,
+  patch_mode VARCHAR(10) DEFAULT 'json',
   CONSTRAINT kiln_fsr_pkey PRIMARY KEY (route, slot)
 );
 
@@ -82,6 +83,7 @@ ALTER TABLE kiln_fsr ADD COLUMN IF NOT EXISTS promoted_at TIMESTAMP;
 ALTER TABLE kiln_fsr ADD COLUMN IF NOT EXISTS revalidate_secs INTEGER;
 ALTER TABLE kiln_fsr ADD COLUMN IF NOT EXISTS purge_after_secs INTEGER;
 ALTER TABLE kiln_fsr ADD COLUMN IF NOT EXISTS refresh_claimed_until TIMESTAMP;
+ALTER TABLE kiln_fsr ADD COLUMN IF NOT EXISTS patch_mode VARCHAR(10) DEFAULT 'json';
 ALTER TABLE kiln_fsr_lists ADD COLUMN IF NOT EXISTS debounce_secs INTEGER;
 ALTER TABLE kiln_fsr_lists ADD COLUMN IF NOT EXISTS revalidate_secs INTEGER;
 ALTER TABLE kiln_fsr_lists ADD COLUMN IF NOT EXISTS refresh_claimed_until TIMESTAMP;
