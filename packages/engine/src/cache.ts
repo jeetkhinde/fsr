@@ -24,22 +24,83 @@ export class KilnCache {
     return path.join(this.cacheDir, safe, 'index.html');
   }
 
-  diskGenericShellPath(pattern: string): string {
+  // ---------------------------------------------------------------------
+  // Layout-level cache: keyed by the LAYOUT's own pattern (e.g. "/dashboard"),
+  // not by the concrete route being served. A layout that only depends on
+  // its own pattern's params (never req.query, never a descendant page's
+  // params — see docs/layout-caching.md) bakes once and is shared by every
+  // route underneath it, instead of being re-baked into every route's own
+  // page-level cache entry. Invalidating a layout then only touches this one
+  // entry, regardless of how many routes sit under it.
+  // ---------------------------------------------------------------------
+
+  diskLayoutHtmlPath(pattern: string): string {
     const safe = pattern === '/' ? 'index' : pattern.replace(/^\//, '').replace(/\//g, path.sep);
-    return path.join(this.cacheDir, 'pages', safe, 'shell.html');
+    return path.join(this.cacheDir, 'layouts', safe, 'shell.html');
   }
 
-  async saveGenericShell(pattern: string, html: string): Promise<void> {
-    const p = this.diskGenericShellPath(pattern);
-    const f = Bun.file(p);
-    if (!(await f.exists())) {
-      await atomicWrite(p, html);
+  diskLayoutJsonPath(pattern: string): string {
+    return this.diskLayoutHtmlPath(pattern).replace(/\.html$/, '.json');
+  }
+
+  private redisLayoutHtmlKey(pattern: string): string { return `kiln:layout:html:${pattern}`; }
+  private redisLayoutJsonKey(pattern: string): string { return `kiln:layout:json:${pattern}`; }
+
+  async getLayoutHtml(pattern: string): Promise<string | null> {
+    if (this.redis) {
+      try {
+        const v = await this.redis.get(this.redisLayoutHtmlKey(pattern));
+        if (v != null) return v;
+      } catch (err) { this.warnRedisError('getLayoutHtml', pattern, err); }
+    }
+    const f = Bun.file(this.diskLayoutHtmlPath(pattern));
+    return (await f.exists()) ? f.text() : null;
+  }
+
+  async setLayoutHtml(pattern: string, html: string): Promise<void> {
+    await atomicWrite(this.diskLayoutHtmlPath(pattern), html);
+    if (this.redis) {
+      try {
+        await this.redis.set(this.redisLayoutHtmlKey(pattern), html);
+      } catch (err) { this.warnRedisError('setLayoutHtml', pattern, err); }
     }
   }
 
-  async getGenericShell(pattern: string): Promise<string | null> {
-    const f = Bun.file(this.diskGenericShellPath(pattern));
-    return (await f.exists()) ? f.text() : null;
+  async getLayoutJson(pattern: string): Promise<unknown | null> {
+    if (this.redis) {
+      try {
+        const v = await this.redis.get(this.redisLayoutJsonKey(pattern));
+        if (v != null) return JSON.parse(v);
+      } catch (err) { this.warnRedisError('getLayoutJson', pattern, err); }
+    }
+    const f = Bun.file(this.diskLayoutJsonPath(pattern));
+    if (!(await f.exists())) return null;
+    try { return JSON.parse(await f.text()); } catch { return null; }
+  }
+
+  async setLayoutJson(pattern: string, data: unknown): Promise<void> {
+    const json = JSON.stringify(data);
+    await atomicWrite(this.diskLayoutJsonPath(pattern), json);
+    if (this.redis) {
+      try {
+        await this.redis.set(this.redisLayoutJsonKey(pattern), json);
+      } catch (err) { this.warnRedisError('setLayoutJson', pattern, err); }
+    }
+  }
+
+  /** Invalidate a single layout's cache — e.g. after a deploy that changes
+   * its source. Every route under that layout picks up the change on its
+   * next request; no per-route re-bake needed. */
+  async deleteLayout(pattern: string): Promise<void> {
+    await Promise.allSettled([
+      fs.unlink(this.diskLayoutHtmlPath(pattern)).catch(() => {}),
+      fs.unlink(this.diskLayoutJsonPath(pattern)).catch(() => {}),
+    ]);
+    if (this.redis) {
+      try {
+        await this.redis.send('DEL', [this.redisLayoutHtmlKey(pattern), this.redisLayoutJsonKey(pattern)]);
+      } catch (err) { this.warnRedisError('deleteLayout', pattern, err); }
+    }
   }
 
   diskJsonPath(route: string): string {
@@ -54,7 +115,7 @@ export class KilnCache {
       try {
         const v = await this.redis.get(this.redisHtmlKey(route));
         if (v != null) return v;
-      } catch { this.redis = null; }
+      } catch (err) { this.warnRedisError('getHtml', route, err); }
     }
     const f = Bun.file(this.diskHtmlPath(route));
     return (await f.exists()) ? f.text() : null;
@@ -63,11 +124,15 @@ export class KilnCache {
   async setHtml(route: string, html: string, pinInRedis: boolean = false): Promise<void> {
     const diskPath = this.diskHtmlPath(route);
     await atomicWrite(diskPath, html);
-    if (this.redis && pinInRedis) {
+    if (this.redis) {
       try {
         await this.redis.set(this.redisHtmlKey(route), html);
-        // Intentionally skip expire() to pin it permanently
-      } catch { this.redis = null; }
+        // pinInRedis skips expire() so the entry never evicts; otherwise it
+        // follows the same ttlSecs policy as JSON snapshots.
+        if (!pinInRedis && this.ttlSecs > 0) {
+          await this.redis.expire(this.redisHtmlKey(route), this.ttlSecs);
+        }
+      } catch (err) { this.warnRedisError('setHtml', route, err); }
     }
   }
 
@@ -76,7 +141,7 @@ export class KilnCache {
       try {
         const v = await this.redis.get(this.redisJsonKey(route));
         if (v != null) return JSON.parse(v);
-      } catch { this.redis = null; }
+      } catch (err) { this.warnRedisError('getJson', route, err); }
     }
     const f = Bun.file(this.diskJsonPath(route));
     if (!(await f.exists())) return null;
@@ -90,7 +155,7 @@ export class KilnCache {
       try {
         await this.redis.set(this.redisJsonKey(route), json);
         if (this.ttlSecs > 0) await this.redis.expire(this.redisJsonKey(route), this.ttlSecs);
-      } catch { this.redis = null; }
+      } catch (err) { this.warnRedisError('setJson', route, err); }
     }
   }
 
@@ -116,7 +181,7 @@ export class KilnCache {
     if (this.redis) {
       try {
         await this.redis.send('DEL', [this.redisHtmlKey(route), this.redisJsonKey(route)]);
-      } catch { this.redis = null; }
+      } catch (err) { this.warnRedisError('delete', route, err); }
     }
   }
 
@@ -125,6 +190,19 @@ export class KilnCache {
   }
 
   getClient(): RedisClient | null { return this.redis; }
+
+  /**
+   * Log and fall through to disk on a Redis error, without permanently
+   * discarding the client. `KilnCache` instances are long-lived (one per
+   * route, for the life of the process — see buildPageHandler), so nulling
+   * out `this.redis` on the first transient error used to disable Redis for
+   * that route forever, until a restart. Bun's RedisClient already handles
+   * its own reconnection, so simply retrying on the next call is preferable.
+   */
+  private warnRedisError(op: string, route: string, err: unknown): void {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[kiln] KilnCache.${op} Redis error for route "${route}", falling back to disk: ${message}`);
+  }
 }
 
 async function atomicWrite(filePath: string, content: string): Promise<void> {

@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip list *)",
+      "Bash(python3 -c \"import sys,json; json.load\\(sys.stdin\\); print\\('valid'\\)\")",
+      "Bash(python3 -c \"import json; d=json.load\\(open\\('/Users/jagjeet/.gemini/config/mcp_config.json'\\)\\); [print\\(' -', k\\) for k in d['mcpServers']]\")",
+      "Bash(bun install *)",
+      "mcp__plugin_context7_context7__resolve-library-id",
+      "mcp__plugin_context7_context7__query-docs",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "WebFetch(domain:bun.com)",
+      "Bash(sed -i '' \"s|'.kiln-image-cache'|'.kiln-image-cache'|g\" packages/core/src/config.ts)",
+      "Bash(sed -i '' \"s|<h1>Kiln Page</h1>|<h1>Kiln Page</h1>|g\" packages/adapter-elysia/src/handlers/page.ts)",
+      "Bash(sed -i '' -e s/KilnVitePluginOptions/KilnVitePluginOptions/g -e 's|name: '\\\\''vite-plugin-kiln'\\\\''|name: '\\\\''vite-plugin-kiln'\\\\''|g' packages/routekit/src/vite-plugin.ts)",
+      "mcp__kiln__list_features",
+      "mcp__kiln__answer_kiln_question",
+      "mcp__kiln__get_feature_spec",
+      "mcp__kiln__scan_project_context",
+      "Bash(git checkout *)",
+      "Bash(bun test *)",
+      "Bash(git commit *)",
+      "Bash(bun add *)",
+      "Bash(git -C /Users/jagjeet/Development/workspace/fsr add packages/engine/src/baking.ts packages/engine/src/baking-fragment.test.ts packages/engine/package.json packages/engine/bun.lock)",
+      "Bash(git -C /Users/jagjeet/Development/workspace/fsr commit -m ' *)",
+      "Bash(git *)"
+    ]
+  }
+}

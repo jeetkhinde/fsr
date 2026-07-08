@@ -23,10 +23,10 @@ This roadmap documents completed milestones, active feature branches, and future
 
 ## Development Backlog & Next Steps
 
-### Phase 1: Compile & Test Green-lighting (Critical Path)
-1.  **Resolve setBakedPaths Type Mismatch**: Correct the `setBakedPaths` signature in [packages/engine/src/store.ts](file:///Users/jagjeet/Development/workspaces/Kiln/packages/engine/src/store.ts#L349) to allow `null` for `htmlPath` or fix [packages/routekit/src/boot.ts](file:///Users/jagjeet/Development/workspaces/Kiln/packages/routekit/src/boot.ts#L303) to supply a default route path.
-2.  **Mock Store Implementation**: Add the missing `setBakedPaths` method to the unit test mock store in `packages/routekit/src/boot.test.ts`.
-3.  **Fix Package-Wide No-Emit Errors**: Align typescript buffer typings, fix `drizzle-orm` / `bun-sql` dependencies, and fix CLI file system imports.
+### Phase 1: Compile & Test Green-lighting (Critical Path) — Completed
+1.  [x] **Resolve setBakedPaths Type Mismatch**: `setBakedPaths` in `packages/engine/src/store.ts` now accepts `htmlPath: string | null`. Fixed in commit `a8dea00`.
+2.  [x] **Mock Store Implementation**: `setBakedPaths` mock added to `packages/routekit/src/boot.test.ts`.
+3.  [x] **Fix Package-Wide No-Emit Errors**: Verified 2026-07-07 — `tsc --noEmit` passes clean in `core`, `engine`, `adapter-elysia`, `routekit`, `react`, and `cli`. Note: full `bun test` suite was not re-run in this pass (no `bun` runtime available); only static type-checking is confirmed.
 
 ### Phase 2: Configuration & Hook Hardening (Completed)
 1.  [x] **Remove Hardcoded Absolute Paths**: Replaced all hardcoded absolute repository paths inside `.claude/settings.json`, `.codex/config.toml`, `.codex/hooks.json`, `.gemini/settings.json`, `.mcp.json`, `.opencode.json`, `.vscode/mcp.json`, and Gemini shell hooks with relative (`.`) paths.
