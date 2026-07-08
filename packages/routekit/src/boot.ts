@@ -82,6 +82,20 @@ function wantsJson(req: KilnRequest): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Layout signature — lets a promoted page's cached shell detect that one of
+// its layouts has since been invalidated (see BakedSnapshot.layoutSignature
+// for the full rationale). Reads the SAME cache entries `deleteLayout()`
+// removes, so it's always consistent with the pattern-level layout cache.
+// ---------------------------------------------------------------------------
+
+async function computeLayoutSignature(patterns: string[], cache: KilnCache): Promise<string> {
+  const htmls = await Promise.all(patterns.map((p) => cache.getLayoutHtml(p)));
+  return htmls
+    .map((html, i) => `${patterns[i]}:${html ? Bun.hash(html).toString(36) : 'MISSING'}`)
+    .join('|');
+}
+
+// ---------------------------------------------------------------------------
 // Page handler
 // ---------------------------------------------------------------------------
 
@@ -182,7 +196,22 @@ export function buildPageHandler(
       promoted = false;
     }
     const cachedSnapshot = cachedHtml ? await cache.getJson(req.path) : null;
-    const materialized = cachedHtml ? materializeBakedShell(cachedHtml, cachedSnapshot) : null;
+    let materialized = cachedHtml ? materializeBakedShell(cachedHtml, cachedSnapshot) : null;
+
+    // A promoted page's cached shell embeds its layouts' HTML as it looked
+    // at bake time. If any of those layouts have since been re-baked or
+    // invalidated (e.g. cache.deleteLayout() after a deploy), the cached
+    // shell is stale even though the page's OWN data snapshot still matches
+    // — without this check a promoted route would never notice and would
+    // keep serving old header/footer/sidebar chrome indefinitely.
+    if (materialized && layoutPatterns.length > 0) {
+      const currentSignature = await computeLayoutSignature(layoutPatterns, cache);
+      const cachedSignature = (cachedSnapshot as { layoutSignature?: string } | null)?.layoutSignature;
+      if (currentSignature !== cachedSignature) {
+        materialized = null;
+      }
+    }
+
     if (cachedHtml && !materialized) {
       await cache.delete(req.path);
       hitStatus = 'JustPromoted';
@@ -229,40 +258,75 @@ export function buildPageHandler(
       })
     );
 
-    // 5. Parallel load: all layout loads + page load
+    // 5. Resolve each layout's baked HTML, and load the page's own props, in
+    // parallel. Layouts are cached PER PATTERN (e.g. "/dashboard"), not per
+    // concrete route: a layout's load() may only depend on params owned by
+    // its own pattern (never req.query, never a descendant page's params —
+    // see docs/layout-caching.md), which makes it always safe to bake once
+    // and share across every route underneath it. This is what lets a
+    // change to shared chrome (header/footer/sidebar) invalidate with a
+    // single cache entry instead of requiring every route to re-bake.
     const layoutPropsArr: any[] = new Array(layoutEntries.length).fill({});
     const rawLayoutPropsArr: any[] = new Array(layoutEntries.length).fill({});
+    const layoutBaked: { html: string }[] = new Array(layoutEntries.length);
+    const layoutFromCache: boolean[] = new Array(layoutEntries.length).fill(false);
     let aborted = false;
 
     await Promise.all([
-      // Page load
+      // Page load (always per-request — pages are never pattern-cached)
       (async () => {
         const loaded = await loadPageProps();
         if (loaded === null) aborted = true;
       })(),
-      // Layout loads
-      ...layoutEntries.map(async ({ node, module: lMod }, idx) => {
+      // Layout resolution: reuse the pattern-level cache when present,
+      // otherwise load() + bake + populate the cache for next time.
+      ...layoutEntries.map(async ({ module: lMod }, idx) => {
+        const layoutPattern = layoutPatterns[idx] ?? '/';
+        const cachedHtml = await cache.getLayoutHtml(layoutPattern);
+        if (cachedHtml) {
+          const cachedJson = await cache.getLayoutJson(layoutPattern);
+          layoutBaked[idx] = { html: materializeBakedShell(cachedHtml, cachedJson) ?? cachedHtml };
+          layoutFromCache[idx] = true;
+          // Propagate the cached layout's data into rawLayoutPropsArr/layoutPropsArr
+          // too, so the page's own JSON snapshot and __kiln_seed (built below from
+          // these arrays) still include this layout's fields even though load()
+          // wasn't re-run this request.
+          const cachedData = (cachedJson as { data?: Record<string, unknown> } | null)?.data ?? {};
+          rawLayoutPropsArr[idx] = cachedData;
+          layoutPropsArr[idx] = cachedData;
+          return;
+        }
+        let loaded: any = {};
         if (typeof lMod.load === 'function') {
-          let loaded = await lMod.load(req);
+          loaded = await lMod.load(req);
           assertEmbeddedLiveLists(loaded, kilnConfig);
           loaded = await materializeLiveLists(loaded, store);
-          rawLayoutPropsArr[idx] = loaded;
-          layoutPropsArr[idx] = unwrapLiveProps(loaded);
         }
+        rawLayoutPropsArr[idx] = loaded;
+        layoutPropsArr[idx] = unwrapLiveProps(loaded);
+        const baked = await bakeSegment(lMod.default, layoutPropsArr[idx], true);
+        // Markers must be baked in BEFORE this HTML is cached, so a later
+        // cache-hit request (which skips load()/bake entirely) still has the
+        // s-live slots materializeBakedShell needs to patch fresh values in.
+        const marked = applyLivePropMarkers(
+          applyLiveListMarkers(baked.html, loaded, layoutPattern),
+          loaded,
+        );
+        layoutBaked[idx] = { html: marked };
+        await cache.setLayoutHtml(layoutPattern, marked);
+        await cache.setLayoutJson(layoutPattern, createBakedSnapshot(layoutPropsArr[idx]));
       })
     ]);
 
     if (aborted) return;
 
-    // 6. Bake all segments in parallel
+    // 6. Bake the page itself — always per-request/per-route, unlike layouts.
     const pageComponent = module.default;
+    const pageBaked = await bakeSegment(pageComponent, pageProps, false);
 
-    const [pageBaked, ...layoutBaked] = await Promise.all([
-      bakeSegment(pageComponent, pageProps, false),
-      ...layoutEntries.map(({ module: lMod }, idx) => bakeSegment(lMod.default, layoutPropsArr[idx], true))
-    ]);
-
-    // 7. Assemble: layouts[0] is outermost, each contains OUTLET_TOKEN
+    // 7. Assemble: layouts[0] is outermost, each contains OUTLET_TOKEN.
+    // layoutBaked[i].html already has its markers applied (see step 5) —
+    // either just now, or previously when it was written to the layout cache.
     const markedPageHtml = applyLivePropMarkers(
       applyLiveListMarkers(pageBaked.html, rawPageProps, req.path),
       rawPageProps,
@@ -271,17 +335,9 @@ export function buildPageHandler(
     let html = pageFragment;
     for (let index = layoutBaked.length - 1; index >= 0; index--) {
       const layoutRoute = layoutPatterns[index] ?? '/';
-      const markedLayoutHtml = applyLivePropMarkers(
-        applyLiveListMarkers(
-          layoutBaked[index].html,
-          rawLayoutPropsArr[index],
-          layoutRoute,
-        ),
-        rawLayoutPropsArr[index],
-      );
       html = materializeLayoutSegment(
         layoutRoute,
-        markedLayoutHtml,
+        layoutBaked[index].html,
         html,
       );
     }
@@ -309,22 +365,24 @@ export function buildPageHandler(
     let htmlPath: string | null = null;
     let jsonPath: string | null = null;
 
-    // A. Eagerly save generic shell (once per pattern)
-    await cache.saveGenericShell(pageMeta.pattern, finalHtml);
-
-    // B. Eagerly save JSON (once per concrete route)
-    const existingJson = await cache.getJson(req.path);
-    if (!existingJson) {
-      await cache.setJson(req.path, createBakedSnapshot(snapshotProps));
-      jsonPath = cache.diskJsonPath(req.path);
-      if (store) {
-        await store.setBakedPaths(req.path, null, jsonPath);
-      }
-    } else {
-      jsonPath = cache.diskJsonPath(req.path);
+    // A. Save JSON from this render. A full bake only happens when load()
+    // was just re-executed (see step 5 above), so snapshotProps is always
+    // the current, authoritative data — it must be written every time, not
+    // just the first time. Previously this only wrote JSON when none
+    // existed yet; on any later full re-bake (e.g. a route flagged
+    // `promoted` whose HTML cache was missing, forcing a fresh load()+bake)
+    // the freshly rendered HTML would contain the new value, but the next
+    // request would materialize the shell against the *old* cached JSON via
+    // materializeBakedShell, silently reverting the value it had just baked.
+    const layoutSignature =
+      layoutPatterns.length > 0 ? await computeLayoutSignature(layoutPatterns, cache) : undefined;
+    await cache.setJson(req.path, createBakedSnapshot(snapshotProps, undefined, layoutSignature));
+    jsonPath = cache.diskJsonPath(req.path);
+    if (store) {
+      await store.setBakedPaths(req.path, null, jsonPath);
     }
 
-    // C. Save Fully Baked HTML if promoted
+    // B. Save Fully Baked HTML if promoted
     if (hitStatus === 'JustPromoted') {
       await cache.setHtml(req.path, finalHtml, pinInRedis);
       htmlPath = cache.diskHtmlPath(req.path);
@@ -353,8 +411,8 @@ export function buildPageHandler(
           pageComponent: layoutEntries[index].module.default,
           pageProps: rawLayoutPropsArr[index],
           finalHtml,
-          htmlPath: cache.diskHtmlPath(layoutRoute),
-          jsonPath: cache.diskJsonPath(layoutRoute),
+          htmlPath: cache.diskLayoutHtmlPath(layoutRoute),
+          jsonPath: cache.diskLayoutJsonPath(layoutRoute),
           watcher,
           isLayout: true,
           defaultDebounce: layoutOptions.debounce ?? kilnConfig?.fsr?.patchDebounceSecs,
@@ -387,7 +445,15 @@ export function buildPageHandler(
     pageMeta.liveFields = liveFields;
     pageMeta.promoteAfter = promoteAfter === false ? undefined : promoteAfter;
 
-    respondWithNavigationShape(res, req, layoutPatterns, pageMeta.pattern, finalHtml, pageFragment);
+    // Debug/observability header: which layout patterns were reused from the
+    // pattern-level cache this request (vs freshly loaded+baked). Not used by
+    // any client logic — purely so this can be verified from the outside.
+    const cacheHitPatterns = layoutPatterns.filter((_, i) => layoutFromCache[i]);
+    if (cacheHitPatterns.length > 0) {
+      res.headers['x-kiln-layout-cache-hit'] = cacheHitPatterns.join(',');
+    }
+
+    respondWithNavigationShape(res, req, layoutPatterns, pageMeta.pattern, finalHtml);
   };
 }
 
@@ -413,23 +479,36 @@ function respondWithNavigationShape(
   layoutPatterns: string[],
   pagePattern: string,
   html: string,
-  renderedPageFragment?: string,
 ): void {
   if (!req.isEnhanced) {
     res.html(html);
     return;
   }
 
-  const deepestPresent = [...layoutPatterns]
-    .reverse()
-    .find((pattern) => req.layoutsPresent.includes(pattern));
+  // Find the deepest layout the client already has mounted (walking from
+  // innermost to outermost). Layouts strictly deeper than that one — plus
+  // the page itself — are what the client is missing and must receive.
+  let deepestPresentIndex = -1;
+  for (let i = layoutPatterns.length - 1; i >= 0; i--) {
+    if (req.layoutsPresent.includes(layoutPatterns[i])) {
+      deepestPresentIndex = i;
+      break;
+    }
+  }
+  const deepestPresent = deepestPresentIndex >= 0 ? layoutPatterns[deepestPresentIndex] : undefined;
   if (!deepestPresent) {
     res.headers['silcrow-full-reload'] = 'true';
     res.html(html);
     return;
   }
 
-  const fragmentBody = renderedPageFragment ?? extractLayoutFragment(html, pagePattern) ?? html;
+  // Everything strictly deeper than what's already mounted: the next layout
+  // in the chain if one exists (e.g. the client has the root and child
+  // layout, but not yet the grandchild layout that this page needs), or the
+  // bare page fragment if the client already has every layout in the chain
+  // (e.g. switching between sibling pages/tabs under the same layout).
+  const nextPattern = layoutPatterns[deepestPresentIndex + 1] ?? pagePattern;
+  const fragmentBody = extractLayoutFragment(html, nextPattern) ?? html;
   res.headers['content-type'] = 'text/html; x-ps-fragment=1';
   res.html(
     `<div data-ps-slot="${escapeAttribute(deepestPresent)}" style="display:contents">${fragmentBody}</div>`,
@@ -467,7 +546,7 @@ function unwrapLiveProps(input: Record<string, unknown>): Record<string, unknown
   );
 }
 
-function applyLivePropMarkers(html: string, props: Record<string, unknown>): string {
+export function applyLivePropMarkers(html: string, props: Record<string, unknown>): string {
   let result = html;
   for (const [name, raw] of Object.entries(props ?? {})) {
     if (!(raw instanceof LiveProp) && (raw as any)?.constructor?.name !== 'LiveProp') continue;
@@ -475,9 +554,38 @@ function applyLivePropMarkers(html: string, props: Record<string, unknown>): str
     if (!['string', 'number', 'boolean'].includes(typeof value)) continue;
     const text = escapeHtml(String(value));
     if (result.includes(`s-live="${escapeAttribute(name)}"`)) continue;
+    if (!text || text.length === 0) continue;
+
+    // Auto-tagging locates the rendered value by plain text search, which is
+    // only safe when the text is unambiguous. Two LiveProps rendering the
+    // same value (or a value that appears as a substring elsewhere on the
+    // page) would otherwise cause the wrong element to be tagged as the live
+    // slot, silently mistargeting future patches. Skip (and warn) rather than
+    // guess — the developer can add an explicit s-live="name" attribute.
+    const occurrences = countOccurrences(result, text);
+    if (occurrences === 0) continue;
+    if (occurrences > 1) {
+      console.warn(
+        `[kiln] LiveProp "${name}" (value ${JSON.stringify(String(value))}) appears ${occurrences} times in the ` +
+          `rendered HTML; auto-tagging is ambiguous and was skipped. Add an explicit s-live="${name}" attribute ` +
+          `in the component to disambiguate.`,
+      );
+      continue;
+    }
     result = result.replace(text, `<span s-live="${escapeAttribute(name)}">${text}</span>`);
   }
   return result;
+}
+
+function countOccurrences(haystack: string, needle: string): number {
+  if (!needle) return 0;
+  let count = 0;
+  let index = 0;
+  while ((index = haystack.indexOf(needle, index)) !== -1) {
+    count += 1;
+    index += needle.length;
+  }
+  return count;
 }
 
 function escapeHtml(value: string): string {

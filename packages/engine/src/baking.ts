@@ -10,11 +10,23 @@ export interface BakedSnapshot {
   data: Record<string, unknown>;
   lists?: Record<string, Array<{ key: string; html: string }>>;
   updatedAt: string;
+  /**
+   * Fingerprint of the layout-pattern cache entries this page's shell was
+   * assembled from at bake time (see boot.ts's computeLayoutSignature).
+   * Only set on page-level snapshots that have layouts. Lets a promoted
+   * page's cached shell detect that one of its layouts has since been
+   * invalidated/re-baked (e.g. a deploy changed shared header/footer code)
+   * even though the page's OWN data snapshot is unchanged — without this,
+   * a promoted route would keep serving stale layout chrome forever, since
+   * its full-page cache is otherwise never revisited once promoted.
+   */
+  layoutSignature?: string;
 }
 
 export function createBakedSnapshot(
   data: Record<string, unknown>,
   lists?: BakedSnapshot['lists'],
+  layoutSignature?: string,
 ): BakedSnapshot {
   return {
     schemaVersion: BAKED_SNAPSHOT_VERSION,
@@ -22,6 +34,7 @@ export function createBakedSnapshot(
     data,
     lists,
     updatedAt: new Date().toISOString(),
+    layoutSignature,
   };
 }
 

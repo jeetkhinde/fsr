@@ -358,23 +358,6 @@ export class FsrStore {
     `;
   }
 
-  async evictIdleRoutes(thresholdSecs: number): Promise<EvictedRoute[]> {
-    const rows = await this.sql`
-      UPDATE kiln_fsr
-      SET promoted = FALSE, hit_count = 0
-      WHERE slot = ''
-        AND promoted = TRUE
-        AND NOT tombstoned
-        AND last_hit < now() - (${thresholdSecs} * interval '1 second')
-      RETURNING route, html_path as "htmlPath", json_path as "jsonPath"
-    `;
-    return rows.map((r: any) => ({
-      route: r.route,
-      htmlPath: r.htmlPath,
-      jsonPath: r.jsonPath
-    }));
-  }
-
   async purgeInactiveRoutes(globalThresholdSecs: number): Promise<EvictedRoute[]> {
     const rows = await this.sql`
       WITH candidates AS (

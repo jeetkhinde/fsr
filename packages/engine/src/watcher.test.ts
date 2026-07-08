@@ -153,17 +153,33 @@ async function runTests() {
     await new Promise(resolve => setTimeout(resolve, 500));
     assert.ok(patches.length > 0);
 
-    // 6. Test Idle Eviction
-    console.log('Verifying idle eviction...');
-    
+    // 6. Test Idle Eviction (purge)
+    //
+    // NOTE: This previously called the now-removed `store.evictIdleRoutes()`,
+    // which was dead code — the watcher's real background sweep
+    // (`spawnSupervisedIdleEviction` in watcher.ts) has only ever called
+    // `store.purgeInactiveRoutes()`, never `evictIdleRoutes()`. This test now
+    // exercises the method that's actually wired into the watcher loop.
+    console.log('Verifying idle eviction (purge)...');
+
     // Stop watcher first to freeze all background ticks/timers
     await watcher.stop();
 
-    // Update route's last_hit to be far in the past to trigger eviction
-    await bunSql.unsafe('UPDATE kiln_fsr SET last_hit = now() - interval \'10 seconds\' WHERE route = $1 AND slot = \'\'', [route]);
+    // Update route's last_hit/last_requested_at to be far in the past, and
+    // shorten its purge_after_secs so a 5s threshold check will match it
+    // (purgeInactiveRoutes prefers the per-route purge_after_secs column
+    // over the threshold argument when the column is set).
+    await bunSql.unsafe(
+      `UPDATE kiln_fsr
+       SET last_hit = now() - interval '10 seconds',
+           last_requested_at = now() - interval '10 seconds',
+           purge_after_secs = 5
+       WHERE route = $1 AND slot = ''`,
+      [route]
+    );
 
-    // Manually run idle eviction logic
-    const evicted = await store.evictIdleRoutes(5); // 5s threshold
+    // Manually run the same purge logic the watcher's idle-eviction sweep uses
+    const evicted = await store.purgeInactiveRoutes(5); // 5s threshold
     assert.equal(evicted.length, 1);
     assert.equal(evicted[0].route, route);
 
@@ -174,10 +190,9 @@ async function runTests() {
       if (r.jsonPath) await fs.unlink(r.jsonPath).catch(() => {});
     }
 
-    // Route should be un-promoted
+    // purgeInactiveRoutes deletes the row entirely (not just un-promotes it)
     const routeRow = (await store.fetchAllForInspect()).find(r => r.route === route && r.slot === '');
-    assert.ok(routeRow);
-    assert.equal(routeRow.promoted, false);
+    assert.equal(routeRow, undefined);
 
     // Files deleted from disk
     const htmlExists = await fs.access(tempHtmlPath).then(() => true).catch(() => false);

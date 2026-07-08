@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { buildPageHandler } from './boot.js';
+import { buildPageHandler, applyLivePropMarkers } from './boot.js';
 import type { KilnRequest, KilnResponse } from '@kiln/core';
 import * as os from 'os';
 import * as path from 'path';
@@ -145,6 +145,180 @@ describe('buildPageHandler', () => {
     expect(res.captured.body).toContain('Detail');
     await fs.rm(tmpDir, { recursive: true });
   });
+  it('includes the missing intermediate layout when only the root layout is present (grandchild navigation)', async () => {
+    // Chain: root ('/') -> dashboard ('/dashboard') -> page ('/dashboard/:id').
+    // The client navigating in for the first time only has the root layout
+    // mounted, so the response must include the dashboard layout's own
+    // chrome (not just the bare page) — otherwise the dashboard layout would
+    // never actually render on the client.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
+    const rootLayoutPath = path.join(tmpDir, 'root_layout.tsx');
+    const dashboardLayoutPath = path.join(tmpDir, 'dashboard_layout.tsx');
+    await Bun.write(
+      rootLayoutPath,
+      `export default function RootLayout({ children }) {
+        return ["ROOT_MARKER", children];
+      }`,
+    );
+    await Bun.write(
+      dashboardLayoutPath,
+      `export default function DashboardLayout({ children }) {
+        return ["DASHBOARD_MARKER", children];
+      }`,
+    );
+    const { createElement } = await import('react');
+    const handler = buildPageHandler(
+      { default: () => createElement('h2', null, 'PAGE_MARKER') },
+      {
+        pattern: '/dashboard/:id',
+        layouts: [rootLayoutPath, dashboardLayoutPath],
+        liveFields: [],
+        hasEntries: false,
+        filePath: '',
+        relativePath: '',
+      },
+      [
+        { pattern: '/', filePath: rootLayoutPath, relativePath: 'root_layout.tsx', hasLoad: false },
+        { pattern: '/dashboard', filePath: dashboardLayoutPath, relativePath: 'dashboard_layout.tsx', hasLoad: false },
+      ],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+    );
+
+    // Client only has the root layout mounted (e.g. first navigation from the home page).
+    const rootOnlyRes = makeRes();
+    await handler(
+      makeReq({
+        path: '/dashboard/42',
+        isEnhanced: true,
+        layoutsPresent: ['/'],
+        headers: new Headers(),
+      }) as any,
+      rootOnlyRes,
+    );
+    expect(rootOnlyRes.headers['content-type']).toContain('x-ps-fragment=1');
+    expect(rootOnlyRes.captured.body).toContain('data-ps-slot="/"');
+    expect(rootOnlyRes.captured.body).toContain('DASHBOARD_MARKER'); // the missing layout is included
+    expect(rootOnlyRes.captured.body).toContain('PAGE_MARKER');
+    expect(rootOnlyRes.captured.body).not.toContain('ROOT_MARKER'); // root itself isn't resent
+
+    // Client already has root + dashboard mounted (e.g. switching between sibling pages).
+    const bothPresentRes = makeRes();
+    await handler(
+      makeReq({
+        path: '/dashboard/42',
+        isEnhanced: true,
+        layoutsPresent: ['/', '/dashboard'],
+        headers: new Headers(),
+      }) as any,
+      bothPresentRes,
+    );
+    expect(bothPresentRes.captured.body).toContain('data-ps-slot="/dashboard"');
+    expect(bothPresentRes.captured.body).toContain('PAGE_MARKER');
+    expect(bothPresentRes.captured.body).not.toContain('DASHBOARD_MARKER'); // already mounted, not resent
+    expect(bothPresentRes.captured.body).not.toContain('ROOT_MARKER');
+
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it('bakes a shared layout once and reuses it across sibling routes served by different page handlers', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
+    const layoutPath = path.join(tmpDir, 'section_layout.tsx');
+    let layoutLoads = 0;
+    await Bun.write(
+      layoutPath,
+      `export async function load() { return { marker: "LAYOUT_BAKED_" + (globalThis.__loadCount = (globalThis.__loadCount||0)+1) }; }
+       export default function SectionLayout({ marker, children }) {
+         return [marker, children];
+       }`,
+    );
+    // Reset the counter this test relies on (module-level state written to
+    // globalThis so the dynamically imported layout file can share it).
+    (globalThis as any).__loadCount = 0;
+
+    const { createElement } = await import('react');
+    const cacheOpts = { cacheDir: tmpDir, ttlSecs: 0, redis: null };
+    const layoutNodes = [
+      { pattern: '/section', filePath: layoutPath, relativePath: 'section_layout.tsx', hasLoad: true },
+    ];
+
+    // Two different pages, both under the same /section layout, each built
+    // as its own handler (mirroring how startKiln registers one handler per
+    // page route in a real app — they all share the same on-disk cache dir).
+    const handlerA = buildPageHandler(
+      { default: () => createElement('h2', null, 'PAGE_A') },
+      { pattern: '/section/a', layouts: [layoutPath], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      layoutNodes,
+      cacheOpts,
+    );
+    const handlerB = buildPageHandler(
+      { default: () => createElement('h2', null, 'PAGE_B') },
+      { pattern: '/section/b', layouts: [layoutPath], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      layoutNodes,
+      cacheOpts,
+    );
+
+    const resA = makeRes();
+    await handlerA(makeReq({ path: '/section/a' }) as any, resA);
+    const resB = makeRes();
+    await handlerB(makeReq({ path: '/section/b' }) as any, resB);
+
+    expect(resA.captured.body).toContain('LAYOUT_BAKED_1');
+    expect(resA.captured.body).toContain('PAGE_A');
+    // Page B's request reused the /section layout from cache — it must show
+    // the SAME baked marker as page A, not a fresh one, and the header
+    // recording the cache hit must be set.
+    expect(resB.captured.body).toContain('LAYOUT_BAKED_1');
+    expect(resB.captured.body).toContain('PAGE_B');
+    expect(resB.headers['x-kiln-layout-cache-hit']).toBe('/section');
+    expect(resA.headers['x-kiln-layout-cache-hit']).toBeUndefined(); // A did the fresh bake
+
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it('re-bakes a layout after its cache entry is explicitly invalidated', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
+    const layoutPath = path.join(tmpDir, 'section2_layout.tsx');
+    await Bun.write(
+      layoutPath,
+      `export async function load() { return { marker: "LAYOUT_BAKED_" + (globalThis.__loadCount2 = (globalThis.__loadCount2||0)+1) }; }
+       export default function SectionLayout({ marker, children }) {
+         return [marker, children];
+       }`,
+    );
+    (globalThis as any).__loadCount2 = 0;
+
+    const { createElement } = await import('react');
+    const { KilnCache } = await import('@kiln/engine');
+    const cacheOpts = { cacheDir: tmpDir, ttlSecs: 0, redis: null };
+    const layoutNodes = [
+      { pattern: '/section2', filePath: layoutPath, relativePath: 'section2_layout.tsx', hasLoad: true },
+    ];
+    const handler = buildPageHandler(
+      { default: () => createElement('h2', null, 'PAGE') },
+      { pattern: '/section2/x', layouts: [layoutPath], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      layoutNodes,
+      cacheOpts,
+    );
+
+    const first = makeRes();
+    await handler(makeReq({ path: '/section2/x' }) as any, first);
+    expect(first.captured.body).toContain('LAYOUT_BAKED_1');
+
+    const second = makeRes();
+    await handler(makeReq({ path: '/section2/x' }) as any, second);
+    expect(second.captured.body).toContain('LAYOUT_BAKED_1'); // still cached
+
+    // Simulate a deploy that invalidates just this one layout's cache entry.
+    const cache = new KilnCache(cacheOpts);
+    await cache.deleteLayout('/section2');
+
+    const third = makeRes();
+    await handler(makeReq({ path: '/section2/x' }) as any, third);
+    expect(third.captured.body).toContain('LAYOUT_BAKED_2'); // re-baked
+
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
   it('returns JSON when Accept: application/json', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
     const pageModule = {
@@ -315,7 +489,8 @@ describe('buildPageHandler', () => {
     const { Live } = await import('@kiln/core');
     const registrations: any[] = [];
     const store = {
-      executeLiveListQuery: async (query: any, signal?: AbortSignal) => query({ sql: 'shared-sql', signal })
+      executeLiveListQuery: async (query: any, signal?: AbortSignal) => query({ sql: 'shared-sql', signal }),
+      setBakedPaths: async () => {}
     };
     const watcher = {
       hasRegisteredRoute: () => false,
@@ -476,5 +651,43 @@ describe('buildPageHandler', () => {
       'Live.list requires config.fsr.watcher = "embedded"'
     );
     await fs.rm(tmpDir, { recursive: true });
+  });
+});
+
+describe('applyLivePropMarkers', () => {
+  it('wraps a LiveProp value with an s-live span when the rendered text is unambiguous', async () => {
+    const { LiveProp } = await import('@kiln/core');
+    const html = '<main><h1>Widgets</h1><p>Count: 3</p></main>';
+    const result = applyLivePropMarkers(html, { count: new LiveProp(3) });
+    expect(result).toBe('<main><h1>Widgets</h1><p>Count: <span s-live="count">3</span></p></main>');
+  });
+
+  it('skips auto-tagging (does not mistag) when the value is ambiguous', async () => {
+    const { LiveProp } = await import('@kiln/core');
+    // Two LiveProps rendering the same text ("0") — the naive first-match
+    // string replace would wrap the wrong element for one of them.
+    const html = '<main><span>Likes: 0</span><span>Comments: 0</span></main>';
+    const originalWarn = console.warn;
+    const warnings: string[] = [];
+    console.warn = (msg?: any) => { warnings.push(String(msg)); };
+    try {
+      const result = applyLivePropMarkers(html, {
+        likes: new LiveProp(0),
+        comments: new LiveProp(0),
+      });
+      // Nothing gets auto-tagged; html is left untouched rather than guessed at.
+      expect(result).toBe(html);
+      expect(result).not.toContain('s-live=');
+      expect(warnings.length).toBeGreaterThan(0);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  it('does not double-tag a value that already has an explicit s-live attribute', async () => {
+    const { LiveProp } = await import('@kiln/core');
+    const html = '<main><p>Count: <span s-live="count">3</span></p></main>';
+    const result = applyLivePropMarkers(html, { count: new LiveProp(3) });
+    expect(result).toBe(html);
   });
 });
