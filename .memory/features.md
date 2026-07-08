@@ -1,7 +1,9 @@
 # Kiln Feature Inventory (Source-Verified)
 
-Last verified: 2026-07-08 by reading actual package source code, not docs.
-Source of truth: `packages/core/src/`, `packages/routekit/src/`, `packages/adapter-elysia/src/`.
+Last verified: 2026-07-08 by reading actual package source code.
+Commit: `7276441` (feat: add json_first page export for JSON-default routes)
+
+**Read this file before scanning code or answering "does Kiln support X?"**
 
 ---
 
@@ -9,34 +11,65 @@ Source of truth: `packages/core/src/`, `packages/routekit/src/`, `packages/adapt
 
 - File-based routing from `pages/` directory (configurable via `pagesDir`)
 - Dynamic segments: `[id]` → `:id`, catch-all `[...path]` → `*`
-- Route groups: `(group)/folder` — stripped from URL pattern
+- Route groups: `(group)/folder` — stripped from URL pattern, no effect on routing
 - Index files: `posts/index.tsx` → `/posts`
-- Nested layouts via `_layout.tsx` inheritance chains
-- Typed routes (compile-time type safety)
-- **Special file conventions per directory:**
-  - `_layout.tsx` — shared layout wrapping child routes
-  - `_error.tsx` — error boundary UI for that directory
-  - `_loading.tsx` — loading state UI for that directory
-  - `_not-found.tsx` — 404 UI for that directory
-- Route priority: static > dynamic (`:param`) > wildcard (`*`)
+- Nested layouts via `_layout.tsx` inheritance chains, resolved by `getLayoutsForPage()`
+- Typed routes (compile-time type safety via `packages/routekit/src/typed-routes.ts`)
+- Route priority: static > dynamic (`:param`) > wildcard (`*`) — sorted in `discoverRoutes()`
 - `hasEntries` flag: pages exporting `entries()` get pre-baked at startup when `promote_after: 0`
+
+### Special file conventions (per directory)
+| File | Purpose |
+|------|---------|
+| `_layout.tsx` | Shared layout wrapping all child routes |
+| `_error.tsx` | Error boundary UI for that directory |
+| `_loading.tsx` | Loading state UI for that directory |
+| `_not-found.tsx` | 404 UI for that directory |
 
 ---
 
 ## Rendering Modes (`packages/routekit/src/page-options.ts`, `boot.ts`)
 
-All four modes controlled by a **single integer** export `promote_after` on the page file:
+All modes controlled by a **single integer export** `promote_after` on the page file:
 
-| Value | Mode | Behaviour |
-|-------|------|-----------|
-| `0` | SSG | Baked at startup |
-| `1` | ISR | Baked on first request, served from cache thereafter |
-| `N` | FSR | Baked after N hits |
-| absent | SSR | Baked on every request (no caching) |
+| Export value | Mode | Behaviour |
+|---|---|---|
+| `0` | SSG | Baked at startup (`entries()` required for dynamic routes) |
+| `1` | ISR | Baked on first request, cached forever after |
+| `N` | FSR | Baked after N hits, cached after |
+| absent / `false` | Pure SSR | Baked on every request, never cached |
 
-- `promote_after: false` disables promotion entirely (always SSR)
-- Per-page: `revalidate`, `debounce`, `purge_after`, `pinInRedis`, `patch_mode` exports
-- Layout-level baking: `_layout.tsx` files can also export `promote_after`
+Per-page options (all optional exports from the page file):
+- `promote_after` — rendering mode integer
+- `revalidate` — seconds before stale cache is revalidated (or `false` to disable)
+- `debounce` — seconds to debounce invalidation patches
+- `purge_after` / `purge_after` — seconds before unused cache entry is evicted
+- `pinInRedis` — skip TTL expiry for this route's Redis entries
+- `patch_mode: 'json' | 'both'` — SSE delivery mode for live fields
+- `json_first: true` — always return JSON regardless of `Accept` header (see below)
+
+---
+
+## JSON-first Pages & API Endpoints
+
+Kiln has **two ways** to serve JSON from a page:
+
+### 1. Content negotiation (default, always available)
+Any page's `load()` result is served as JSON when the client sends `Accept: application/json` (and no `text/html`). Same URL, same `load()`, same route — the framework detects the header and returns `res.json(data)` directly, bypassing all HTML rendering.
+
+### 2. `json_first` export (shipped 2026-07-08, commit `7276441`)
+```ts
+// pages/api/health.ts
+export const json_first = true
+
+export async function load(req: KilnRequest) {
+  return { status: 'ok', ts: Date.now() }
+}
+```
+- Always returns JSON regardless of `Accept` header — curl, fetch, browser, all get JSON
+- No `default` component export required
+- The `api/` directory convention (`apiDir` in config) is therefore unnecessary — `pages/api/health.ts` with `json_first = true` IS the API endpoint
+- Implemented in: `PageDefinition` (`core/src/types.ts`), `PageOptions` + `extractPageOptions` (`routekit/src/page-options.ts`), `buildPageHandler` content-negotiation guard (`routekit/src/boot.ts` line ~185)
 
 ---
 
@@ -44,121 +77,142 @@ All four modes controlled by a **single integer** export `promote_after` on the 
 
 ### LiveProp\<T\>
 ```ts
-Live.value(initialValue, dependsOn, options)
-Live.initial(value)          // no dependencies, no updates
+Live.value(initialValue, dependsOn, options)  // shorthand factory
+Live.initial(value)                           // no deps, never updates
+new LiveProp(value, dependsOn, options)       // direct constructor
 ```
-- **Delivery targets**: `'dom'` | `'dom-and-store'` | `'store'`
-  - `dom` — patches `s-live="slot_name"` DOM node via SSE
-  - `store` — updates client-side store only
-  - `dom-and-store` — both simultaneously
-- Fluent builder: `.debounce(seconds).target('store').revalidate(300)`
-- Dependency keys: plain string `"contacts:id=42"` OR structured `{ table, column, value }`
+Fluent builder:
+```ts
+new LiveProp(0, ['contacts']).debounce(5).target('store').revalidate(300)
+```
+
+**Delivery targets** (`options.target`):
+| Target | Effect |
+|---|---|
+| `'dom'` (default) | Patches `s-live="slot_name"` DOM node via SSE |
+| `'store'` | Updates client-side store only (no DOM write) |
+| `'dom-and-store'` | Both simultaneously |
+
+**Dependency keys** — two equivalent forms:
+```ts
+dependsOn: ['contacts:id=42']                    // plain string
+dependsOn: [{ table: 'contacts', column: 'id', value: '42' }]  // structured DependencyKey
+```
 
 ### Live.list\<T\>
 ```ts
-Live.list({ query, key, dependsOn, initial, debounce, revalidate })
+Live.list({ query, key, dependsOn, initial?, debounce?, revalidate? })
 ```
-- Returns a typed array (`T[]`) with metadata attached via `Symbol.for('kiln.live-list.meta')`
-- Server-side row-level diffs: `replace-row`, `insert`, `move`, `remove`
-- `keyOf(row)` function determines row identity for reconciliation
+- Returns a native `T[]` with metadata attached via `Symbol.for('kiln.live-list.meta')` (enumerable: false)
+- Server computes row-level diffs: `replace-row`, `insert`, `move`, `remove`
+- `key(row)` function determines row identity for reconciliation
+- Changing one row in a list of 1000 sends one diff, not 1000 rows
 
 ---
 
 ## Middleware (`packages/adapter-elysia/src/middleware/`)
 
-All middleware is **built-in and first-party**, applied automatically by `startKiln()`:
+All built-in, applied automatically by `startKiln()` via `adapter.applyMiddleware()`:
 
-| Middleware | File | Notes |
+| Middleware | File | Default |
 |---|---|---|
-| CSRF protection | `csrf.ts` | Origin/referer double-submit check on POST/PUT/PATCH/DELETE with form content-type |
-| Request timeout | `timeout.ts` | AbortController-based, default 30 s, returns 408 |
-| Layout intercept | `layout-intercept.ts` | Parses `silcrow-target` and `X-PS-Present` headers into `req.isEnhanced`, `req.layoutsPresent` |
-| Compression | `compression.ts` | Stub (pass-through currently) |
-| Tracing | `tracing.ts` | Logs `→ METHOD /path` and `← METHOD /path STATUS` |
+| CSRF protection | `csrf.ts` | On — origin/referer double-submit on POST/PUT/PATCH/DELETE with form content-type |
+| Request timeout | `timeout.ts` | 30 s — AbortController-based, returns 408 |
+| Layout intercept | `layout-intercept.ts` | Always — parses `silcrow-target` + `X-PS-Present` into `req.isEnhanced`, `req.layoutsPresent` |
+| Compression | `compression.ts` | Stub (pass-through) |
+| Request tracing | `tracing.ts` | Optional — logs `→ METHOD /path` + `← METHOD /path STATUS` |
 
-### Server hooks (`hooks.ts` convention)
-Place a `hooks.ts` at the project root exporting any of:
+### Server hooks (`hooks.ts` at project root)
 ```ts
-export const onRequest = async (ctx) => { ... }  // auth guards, rate limiting
-export const onError   = async (ctx) => { ... }
-export const onStart   = async () => { ... }
-export const onStop    = async () => { ... }
+export const onRequest = async (ctx) => { /* auth, rate limiting */ }
+export const onError   = async (ctx) => { }
+export const onStart   = async () => { }
+export const onStop    = async () => { }
 ```
-Kiln auto-loads this file and wires it into Elysia on boot. This is Kiln's middleware layer.
+Auto-loaded by the adapter on boot. This is Kiln's middleware / lifecycle hook layer.
 
 ---
 
 ## Actions (collocated POST handlers)
 
-Export `actions` from any page file:
 ```ts
+// pages/contacts.tsx
 export const actions = {
-  async create(req: KilnRequest) { ... return { success: true } },
+  async create(req: KilnRequest) {
+    const data = await req.formData()
+    // ... insert into DB
+    return AppError.redirect('/contacts')
+  },
   async delete(req: KilnRequest) { ... }
 }
 ```
-- Registered as POST to the same URL pattern as the page
-- Action name dispatched via query param: `POST /contacts?/create`
-- Redirects (`AppError.redirect()`) are handled transparently
-
----
-
-## Content Negotiation (pages as JSON endpoints)
-
-Any page's `load()` result is automatically served as JSON when the client sends `Accept: application/json` (and no `text/html`). This means **the same URL serves HTML to browsers and JSON to API clients** — no separate API route needed for data that backs a page.
-
----
-
-## API Directory
-
-- `apiDir: './api'` is a first-class config key, scaffolded by `create-kiln`
-- **Status**: config type exists, directory is included in `tsconfig.json`, but `startKiln()` does NOT currently discover or wire routes from `apiDir`. It only calls `discoverRoutes(pagesDir)`.
-- Workaround: register standalone endpoints directly on the Elysia app instance.
+- Registered as `POST /contacts?/create`, `POST /contacts?/delete`
+- `AppError.redirect(path)` caught by handler → `res.redirect(303)`
+- Collocated with the page that renders the result — Kiln's equivalent of SvelteKit form actions
 
 ---
 
 ## Error Handling (`packages/core/src/errors.ts`)
 
 ```ts
-AppError.notFound(msg?)        // 404
-AppError.unauthorized(msg?)    // 401
-AppError.validation(msg)       // 422
-AppError.internal(msg?)        // 500
-AppError.redirect(path)        // 303 — caught by page handler, calls res.redirect()
+// Typed errors — throw from load() or actions
+AppError.notFound(msg?)        // → 404
+AppError.unauthorized(msg?)    // → 401
+AppError.validation(msg)       // → 422
+AppError.internal(msg?)        // → 500
+AppError.redirect(path)        // → 303 redirect
 
+// Result<T> — discriminated union for no-throw style
 type AppResult<T> = { ok: true; data: T } | { ok: false; error: AppError }
 const r = success(data)        // { ok: true, data }
 const r = failure(appError)    // { ok: false, error }
 ```
-Throw an `AppError` from `load()` or `actions` — the page handler catches it and maps to the correct HTTP response.
+- `StartupError` with typed codes: `'ConfigLoad' | 'UnsupportedProvider'`
+- `HookError` interface: `{ status, message, source? }`
 
 ---
 
-## Cache (`packages/core/src/config.ts`)
+## Caching & Storage (`packages/core/src/config.ts`, `packages/engine/src/cache.ts`)
 
-Four providers via `CacheConfig.provider`:
+### Four cache providers
+
+```ts
+cache: { provider: 'memory' | 'filesystem' | 'sqlite' | 'redis' }
+```
 
 | Provider | When to use |
-|----------|-------------|
+|---|---|
 | `'memory'` | Dev / single-instance / testing |
 | `'filesystem'` | Single-instance with persistence |
-| `'sqlite'` | Lightweight production without Redis |
-| `'redis'` | Multi-instance / FSR live updates (required for LiveProp SSE) |
+| `'sqlite'` | Lightweight production — no Redis needed |
+| `'redis'` | Multi-instance and/or FSR live SSE (required for LiveProp) |
 
-**Redis is only required when FSR/live SSE features are enabled.** SQLite or memory cache work for pure SSG/SSR/ISR apps.
+**Redis is only required when FSR/LiveProp SSE features are used.** A pure SSG/SSR/ISR Kiln app runs on SQLite or in-memory cache.
+
+### Three-layer storage (when Redis is active)
+1. **Redis** — hot serve + pub/sub event bus
+2. **PostgreSQL** — durable metadata, dependency links, hit counts
+3. **Disk** — synchronous fallback for any Redis miss (outage, eviction, cold start)
+
+### Pattern-level layout caching (ADR-011)
+`_layout.tsx` files bake once per URL pattern (`kiln:layout:html:/dashboard`), shared by all routes beneath. `cache.deleteLayout(pattern)` invalidates with one write.
+
+### Cache invalidation
+- Postgres `LISTEN/NOTIFY` → `db-notify.ts` → `FsrWatcher` → Redis pub/sub → SSE hub → `silcrow.js` DOM patch
+- No polling. Watcher fires the instant a DB mutation triggers `pg_notify('kiln_invalidate', ...)`
 
 ---
 
 ## Image Optimization (`packages/routekit/src/image-handler.ts`)
 
-- Endpoint: `/_image?src=&w=&q=&f=`
-- Backed by `sharp` (lazy import)
-- Formats: `webp`, `jpeg`, `png`
-- Disk cache at `images.cacheDir` — immutable, `Cache-Control: max-age=31536000`
+- Endpoint: `/_image?src=<path>&w=<width>&q=<quality>&f=<format>`
+- Backed by `sharp` (lazy dynamic import — not required if images disabled)
+- Formats: `webp` (default), `jpeg`, `png`
+- Disk cache at `images.cacheDir` with `Cache-Control: public, max-age=31536000, immutable`
+- Path traversal protection built in
 - Domain allowlist: `images.domains[]`
 - Processing concurrency: `images.concurrency` (default 4)
-- Path traversal protection built in
-- Enabled via `images.enabled: true` in config
+- Enabled via `images: { enabled: true }` in `kiln.config.ts`
 
 ---
 
@@ -166,12 +220,12 @@ Four providers via `CacheConfig.provider`:
 
 ```ts
 const i18n = new KilnI18n({ defaultLocale: 'en', locales: ['en', 'fr'], localesDir: 'locales' })
-await i18n.load()                      // loads .ftl files from locales/<locale>/*.ftl
-const locale = i18n.locale(req)        // negotiates from Accept-Language header
-const msg = i18n.t(locale, 'key', {})  // formats message with @fluent/bundle
+await i18n.load()                              // loads locales/<locale>/*.ftl
+const locale = i18n.locale(req)               // negotiates from Accept-Language header
+const msg = i18n.t(locale, 'key', { n: 42 }) // formats Fluent message
 ```
 - Backed by `@fluent/bundle` + `@fluent/langneg`
-- `.ftl` (Fluent) message format
+- `.ftl` (Mozilla Fluent) message format
 
 ---
 
@@ -181,12 +235,12 @@ const msg = i18n.t(locale, 'key', {})  // formats message with @fluent/bundle
 generateServiceWorker({
   enabled: true,
   strategy: 'cache-first' | 'stale-while-revalidate' | 'network-first',
-  precache: ['/offline.html'],
+  precache: ['/shell.html'],
   exclude: ['/api/'],
   offlineFallback: '/offline.html'
 })
 ```
-Custom SW generated at runtime — no Workbox dependency.
+No Workbox dependency — custom SW generated at build time from a template string.
 
 ---
 
@@ -194,34 +248,48 @@ Custom SW generated at runtime — no Workbox dependency.
 
 ```ts
 defineConfig({ port, pagesDir, apiDir, web, backend, cache, fsr, images, i18n, serviceWorker, client })
-loadConfigFromEnv(baseConfig)  // overrides from env vars
+loadConfigFromEnv(baseConfig)  // applies env var overrides on top
 ```
 
-Environment variable overrides:
+### Environment variable overrides
 - `KILN_WEB_HOST`, `KILN_WEB_PORT`
 - `KILN_BACKEND_URL`, `KILN_BACKEND_HOST`, `KILN_BACKEND_PORT`
 
-Two-process model: `web` config (frontend) + `backend` config (API server) — `web.backendUrl` points the frontend at the backend.
+### Two-process architecture
+`web` config (frontend HTTP server) + `backend` config (separate API process). `web.backendUrl` wires them. Kiln supports running as a single unified process or as a web-frontend + backend split.
 
-### React runtime config
+### React runtime
 ```ts
 client: {
   react: { ssr: boolean, nodeBin: string, concurrency: number },  // default concurrency: 4
-  inlineRuntime: boolean   // embed silcrow.js inline into HTML instead of external script
+  inlineRuntime: boolean   // embed silcrow.js inline into HTML
 }
 ```
 
 ### FSR watcher mode
 ```ts
-fsr: { watcher: 'embedded' | 'external' }  // external mode is typed, partial implementation
+fsr: { watcher: 'embedded' | 'external' }  // external typed, implementation partial
 ```
 
 ---
 
 ## Why Kiln Does NOT Need Streaming SSR
 
-**Promoted routes** serve a fully-assembled HTML string from Redis — response is instant. There is nothing to stream; the work is already done.
+Streaming SSR exists to solve: "my `load()` is slow, so the user sees a blank screen." Kiln's answer is different and better:
 
-**Un-promoted (pure SSR) routes**: Kiln's idiomatic answer is not streaming but restructuring — keep `load()` fast (return cheap shell data + `LiveProp` placeholders for slow fields), then push slow data in via SSE after the shell renders. This gives the same progressive load UX as streaming SSR, plus the field stays live for future updates — two problems solved by one mechanism.
+1. **Promoted routes** — HTML is pre-baked and sitting in Redis. Response is instant. Nothing to stream.
+2. **Un-promoted routes** — Keep `load()` fast by returning a shell quickly, then deliver slow fields via `LiveProp` SSE. The shell renders immediately; live data arrives via the SSE channel and keeps updating indefinitely.
 
-**Conclusion**: Streaming SSR solves "page is slow to compute." FSR eliminates the computation from the request path entirely. Adding streaming SSR to Kiln would be solving a problem the architecture already eliminates at a higher level.
+Streaming SSR delivers data once during initial load then stops. FSR delivers data when the page loads AND re-delivers it whenever the underlying data changes. Adding streaming SSR to Kiln would solve a problem that FSR eliminates at a higher architectural level.
+
+---
+
+## API Directory (`apiDir` config)
+
+`apiDir: './api'` is a first-class config key scaffolded by `create-kiln`. However `startKiln()` in `boot.ts` only calls `discoverRoutes(pagesDir)` — it never reads `apiDir`. **The `api/` folder is not loaded at runtime.**
+
+This gap is effectively eliminated by:
+1. `json_first = true` export — any page in `pages/` is a JSON endpoint
+2. Content negotiation — any page serves JSON to `Accept: application/json` clients
+3. Collocated `actions` — POST mutations on the same page file
+4. Direct Elysia registration — add raw endpoints to the app instance for true API-only routes

@@ -4,10 +4,10 @@ This file documents the major architecture decisions and developer experience (D
 
 ## ADRs
 
-### ADR-001: Redis is Required Infrastructure
-*   **Status**: LOCKED
-*   **Decision**: Redis is a hard requirement. The engine will fail to boot if a valid `REDIS_URL` is not provided.
-*   **Rationale**: Multi-instance deployments rely on a shared memory layer for atomic field updates (RedisJSON/Hash) and instant pub/sub event distribution rather than file-system polling.
+### ADR-001: Redis is Required for FSR/Live Features Only
+*   **Status**: REVISED 2026-07-08 (original wording was incorrect)
+*   **Decision**: `CacheConfig.provider` accepts `'memory' | 'filesystem' | 'sqlite' | 'redis'`. Redis is **not** required for all deployments. It is required only when FSR/LiveProp SSE features are active (promoted routes, `Live.value()`, `Live.list()`). A pure SSG/SSR/ISR Kiln app can boot and run with SQLite or in-memory cache — no Redis needed.
+*   **Rationale**: Multi-instance deployments with live fields rely on Redis as a shared memory layer and pub/sub event bus. Single-instance or cache-only deployments have no such requirement. The original "Redis is a hard boot requirement" statement was an architectural aspiration, not what the code enforces — `startKiln()` accepts `redis: null` and falls through to disk/SQLite gracefully.
 
 ### ADR-002: Three-Layer Storage Model
 *   **Status**: LOCKED (disk-tier wording revised 2026-07-07 to match implementation)
@@ -56,6 +56,17 @@ This file documents the major architecture decisions and developer experience (D
 *   **Rule**: A layout's `load()` may only read `req.params` for segments owned by its own pattern — never `req.query`, never a descendant page's params. Genuinely per-request-varying data must be pushed to the page or resolved client-side; universal-but-time-varying data (e.g. a live counter in the header) must use `LiveProp`/`Live.list`, not plain `load()`. This rule is enforced by convention, not a runtime check.
 *   **Consistency mechanism**: A promoted page's own full-HTML cache entry embeds its layouts' HTML as of bake time, so invalidating the layout cache alone wouldn't reach already-promoted routes. Every page-level `BakedSnapshot` therefore carries a `layoutSignature` (a hash fingerprint of the exact layout cache entries used to assemble it, from `computeLayoutSignature()` in `boot.ts`). On each promoted-cache-hit, the current signature is recomputed and compared; a mismatch forces a full re-bake, same as a missing/corrupt cache entry. Found via a unit test that intentionally exercised `deleteLayout()` against an already-promoted route and asserted the next request reflected the change — it failed until this signature check was added (see `bugs.md`).
 *   **Not migrated**: `examples/address-book`'s `ContactsLayout` reads `req.query.q`/`req.params.id` and violates the load()-scoping rule; it intentionally still uses the old per-route full-page bake path rather than being refactored to comply.
+
+### ADR-012: `json_first` Page Export for JSON-Default Routes
+*   **Status**: ACTIVE (shipped 2026-07-08, commit `7276441`)
+*   **Decision**: Any page file may export `json_first = true` to declare itself a JSON-first endpoint. The page handler returns `load()` data as JSON to all clients unconditionally, regardless of the `Accept` header. This is layered on top of the existing content-negotiation path (`Accept: application/json` continues to work on any page).
+*   **Rationale**: Eliminates the need for a separate `api/` directory. Pages in `pages/api/` with `json_first = true` are API endpoints with full routing, typed deps, actions, and FSR support. The `apiDir` config key exists but `startKiln()` does not wire it — `json_first` is the idiomatic replacement.
+*   **Implementation**: `PageDefinition.json_first` (`core/src/types.ts`), `PageOptions.jsonFirst` + `extractPageOptions` (`routekit/src/page-options.ts`), content-negotiation guard widened to `wantsJson(req) || options.jsonFirst` (`routekit/src/boot.ts` line ~185).
+
+### ADR-013: Streaming SSR is Not Needed
+*   **Status**: DECISION (2026-07-08)
+*   **Decision**: Kiln will not implement Streaming SSR or React Suspense boundaries.
+*   **Rationale**: Streaming SSR solves "my `load()` is slow so the user sees a blank screen." Kiln's FSR architecture eliminates this problem at a higher level: promoted routes serve pre-baked HTML from Redis instantly (nothing to stream); un-promoted routes should keep `load()` fast by returning a shell + `LiveProp` placeholders, which the SSE channel fills after the shell renders. This pattern is strictly superior to streaming — it handles initial load AND ongoing updates. Adding streaming SSR would solve a problem the architecture already eliminates.
 
 ---
 
