@@ -34,8 +34,9 @@ Last updated: 2026-07-08
 
 ## Phase 3: Feature Consolidation
 
-1. **Wire `apiDir` in `startKiln()`** — or formally deprecate in favour of `json_first` + pages (ADR-012 makes this largely moot)
-2. **Export `@kiln/client` assets** — Standardise package exports so `silcrow.js` is resolvable under workspace deps without `import.meta.resolve` fallback
+1. **Make Redis fully optional** — Even for FSR/LiveProp SSE. When Redis is absent, fall back to an in-process pub/sub (e.g. EventEmitter or SQLite-backed channel) so live updates still work in single-instance deployments without the Redis infra requirement. Target: `fsr.redis` absent → graceful degradation, not a boot failure.
+2. **Wire `apiDir` in `startKiln()`** — or formally deprecate in favour of `json_first` + pages (ADR-012 makes this largely moot)
+3. **Export `@kiln/client` assets** — Standardise package exports so `silcrow.js` is resolvable under workspace deps without `import.meta.resolve` fallback
 
 ---
 

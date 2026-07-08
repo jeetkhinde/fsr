@@ -39,7 +39,11 @@ Last commit: `7276441` — feat: add json_first page export for JSON-default rou
 
 ## Next Priorities (from roadmap)
 
-1. **Phase 3 — Feature Consolidation**
+1. **Make Redis fully optional** ← next up
+   - Even when FSR/LiveProp SSE is active, Redis should not be a hard requirement
+   - Fallback: in-process pub/sub (EventEmitter or SQLite-backed channel) for single-instance deployments
+   - `fsr.redis` absent → graceful degradation, live updates still work without Redis infra
+2. **Phase 3 — Feature Consolidation**
    - Wire `apiDir` in `startKiln()` (or document that `json_first` + pages make it unnecessary)
    - Standardise `@kiln/client` exports so `silcrow.js` is resolvable under workspace deps
 
