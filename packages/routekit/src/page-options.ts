@@ -8,6 +8,7 @@ export interface PageOptions {
   purgeAfter?: number;
   pinInRedis?: boolean;
   patchMode?: 'json' | 'both';
+  jsonFirst?: boolean;
 }
 
 export interface LiveListFieldMeta {
@@ -42,6 +43,7 @@ export function extractPageOptions(module: any): PageOptions {
     purgeAfter: typeof module.purge_after === 'number' ? module.purge_after : undefined,
     pinInRedis: typeof module.pinInRedis === 'boolean' ? module.pinInRedis : undefined,
     patchMode: patchMode === 'both' ? 'both' : (patchMode === 'json' ? 'json' : undefined),
+    jsonFirst: typeof module.json_first === 'boolean' ? module.json_first : undefined,
   };
 }
 

@@ -87,6 +87,7 @@ export interface PageDefinition {
   revalidate?: number | false;
   debounce?: number;
   purge_after?: number;
+  json_first?: boolean;
   /** @deprecated Use promote_after. */
   promoteAfter?: number;
   load?: (req: KilnRequest) => Promise<LoadResult> | LoadResult;

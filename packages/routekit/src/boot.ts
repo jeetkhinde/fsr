@@ -181,8 +181,8 @@ export function buildPageHandler(
       }
     };
 
-    // 2. Content negotiation — JSON shortcut
-    if (wantsJson(req)) {
+    // 2. Content negotiation — JSON shortcut (explicit header OR page declared json_first)
+    if (wantsJson(req) || options.jsonFirst) {
       const data = await loadPageProps();
       if (data === null) return;
       res.json(data);
