@@ -48,6 +48,6 @@ Last commit: `7276441` — feat: add json_first page export for JSON-default rou
    - ~~`@kiln/client` asset resolution~~ cleaned up; stale `resolveSilcrowJs()` removed from `cli.ts`
 
 2. **Phase 4 — Hardening**
-   - Cache partitioning for personalised routes (promoted routes bypass `load()`, can't serve user-specific content yet)
+   - ~~Cache partitioning~~ done — `cacheKey(req)` export; per-variant disk+Redis storage
    - External watcher process (`fsr.watcher: 'external'` typed, implementation partial)
    - Fine-grained debounce scheduling per-field

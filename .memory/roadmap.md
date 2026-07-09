@@ -42,7 +42,7 @@ Last updated: 2026-07-08
 
 ## Phase 4: Hardening & Scalability
 
-1. **Cache Partitioning / Personalisation** — Promoted routes bypass `load()`, so user-specific content can't be safely cached. Need key namespacing or session scopes. Until then, personalised routes must stay un-promoted (pure SSR).
+1. **Cache Partitioning** ✅ — Pages export `cacheKey(req): string`; each variant gets its own disk (`_v/<variant>/`) and Redis (`kiln:html:<route>:v:<variant>`) cache entry. Variant routes skip watcher path registration (re-bake on invalidation). Implemented across `KilnCache`, `PageOptions`, and `buildPageHandler`.
 2. **External Watcher Process** — `fsr.watcher: 'embedded' | 'external'` is typed but external mode is partially implemented. Decouple watcher from the application thread for high-mutation workloads.
 3. **Fine-Grained Debounce Scheduling** — Per-field invalidation windows instead of coarse sweep intervals.
 4. **`address-book` Layout Migration** — Migrate `ContactsLayout` to pattern-level caching (currently violates ADR-011 load()-scoping rule by reading `req.query.q` / `req.params.id`).
