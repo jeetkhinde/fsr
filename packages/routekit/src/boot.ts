@@ -658,6 +658,10 @@ export async function startKiln(
     ttlSecs: 0
   };
 
+  if (options.store && config.fsr?.patchDebounceSecs !== undefined) {
+    options.store.withGlobalDebounce(config.fsr.patchDebounceSecs);
+  }
+
   // 3. Apply middleware
   adapter.applyMiddleware({
     csrf: true,
