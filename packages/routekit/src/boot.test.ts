@@ -652,6 +652,68 @@ describe('buildPageHandler', () => {
     );
     await fs.rm(tmpDir, { recursive: true });
   });
+
+  it('serves different cached HTML per cacheKey variant with no cross-contamination', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-variant-'));
+    const { createElement } = await import('react');
+    let hit = 0;
+    const promoted = new Set<string>();
+    const store = {
+      ensureRouteRow: async () => {},
+      incrementHit: async () => {
+        hit += 1;
+        if (hit === 2) { promoted.add('/dashboard'); return 'JustPromoted'; }
+        return 'Normal';
+      },
+      isPromoted: async (route: string) => promoted.has(route),
+      setBakedPaths: async () => {},
+      touchRoute: async () => {},
+    };
+
+    const module = {
+      cacheKey: (req: any) => req.headers.get('x-user-id') ?? 'anon',
+      promote_after: 2,
+      load: async (req: any) => ({ user: req.headers.get('x-user-id') ?? 'anon' }),
+      default: ({ user }: { user: string }) => createElement('div', null, `Hello ${user}`),
+    };
+
+    const handler = buildPageHandler(
+      module,
+      { pattern: '/dashboard', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      store as any,
+    );
+
+    const makeVariantReq = (userId: string) =>
+      makeReq({ path: '/dashboard', headers: new Headers({ accept: 'text/html', 'x-user-id': userId }) });
+
+    // Alice: two hits to reach promotion
+    await handler(makeVariantReq('alice') as any, makeRes());
+    const aliceRes = makeRes();
+    await handler(makeVariantReq('alice') as any, aliceRes); // hit 2 — JustPromoted, bakes alice variant
+    expect(aliceRes.captured?.body).toContain('Hello alice');
+
+    // Bob: isPromoted returns true (route promoted), cache miss for bob variant → re-bakes bob
+    const bobRes1 = makeRes();
+    await handler(makeVariantReq('bob') as any, bobRes1); // cache miss → SSR + bake bob variant
+    expect(bobRes1.captured?.body).toContain('Hello bob');
+
+    // Bob: second request now hits bob's variant cache
+    const bobRes2 = makeRes();
+    await handler(makeVariantReq('bob') as any, bobRes2);
+    expect(bobRes2.captured?.body).toContain('Hello bob');
+    expect(bobRes2.captured?.body).not.toContain('alice');
+
+    // Alice: still serves alice's variant — no cross-contamination
+    const aliceRes2 = makeRes();
+    await handler(makeVariantReq('alice') as any, aliceRes2);
+    expect(aliceRes2.captured?.body).toContain('Hello alice');
+    expect(aliceRes2.captured?.body).not.toContain('bob');
+
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
 });
 
 describe('applyLivePropMarkers', () => {

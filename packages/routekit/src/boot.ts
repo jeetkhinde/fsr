@@ -133,6 +133,7 @@ export function buildPageHandler(
       return node ? node.pattern : '/';
     });
     const options = extractPageOptions(module);
+    const variant = options.cacheKey ? options.cacheKey(req) : undefined;
     const promoteAfter = options.promoteAfter ?? kilnConfig?.fsr?.promoteAfterHits ?? 2;
     const revalidate = options.revalidate ?? kilnConfig?.fsr?.revalidateSeconds ?? 300;
     const purgeAfter = options.purgeAfter ?? kilnConfig?.fsr?.purgeAfterSeconds ?? 2_592_000;
@@ -191,12 +192,12 @@ export function buildPageHandler(
     }
 
     // 3. HTML cache check
-    const cachedHtml = promoted ? await cache.getHtml(req.path) : null;
+    const cachedHtml = promoted ? await cache.getHtml(req.path, variant) : null;
     if (promoted && !cachedHtml) {
       hitStatus = 'JustPromoted';
       promoted = false;
     }
-    const cachedSnapshot = cachedHtml ? await cache.getJson(req.path) : null;
+    const cachedSnapshot = cachedHtml ? await cache.getJson(req.path, variant) : null;
     let materialized = cachedHtml ? materializeBakedShell(cachedHtml, cachedSnapshot) : null;
 
     // A promoted page's cached shell embeds its layouts' HTML as it looked
@@ -214,7 +215,7 @@ export function buildPageHandler(
     }
 
     if (cachedHtml && !materialized) {
-      await cache.delete(req.path);
+      await cache.delete(req.path, variant);
       hitStatus = 'JustPromoted';
       promoted = false;
     }
@@ -377,17 +378,17 @@ export function buildPageHandler(
     // materializeBakedShell, silently reverting the value it had just baked.
     const layoutSignature =
       layoutPatterns.length > 0 ? await computeLayoutSignature(layoutPatterns, cache) : undefined;
-    await cache.setJson(req.path, createBakedSnapshot(snapshotProps, undefined, layoutSignature));
-    jsonPath = cache.diskJsonPath(req.path);
-    if (store) {
+    await cache.setJson(req.path, createBakedSnapshot(snapshotProps, undefined, layoutSignature), variant);
+    jsonPath = variant ? null : cache.diskJsonPath(req.path);
+    if (store && !variant) {
       await store.setBakedPaths(req.path, null, jsonPath);
     }
 
     // B. Save Fully Baked HTML if promoted
     if (hitStatus === 'JustPromoted') {
-      await cache.setHtml(req.path, finalHtml, pinInRedis);
-      htmlPath = cache.diskHtmlPath(req.path);
-      if (store) {
+      await cache.setHtml(req.path, finalHtml, pinInRedis, variant);
+      htmlPath = variant ? null : cache.diskHtmlPath(req.path);
+      if (store && !variant) {
         await store.setBakedPaths(req.path, htmlPath, jsonPath);
       }
     }

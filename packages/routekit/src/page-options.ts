@@ -1,5 +1,5 @@
 import { getLiveListMeta, isLiveList, LiveProp } from '@kiln/core';
-import type { LiveFieldMeta } from '@kiln/core';
+import type { KilnRequest, LiveFieldMeta } from '@kiln/core';
 
 export interface PageOptions {
   promoteAfter?: number | false;
@@ -9,6 +9,7 @@ export interface PageOptions {
   pinInRedis?: boolean;
   patchMode?: 'json' | 'both';
   jsonFirst?: boolean;
+  cacheKey?: (req: KilnRequest) => string;
 }
 
 export interface LiveListFieldMeta {
@@ -44,6 +45,7 @@ export function extractPageOptions(module: any): PageOptions {
     pinInRedis: typeof module.pinInRedis === 'boolean' ? module.pinInRedis : undefined,
     patchMode: patchMode === 'both' ? 'both' : (patchMode === 'json' ? 'json' : undefined),
     jsonFirst: typeof module.json_first === 'boolean' ? module.json_first : undefined,
+    cacheKey: typeof module.cacheKey === 'function' ? module.cacheKey : undefined,
   };
 }
 
