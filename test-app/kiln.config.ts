@@ -3,7 +3,6 @@ import { defineConfig } from '@kiln/core';
 export default defineConfig({
   port: 3000,
   pagesDir: './pages',
-  apiDir: './api',
   fsr: {
     promoteAfterHits: 2,
     patchDebounceSecs: 5,

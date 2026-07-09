@@ -59,8 +59,8 @@ const devCommand = defineCommand({
     let redisCache: RedisCache | null = null;
     let watcher: FsrWatcher | null = null;
 
-    if (process.env.NODE_ENV === 'production' && (!config.fsr?.postgresUrl || !config.fsr?.redisUrl)) {
-      throw new Error('Kiln production requires reachable PostgreSQL and Redis');
+    if (process.env.NODE_ENV === 'production' && !config.fsr?.postgresUrl) {
+      throw new Error('Kiln production with FSR requires reachable PostgreSQL');
     }
 
     if (config.fsr?.postgresUrl) {

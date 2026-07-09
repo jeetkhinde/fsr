@@ -1,6 +1,6 @@
 # Active Work Context
 
-Last updated: 2026-07-08
+Last updated: 2026-07-09
 
 ## Current State
 
@@ -11,7 +11,11 @@ Last commit: `7276441` — feat: add json_first page export for JSON-default rou
 
 ---
 
-## Completed This Session (2026-07-08)
+## Completed This Session (2026-07-09)
+
+- [x] **Redis fully optional** — Production guard in `cli.ts` now only requires `postgresUrl` (not `redisUrl`). `startKiln()` in `routekit/boot.ts` auto-creates `KilnCache` Redis client from `config.fsr.redisUrl` when `options.redis` is not passed. `FsrWatcher` already handled `redis: null` gracefully (polling fallback). SSE hub never used Redis. (`packages/cli/src/cli.ts`, `packages/routekit/src/boot.ts`)
+
+## Completed Previously (2026-07-08)
 
 - [x] **`json_first` page export** — Pages exporting `json_first = true` now always respond with JSON regardless of `Accept` header. Eliminates the need for a separate `api/` directory. (`packages/core/src/types.ts`, `packages/routekit/src/page-options.ts`, `packages/routekit/src/boot.ts`)
 - [x] **`.memory/features.md` created** — Source-verified feature inventory covering all Kiln features. Linked from `Agents.md`. Read this before scanning code.
@@ -39,12 +43,8 @@ Last commit: `7276441` — feat: add json_first page export for JSON-default rou
 
 ## Next Priorities (from roadmap)
 
-1. **Make Redis fully optional** ← next up
-   - Even when FSR/LiveProp SSE is active, Redis should not be a hard requirement
-   - Fallback: in-process pub/sub (EventEmitter or SQLite-backed channel) for single-instance deployments
-   - `fsr.redis` absent → graceful degradation, live updates still work without Redis infra
-2. **Phase 3 — Feature Consolidation**
-   - Wire `apiDir` in `startKiln()` (or document that `json_first` + pages make it unnecessary)
+1. **Phase 3 — Feature Consolidation**
+   - ~~`apiDir`~~ removed entirely from `KilnConfig`; `json_first` is the replacement
    - Standardise `@kiln/client` exports so `silcrow.js` is resolvable under workspace deps
 
 2. **Phase 4 — Hardening**

@@ -96,7 +96,6 @@ export interface KilnConfig {
   fsr: FsrConfig;
   port?: number;
   pagesDir?: string;
-  apiDir?: string;
 }
 
 export const DEFAULT_CONFIG: KilnConfig = {
@@ -207,7 +206,6 @@ export function defineConfig(config: DeepPartial<KilnConfig>): KilnConfig {
   }
   if (config.port !== undefined) merged.port = config.port;
   if (config.pagesDir !== undefined) merged.pagesDir = config.pagesDir as any;
-  if (config.apiDir !== undefined) merged.apiDir = config.apiDir as any;
 
   return merged;
 }

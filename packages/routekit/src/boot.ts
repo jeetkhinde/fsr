@@ -21,6 +21,7 @@ import {
 } from '@kiln/core';
 import {
   KilnCache,
+  RedisCache,
   type FsrStore,
   type FsrWatcher,
   bakeSegment,
@@ -648,8 +649,11 @@ export async function startKiln(
   });
 
   // 2. Build cache options from config
+  const redisClient =
+    options.redis?.getClient?.() ??
+    (config.fsr?.redisUrl ? new RedisCache(config.fsr.redisUrl).getClient() : null);
   const cacheOpts: CacheOptions = {
-    redis: options.redis?.getClient?.() ?? null,
+    redis: redisClient,
     cacheDir: config.cache?.provider === 'filesystem' ? (config.cache.dir ?? '.kiln-cache') : '.kiln-cache',
     ttlSecs: 0
   };
