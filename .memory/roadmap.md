@@ -36,7 +36,7 @@ Last updated: 2026-07-08
 
 1. **Make Redis fully optional** ✅ — Production guard now only requires `postgresUrl`. `startKiln()` auto-wires `KilnCache` Redis from `config.fsr.redisUrl`; `FsrWatcher` falls back to polling when Redis absent; SSE hub was always in-process only.
 2. **`apiDir` removed** ✅ — Field deleted from `KilnConfig`, merge logic, `create-kiln` template, and `test-app/kiln.config.ts`. Use `json_first = true` on page files instead.
-3. **Export `@kiln/client` assets** — Standardise package exports so `silcrow.js` is resolvable under workspace deps without `import.meta.resolve` fallback
+3. **`@kiln/client` asset resolution cleaned up** ✅ — Removed stale `resolveSilcrowJs()` from `cli.ts` (was searching for old `silcrow` package name). `boot.ts` already used `import.meta.resolve('@kiln/client/silcrow.js')` correctly; `@kiln/client` exports were already correct.
 
 ---
 

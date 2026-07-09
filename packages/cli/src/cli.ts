@@ -11,30 +11,7 @@ import { Glob } from 'bun';
 import { createServer, build as viteBuild } from 'vite';
 import react from '@vitejs/plugin-react';
 import { kilnVitePlugin } from '@kiln/routekit';
-import * as fs from 'fs/promises';
 import * as path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// Resolve silcrow.js location
-async function resolveSilcrowJs(): Promise<string> {
-  const possiblePaths = [
-    path.resolve(__dirname, '../../../../silcrow/dist/silcrow.js'),
-    path.resolve(__dirname, '../../node_modules/silcrow/dist/silcrow.js'),
-    path.resolve(process.cwd(), 'node_modules/silcrow/dist/silcrow.js'),
-  ];
-
-  for (const p of possiblePaths) {
-    try {
-      await fs.access(p);
-      return p;
-    } catch {
-      // continue
-    }
-  }
-  throw new Error('Could not resolve silcrow.js asset path.');
-}
 
 const devCommand = defineCommand({
   meta: {
@@ -137,15 +114,6 @@ const devCommand = defineCommand({
         return new Response(`Vite proxy error: ${err.message}`, { status: 502 });
       }
     });
-
-    // Register silcrow.js asset
-    try {
-      const silcrowJsPath = await resolveSilcrowJs();
-      adapter.registerAsset('/_silcrow/silcrow.js', silcrowJsPath);
-      consola.info('Registered silcrow.js client asset.');
-    } catch (err: any) {
-      consola.warn(`Warning: ${err.message}. Browser client navigation might fail.`);
-    }
 
     await startKiln(adapter, config, pagesDir, fsr);
 
