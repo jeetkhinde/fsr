@@ -8,6 +8,10 @@ export interface KilnCacheOptions {
   ttlSecs: number;
 }
 
+function safeVariant(v: string): string {
+  return v.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+}
+
 export class KilnCache {
   private redis: RedisClient | null;
   private readonly cacheDir: string;
@@ -19,8 +23,11 @@ export class KilnCache {
     this.ttlSecs = opts.ttlSecs;
   }
 
-  diskHtmlPath(route: string): string {
+  diskHtmlPath(route: string, variant?: string): string {
     const safe = route === '/' ? 'index' : route.replace(/^\//, '').replace(/\//g, path.sep);
+    if (variant) {
+      return path.join(this.cacheDir, safe, '_v', safeVariant(variant), 'index.html');
+    }
     return path.join(this.cacheDir, safe, 'index.html');
   }
 
@@ -103,58 +110,63 @@ export class KilnCache {
     }
   }
 
-  diskJsonPath(route: string): string {
-    return this.diskHtmlPath(route).replace(/\.html$/, '.json');
+  diskJsonPath(route: string, variant?: string): string {
+    return this.diskHtmlPath(route, variant).replace(/\.html$/, '.json');
   }
 
-  private redisHtmlKey(route: string): string { return `kiln:html:${route}`; }
-  private redisJsonKey(route: string): string { return `kiln:json:${route}`; }
+  private redisHtmlKey(route: string, variant?: string): string {
+    return variant ? `kiln:html:${route}:v:${safeVariant(variant)}` : `kiln:html:${route}`;
+  }
 
-  async getHtml(route: string): Promise<string | null> {
+  private redisJsonKey(route: string, variant?: string): string {
+    return variant ? `kiln:json:${route}:v:${safeVariant(variant)}` : `kiln:json:${route}`;
+  }
+
+  async getHtml(route: string, variant?: string): Promise<string | null> {
     if (this.redis) {
       try {
-        const v = await this.redis.get(this.redisHtmlKey(route));
+        const v = await this.redis.get(this.redisHtmlKey(route, variant));
         if (v != null) return v;
       } catch (err) { this.warnRedisError('getHtml', route, err); }
     }
-    const f = Bun.file(this.diskHtmlPath(route));
+    const f = Bun.file(this.diskHtmlPath(route, variant));
     return (await f.exists()) ? f.text() : null;
   }
 
-  async setHtml(route: string, html: string, pinInRedis: boolean = false): Promise<void> {
-    const diskPath = this.diskHtmlPath(route);
+  async setHtml(route: string, html: string, pinInRedis = false, variant?: string): Promise<void> {
+    const diskPath = this.diskHtmlPath(route, variant);
     await atomicWrite(diskPath, html);
     if (this.redis) {
       try {
-        await this.redis.set(this.redisHtmlKey(route), html);
+        await this.redis.set(this.redisHtmlKey(route, variant), html);
         // pinInRedis skips expire() so the entry never evicts; otherwise it
         // follows the same ttlSecs policy as JSON snapshots.
         if (!pinInRedis && this.ttlSecs > 0) {
-          await this.redis.expire(this.redisHtmlKey(route), this.ttlSecs);
+          await this.redis.expire(this.redisHtmlKey(route, variant), this.ttlSecs);
         }
       } catch (err) { this.warnRedisError('setHtml', route, err); }
     }
   }
 
-  async getJson(route: string): Promise<unknown | null> {
+  async getJson(route: string, variant?: string): Promise<unknown | null> {
     if (this.redis) {
       try {
-        const v = await this.redis.get(this.redisJsonKey(route));
+        const v = await this.redis.get(this.redisJsonKey(route, variant));
         if (v != null) return JSON.parse(v);
       } catch (err) { this.warnRedisError('getJson', route, err); }
     }
-    const f = Bun.file(this.diskJsonPath(route));
+    const f = Bun.file(this.diskJsonPath(route, variant));
     if (!(await f.exists())) return null;
     try { return JSON.parse(await f.text()); } catch { return null; }
   }
 
-  async setJson(route: string, data: unknown): Promise<void> {
+  async setJson(route: string, data: unknown, variant?: string): Promise<void> {
     const json = JSON.stringify(data);
-    await atomicWrite(this.diskJsonPath(route), json);
+    await atomicWrite(this.diskJsonPath(route, variant), json);
     if (this.redis) {
       try {
-        await this.redis.set(this.redisJsonKey(route), json);
-        if (this.ttlSecs > 0) await this.redis.expire(this.redisJsonKey(route), this.ttlSecs);
+        await this.redis.set(this.redisJsonKey(route, variant), json);
+        if (this.ttlSecs > 0) await this.redis.expire(this.redisJsonKey(route, variant), this.ttlSecs);
       } catch (err) { this.warnRedisError('setJson', route, err); }
     }
   }
@@ -171,17 +183,29 @@ export class KilnCache {
     await this.setJson(route, existing);
   }
 
-  async delete(route: string): Promise<void> {
-    const htmlPath = this.diskHtmlPath(route);
-    const jsonPath = this.diskJsonPath(route);
-    await Promise.allSettled([
-      fs.unlink(htmlPath).catch(() => {}),
-      fs.unlink(jsonPath).catch(() => {}),
-    ]);
-    if (this.redis) {
-      try {
-        await this.redis.send('DEL', [this.redisHtmlKey(route), this.redisJsonKey(route)]);
-      } catch (err) { this.warnRedisError('delete', route, err); }
+  async delete(route: string, variant?: string): Promise<void> {
+    if (variant) {
+      const htmlPath = this.diskHtmlPath(route, variant);
+      const jsonPath = this.diskJsonPath(route, variant);
+      await Promise.allSettled([
+        fs.unlink(htmlPath).catch(() => {}),
+        fs.unlink(jsonPath).catch(() => {}),
+      ]);
+      if (this.redis) {
+        try {
+          await this.redis.send('DEL', [this.redisHtmlKey(route, variant), this.redisJsonKey(route, variant)]);
+        } catch (err) { this.warnRedisError('delete', route, err); }
+      }
+    } else {
+      // Delete base files and all variant subdirectories in one shot.
+      const routeDir = path.dirname(this.diskHtmlPath(route));
+      await fs.rm(routeDir, { recursive: true, force: true }).catch(() => {});
+      if (this.redis) {
+        try {
+          await this.redis.send('DEL', [this.redisHtmlKey(route), this.redisJsonKey(route)]);
+          // Variant Redis keys expire via TTL; no SCAN needed for v1.
+        } catch (err) { this.warnRedisError('delete', route, err); }
+      }
     }
   }
 

@@ -51,6 +51,55 @@ describe('KilnCache', () => {
     expect(htmlPath).not.toContain(':');
   });
 
+  describe('variant cache partitioning', () => {
+    it('stores different HTML per variant without cross-contamination', async () => {
+      await cache.setHtml('/profile', '<p>Alice</p>', false, 'alice');
+      await cache.setHtml('/profile', '<p>Bob</p>', false, 'bob');
+      expect(await cache.getHtml('/profile', 'alice')).toBe('<p>Alice</p>');
+      expect(await cache.getHtml('/profile', 'bob')).toBe('<p>Bob</p>');
+      expect(await cache.getHtml('/profile')).toBeNull();
+    });
+
+    it('stores different JSON per variant without cross-contamination', async () => {
+      await cache.setJson('/profile', { name: 'Alice' }, 'alice');
+      await cache.setJson('/profile', { name: 'Bob' }, 'bob');
+      expect(await cache.getJson('/profile', 'alice')).toEqual({ name: 'Alice' });
+      expect(await cache.getJson('/profile', 'bob')).toEqual({ name: 'Bob' });
+      expect(await cache.getJson('/profile')).toBeNull();
+    });
+
+    it('delete with variant removes only that variant', async () => {
+      await cache.setHtml('/profile', '<p>Alice</p>', false, 'alice');
+      await cache.setHtml('/profile', '<p>Bob</p>', false, 'bob');
+      await cache.delete('/profile', 'alice');
+      expect(await cache.getHtml('/profile', 'alice')).toBeNull();
+      expect(await cache.getHtml('/profile', 'bob')).toBe('<p>Bob</p>');
+    });
+
+    it('delete without variant removes all variants', async () => {
+      await cache.setHtml('/profile', '<p>base</p>');
+      await cache.setHtml('/profile', '<p>Alice</p>', false, 'alice');
+      await cache.setHtml('/profile', '<p>Bob</p>', false, 'bob');
+      await cache.delete('/profile');
+      expect(await cache.getHtml('/profile')).toBeNull();
+      expect(await cache.getHtml('/profile', 'alice')).toBeNull();
+      expect(await cache.getHtml('/profile', 'bob')).toBeNull();
+    });
+
+    it('variant disk path is inside _v subdirectory', () => {
+      const p = cache.diskHtmlPath('/profile', 'alice');
+      expect(p).toContain('_v');
+      expect(p).toContain('alice');
+      expect(p).toEndWith('index.html');
+    });
+
+    it('sanitises variant strings for disk/redis safety', () => {
+      const p = cache.diskHtmlPath('/x', 'user:42/evil/../path');
+      expect(p).not.toContain(':');
+      expect(p).not.toContain('/../');
+    });
+  });
+
   describe('layout-level cache (pattern-scoped, separate from page cache)', () => {
     it('round-trips layout HTML and JSON to disk, keyed by pattern', async () => {
       await cache.setLayoutHtml('/dashboard', '<nav>sidebar</nav>');
