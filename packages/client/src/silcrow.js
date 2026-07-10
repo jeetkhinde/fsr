@@ -1290,6 +1290,7 @@ function connectSseHub(hub) {
       const data = JSON.parse(e.data);
       if (!data || typeof data !== "object" || Array.isArray(data)) return;
       document.querySelectorAll("[data-kiln-live-field]").forEach(function (n) {
+        if (kilnInIsland(n)) return;
         const k = n.getAttribute("data-kiln-live-field");
         if (pendingByScope.has(k)) return;
         if (k in data) {
@@ -1297,6 +1298,7 @@ function connectSseHub(hub) {
         }
       });
       document.querySelectorAll("[data-s-live-mod]").forEach(function(n) {
+        if (kilnInIsland(n)) return;
         if (pendingByScope.has(n.getAttribute("data-kiln-live-field") || "")) return;
         for (var i = 0; i < n.attributes.length; i++) {
           var attr = n.attributes[i];
@@ -1321,7 +1323,7 @@ function connectSseHub(hub) {
       const container = document.querySelector(
         '[data-kiln-list="' + CSS.escape(listName) + '"]'
       );
-      if (!container) return;
+      if (!container || kilnInIsland(container)) return;
       const row = container.querySelector(
         '[data-kiln-key="' + CSS.escape(key) + '"]'
       );
@@ -2675,6 +2677,7 @@ function init() {
       window.__kiln_live_patch(data);
     } else {
       document.querySelectorAll("[data-kiln-live-field]").forEach(function (n) {
+        if (kilnInIsland(n)) return;
         const k = n.getAttribute("data-kiln-live-field");
         if (k in data) {
           n.textContent = data[k] == null ? "" : String(data[k]);
@@ -2827,11 +2830,20 @@ if (document.readyState === "loading") {
 var RECONNECT_BASE_MS = 1000;
 var RECONNECT_MAX_MS = 30000;
 
+// ADR-014 I-3: silcrow never patches DOM inside a React island — the island
+// owns its subtree (hydrated React root); live data reaches it through the
+// store (target: 'store' + useLiveValue), not through DOM writes that React
+// would fight or overwrite.
+function kilnInIsland(n) {
+  return !!(n && n.closest && n.closest('[data-kiln-island]'));
+}
+
 function applyKilnScalarPatch(root, data) {
   var field = data.kind === 'scalar' ? data.field : data.slot;
   var value = data.value;
   if (!field) return;
   root.querySelectorAll('[data-kiln-live-field="' + CSS.escape(field) + '"],[s-live="' + CSS.escape(field) + '"]').forEach(function(n) {
+    if (kilnInIsland(n)) return;
     n.textContent = value == null ? '' : String(value);
   });
 }
@@ -2842,6 +2854,7 @@ function applyKilnListPatch(data) {
   var key = data.key;
   if (!listName || key == null) return;
   var listEl = document.querySelector('[data-kiln-list="' + CSS.escape(listName) + '"]');
+  if (listEl && kilnInIsland(listEl)) return;
   if (!listEl) {
     if (data.op === 'insert') {
       var reloadKey = 'kiln-live-list-reload:' + location.pathname + ':' + listName;

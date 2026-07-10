@@ -38,14 +38,22 @@ function _setText(node,value){
   node.textContent=value==null?'':String(value);
 }
 
+// ADR-014 I-3: never patch DOM inside a React island — the island owns its
+// subtree; live data reaches it via the store (target 'store' + useLiveValue).
+function _inIsland(el){
+  return !!(el&&el.closest&&el.closest('[data-kiln-island]'));
+}
+
 function _patchScalar(field,value){
   document.querySelectorAll('[s-live="'+field+'"],[data-kiln-live-field="'+field+'"]').forEach(function(el){
+    if(_inIsland(el))return;
     _setText(el,value);
   });
 }
 
 function _patchList(data){
   var list=document.querySelector('[data-kiln-list="'+data.list+'"]');
+  if(list&&_inIsland(list))return;
   if(!list){
     if(data.op==='insert'){
       var reloadKey='kiln-live-list-reload:'+window.location.pathname+':'+data.list;
@@ -107,6 +115,7 @@ function _patch(data){
   }
   Object.keys(data).forEach(function(slot){
     document.querySelectorAll('[s-live="'+slot+'"]').forEach(function(el){
+      if(_inIsland(el))return;
       _setText(el,data[slot]);
     });
   });

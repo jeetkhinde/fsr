@@ -88,4 +88,24 @@ run('script uses DOMContentLoaded guard', () => {
   assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes('DOMContentLoaded'));
 });
 
+// ── ADR-014 I-3: island patch exclusion ──────────────────────────────────────
+
+run('scalar patcher skips elements inside islands', () => {
+  assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("closest('[data-kiln-island]')"));
+  // The guard must run inside _patchScalar's element loop.
+  const patchScalar = KILN_LIVE_CLIENT_SCRIPT.slice(
+    KILN_LIVE_CLIENT_SCRIPT.indexOf('function _patchScalar'),
+    KILN_LIVE_CLIENT_SCRIPT.indexOf('function _patchList'),
+  );
+  assert.ok(patchScalar.includes('_inIsland(el)'));
+});
+
+run('list patcher skips containers inside islands', () => {
+  const patchList = KILN_LIVE_CLIENT_SCRIPT.slice(
+    KILN_LIVE_CLIENT_SCRIPT.indexOf('function _patchList'),
+    KILN_LIVE_CLIENT_SCRIPT.indexOf('function _patch('),
+  );
+  assert.ok(patchList.includes('_inIsland(list)'));
+});
+
 console.log('\n✓ All FSR live client tests passed.');
