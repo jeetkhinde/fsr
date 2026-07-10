@@ -1,9 +1,13 @@
 import { Elysia, sse, file } from 'elysia';
 import type { ServerAdapter, KilnRequest, KilnResponse, MiddlewareConfig, SSEEvent } from '@kiln/core';
 import { wrapRequest, ElysiaResponseImpl, handleElysiaResponse } from './context.js';
-import { csrf, timeout, compression, layoutIntercept } from './middleware/index.js';
+import { csrf, timeout, withTimeout, compression, tracing, loadHooks, serverHooks } from './middleware/index.js';
 export class ElysiaAdapter implements ServerAdapter {
   public app: Elysia;
+  // Enforced by wrapping each page/action handler in withTimeout (SSE
+  // streams are exempt — they're long-lived by design). An app-level
+  // derive() cannot cancel a running handler, so the deadline lives here.
+  private timeoutMs = 30000;
 
   constructor(options?: { elysia?: Elysia; bodyLimitBytes?: number }) {
     const limitBytes = options?.bodyLimitBytes ?? 2 * 1024 * 1024;
@@ -18,7 +22,7 @@ export class ElysiaAdapter implements ServerAdapter {
     this.app.get(pattern, async (ctx) => {
       const req = wrapRequest(ctx);
       const res = new ElysiaResponseImpl(ctx);
-      await handler(req, res);
+      await withTimeout(handler(req, res), this.timeoutMs);
       return handleElysiaResponse(res, ctx);
     });
   }
@@ -30,7 +34,7 @@ export class ElysiaAdapter implements ServerAdapter {
     this.app.post(pattern, async (ctx) => {
       const req = wrapRequest(ctx);
       const res = new ElysiaResponseImpl(ctx);
-      await handler(req, res);
+      await withTimeout(handler(req, res), this.timeoutMs);
       return handleElysiaResponse(res, ctx);
     });
   }
@@ -66,24 +70,34 @@ export class ElysiaAdapter implements ServerAdapter {
 
   applyMiddleware(config: MiddlewareConfig): void {
     if (config.csrf !== false) {
-      this.app.use(csrf());
+      this.app.use(csrf({ trustProxy: config.trustProxy === true }));
     }
 
     if (config.timeoutMs !== undefined) {
-      this.app.use(timeout(config.timeoutMs));
-    } else {
-      this.app.use(timeout());
+      this.timeoutMs = config.timeoutMs;
     }
+    this.app.use(timeout());
 
     if (config.compression !== false) {
       this.app.use(compression());
     }
 
-    this.app.use(layoutIntercept());
+    if (config.tracing === true) {
+      this.app.use(tracing());
+    }
   }
 
-  async listen(port: number, callback?: (addr: string) => void): Promise<void> {
-    this.app.listen(port, () => {
+  /** Load hooks.ts from the app root (if present) and wire its
+   * onRequest/onError/onStart/onStop into the Elysia lifecycle. Must be
+   * called before routes are registered for onRequest to cover them. */
+  async applyServerHooks(appRoot: string): Promise<void> {
+    const hooks = await loadHooks(appRoot);
+    this.app.use(serverHooks(hooks));
+  }
+
+  async listen(port: number, callback?: (addr: string) => void, host?: string): Promise<void> {
+    const listenOpts = host ? { port, hostname: host } : port;
+    this.app.listen(listenOpts as any, () => {
       const hostname = this.app.server?.hostname || 'localhost';
       const serverPort = this.app.server?.port || port;
       callback?.(`http://${hostname}:${serverPort}`);

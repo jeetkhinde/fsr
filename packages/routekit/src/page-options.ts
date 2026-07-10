@@ -1,4 +1,4 @@
-import { getLiveListMeta, isLiveList, LiveProp } from '@kiln/core';
+import { LiveProp } from '@kiln/core';
 import type { KilnRequest, LiveFieldMeta } from '@kiln/core';
 
 export interface PageOptions {
@@ -12,12 +12,6 @@ export interface PageOptions {
   cacheKey?: (req: KilnRequest) => string;
 }
 
-export interface LiveListFieldMeta {
-  name: string;
-  dependsOn: string[];
-  keys: string[];
-}
-
 export function extractPageOptions(module: any): PageOptions {
   let promoteAfter = module.promote_after;
   if (promoteAfter === undefined && typeof module.promoteAfter === 'number') {
@@ -29,6 +23,12 @@ export function extractPageOptions(module: any): PageOptions {
   if (patchMode === undefined && module.patchMode) {
     console.warn('[kiln] patchMode is deprecated; export patch_mode instead');
     patchMode = module.patchMode;
+  }
+
+  let cacheKey = module.cache_key;
+  if (cacheKey === undefined && typeof module.cacheKey === 'function') {
+    console.warn('[kiln] cacheKey is deprecated; export cache_key instead');
+    cacheKey = module.cacheKey;
   }
 
   return {
@@ -45,7 +45,7 @@ export function extractPageOptions(module: any): PageOptions {
     pinInRedis: typeof module.pinInRedis === 'boolean' ? module.pinInRedis : undefined,
     patchMode: patchMode === 'both' ? 'both' : (patchMode === 'json' ? 'json' : undefined),
     jsonFirst: typeof module.json_first === 'boolean' ? module.json_first : undefined,
-    cacheKey: typeof module.cacheKey === 'function' ? module.cacheKey : undefined,
+    cacheKey: typeof cacheKey === 'function' ? cacheKey : undefined,
   };
 }
 
@@ -85,22 +85,3 @@ export function extractLiveFields(loadResult: any): LiveFieldMeta[] {
   return fields;
 }
 
-export function extractLiveLists(loadResult: any): LiveListFieldMeta[] {
-  const lists: LiveListFieldMeta[] = [];
-  if (!loadResult || typeof loadResult !== 'object') {
-    return lists;
-  }
-
-  for (const [name, value] of Object.entries(loadResult)) {
-    if (!isLiveList(value)) continue;
-    const meta = getLiveListMeta(value);
-    if (!meta) continue;
-    lists.push({
-      name,
-      dependsOn: meta.dependsOn,
-      keys: (value as unknown[]).map((row) => meta.keyOf(row)),
-    });
-  }
-
-  return lists;
-}

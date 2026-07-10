@@ -216,7 +216,27 @@ export async function fsrSnapshotHandler(
   const matchingSlots = await store.fetchSlotsForSnapshot(route, slots);
   const result: Record<string, any> = {};
 
+  // Prefer the baked JSON snapshot — it's the freshness authority the
+  // watcher keeps patched, covers loader-based slots (which have no query
+  // to re-execute), and avoids re-running every slot query per request.
+  let snapshotData: Record<string, any> | null = null;
+  try {
+    const paths = await store.getPromotedPaths(route);
+    if (paths?.jsonPath) {
+      const fs = await import('fs/promises');
+      const parsed = JSON.parse(await fs.readFile(paths.jsonPath, 'utf8'));
+      const data = parsed?.data && typeof parsed.data === 'object' ? parsed.data : parsed;
+      if (data && typeof data === 'object' && !Array.isArray(data)) snapshotData = data;
+    }
+  } catch {
+    snapshotData = null;
+  }
+
   for (const slot of matchingSlots) {
+    if (snapshotData && slot.slot in snapshotData) {
+      result[slot.slot] = snapshotData[slot.slot];
+      continue;
+    }
     try {
       const val = await store.reExecuteQuery(slot);
       if (val !== null) {

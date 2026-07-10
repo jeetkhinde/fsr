@@ -197,13 +197,22 @@ export class KilnCache {
         } catch (err) { this.warnRedisError('delete', route, err); }
       }
     } else {
-      // Delete base files and all variant subdirectories in one shot.
-      const routeDir = path.dirname(this.diskHtmlPath(route));
-      await fs.rm(routeDir, { recursive: true, force: true }).catch(() => {});
+      // Delete the base files and this route's variant subtree only. The
+      // route directory itself must survive: nested routes cache inside
+      // subdirectories of it (e.g. /foo/bar lives at foo/bar/index.html),
+      // so an rm -r of the whole dir would wipe every descendant's cache.
+      const htmlPath = this.diskHtmlPath(route);
+      const variantDir = path.join(path.dirname(htmlPath), '_v');
+      await Promise.allSettled([
+        fs.unlink(htmlPath).catch(() => {}),
+        fs.unlink(this.diskJsonPath(route)).catch(() => {}),
+        fs.rm(variantDir, { recursive: true, force: true }).catch(() => {}),
+      ]);
       if (this.redis) {
         try {
           await this.redis.send('DEL', [this.redisHtmlKey(route), this.redisJsonKey(route)]);
-          // Variant Redis keys expire via TTL; no SCAN needed for v1.
+          // Variant Redis keys expire via ttlSecs (wired from
+          // config.fsr.artifactTtlSecs in startKiln); no SCAN needed for v1.
         } catch (err) { this.warnRedisError('delete', route, err); }
       }
     }
@@ -229,7 +238,7 @@ export class KilnCache {
   }
 }
 
-async function atomicWrite(filePath: string, content: string): Promise<void> {
+export async function atomicWrite(filePath: string, content: string): Promise<void> {
   const tempPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   try {

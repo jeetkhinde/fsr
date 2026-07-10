@@ -647,9 +647,54 @@ describe('buildPageHandler', () => {
       {} as any
     );
 
-    await expect(handler(makeReq({ path: '/external' }) as any, makeRes())).rejects.toThrow(
-      'Live.list requires config.fsr.watcher = "embedded"'
+    // The handler catches the error and responds 500 instead of rejecting —
+    // an unhandled throw would bypass Kiln's error-page rendering entirely.
+    const res = makeRes();
+    await handler(makeReq({ path: '/external' }) as any, res);
+    expect(res.status).toBe(500);
+    expect(res.captured?.type).toBe('html');
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it('maps AppError thrown from load() to its status instead of a generic 500', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-apperror-'));
+    const { createElement } = await import('react');
+    const { AppError } = await import('@kiln/core');
+    const pageModule = {
+      load: async () => {
+        throw AppError.notFound('no such contact');
+      },
+      default: () => createElement('p', null, 'never rendered')
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      {
+        pattern: '/contacts/:id',
+        layouts: [],
+        liveFields: [],
+        hasEntries: false,
+        filePath: '',
+        relativePath: ''
+      },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null }
     );
+
+    const res = makeRes();
+    await handler(makeReq({ path: '/contacts/999' }) as any, res);
+    expect(res.status).toBe(404);
+    expect(res.captured?.type).toBe('html');
+    expect(res.captured?.body).toContain('no such contact');
+
+    // JSON clients get a JSON error envelope with the same status.
+    const jsonRes = makeRes();
+    await handler(
+      makeReq({ path: '/contacts/999', headers: new Headers({ accept: 'application/json' }) }) as any,
+      jsonRes
+    );
+    expect(jsonRes.status).toBe(404);
+    expect(jsonRes.captured?.type).toBe('json');
+    expect(jsonRes.captured?.body).toEqual({ error: 'no such contact', status: 404 });
     await fs.rm(tmpDir, { recursive: true });
   });
 

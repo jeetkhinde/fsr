@@ -13,6 +13,82 @@ import react from '@vitejs/plugin-react';
 import { kilnVitePlugin } from '@kiln/routekit';
 import * as path from 'path';
 
+interface FsrRuntime {
+  fsr: { fsr: true; store: FsrStore; watcher: FsrWatcher; redis?: RedisCache } | undefined;
+  bunSql: SQL | null;
+  redisCache: RedisCache | null;
+  watcher: FsrWatcher | null;
+}
+
+/** Initialize the FSR store/watcher/notification pipeline when Postgres is
+ * configured. FSR is optional: without fsr.postgresUrl the app runs as a
+ * plain SSR/promotion-less server. Redis needs the store, so redisUrl
+ * without postgresUrl is a config error rather than a silent no-op. */
+async function initFsr(config: KilnConfig): Promise<FsrRuntime> {
+  if (!config.fsr?.postgresUrl) {
+    if (config.fsr?.redisUrl) {
+      throw new Error(
+        'fsr.redisUrl is set but fsr.postgresUrl is not — FSR live features need the PostgreSQL store. ' +
+          'Set fsr.postgresUrl, or remove fsr.redisUrl to run without FSR.'
+      );
+    }
+    return { fsr: undefined, bunSql: null, redisCache: null, watcher: null };
+  }
+
+  consola.info('Initializing FSR database store...');
+  const bunSql = new SQL(config.fsr.postgresUrl);
+  const store = new FsrStore(bunSql);
+  await store.initialize();
+
+  let redisCache: RedisCache | null = null;
+  if (config.fsr.redisUrl) {
+    consola.info('Initializing FSR Redis cache...');
+    redisCache = new RedisCache(config.fsr.redisUrl);
+    await redisCache.getClient().send('PING', []);
+  }
+
+  const watcher = new FsrWatcher(store, redisCache, {
+    pollIntervalMs: config.fsr.pollIntervalMs ?? 1000,
+    promoteAfterHits: config.fsr.promoteAfterHits,
+    patchDebounceSecs: config.fsr.patchDebounceSecs,
+    purgeAfterSeconds: config.fsr.purgeAfterSeconds,
+    purgeSweepSeconds: config.fsr.purgeSweepSeconds,
+    revalidateSeconds: config.fsr.revalidateSeconds,
+    cacheDir: config.cache?.dir ?? '.kiln-cache',
+    scheduledInvalidations: [],
+  });
+
+  await watcher.start();
+  await startDbNotificationPipeline(config.fsr.postgresUrl, store, watcher);
+  consola.success('FSR caching & notification supervisors started.');
+
+  return {
+    fsr: { fsr: true, store, watcher, redis: redisCache ?? undefined },
+    bunSql,
+    redisCache,
+    watcher,
+  };
+}
+
+async function loadKilnConfig(): Promise<KilnConfig> {
+  const { config } = await loadConfig<KilnConfig>({
+    name: 'kiln',
+    configFile: 'kiln.config',
+  });
+  return config;
+}
+
+function registerShutdown(runtime: FsrRuntime, extra?: () => Promise<void>): void {
+  process.on('SIGINT', async () => {
+    consola.info('Shutting down...');
+    if (runtime.watcher) await runtime.watcher.stop();
+    if (runtime.redisCache) await runtime.redisCache.disconnect();
+    runtime.bunSql?.close();
+    await extra?.();
+    process.exit(0);
+  });
+}
+
 const devCommand = defineCommand({
   meta: {
     name: 'dev',
@@ -21,54 +97,13 @@ const devCommand = defineCommand({
   async run() {
     consola.info('Starting Kiln.js dev server...');
 
-    // 1. Load config
-    const { config } = await loadConfig<KilnConfig>({
-      name: 'kiln',
-      configFile: 'kiln.config',
-    });
-
-    const port = config.port || 3000;
+    const config = await loadKilnConfig();
+    const port = config.port || config.web?.port || 3000;
     const pagesDir = config.pagesDir || './pages';
 
-    // 2. Initialize FSR if connection strings are set
-    let fsr;
-    let bunSql: SQL | null = null;
-    let redisCache: RedisCache | null = null;
-    let watcher: FsrWatcher | null = null;
+    const runtime = await initFsr(config);
 
-    if (process.env.NODE_ENV === 'production' && !config.fsr?.postgresUrl) {
-      throw new Error('Kiln production with FSR requires reachable PostgreSQL');
-    }
-
-    if (config.fsr?.postgresUrl) {
-      consola.info('Initializing FSR database store...');
-      bunSql = new SQL(config.fsr.postgresUrl);
-      const store = new FsrStore(bunSql);
-      await store.initialize();
-
-      if (config.fsr.redisUrl) {
-        consola.info('Initializing FSR Redis cache...');
-        redisCache = new RedisCache(config.fsr.redisUrl);
-        await redisCache.getClient().send('PING', []);
-      }
-
-      watcher = new FsrWatcher(store, redisCache, {
-        pollIntervalMs: 1000,
-        promoteAfterHits: config.fsr.promoteAfterHits,
-        patchDebounceSecs: config.fsr.patchDebounceSecs,
-        purgeAfterSeconds: config.fsr.purgeAfterSeconds,
-        purgeSweepSeconds: config.fsr.purgeSweepSeconds,
-        revalidateSeconds: config.fsr.revalidateSeconds,
-        scheduledInvalidations: [],
-      });
-
-      await watcher.start();
-      await startDbNotificationPipeline(config.fsr.postgresUrl, store, watcher);
-      fsr = { fsr: true, store, watcher, redis: redisCache ?? undefined };
-      consola.success('FSR caching & notification supervisors started.');
-    }
-
-    // 3. Start Vite dev server in background
+    // Start Vite dev server in background
     consola.info('Booting Vite assets compiler...');
     const viteServer = await createServer({
       base: '/_kiln/client/',
@@ -93,11 +128,8 @@ const devCommand = defineCommand({
     await viteServer.listen();
     consola.success('Vite compiler listening on http://localhost:5173');
 
-    // 4. Start Elysia Server with Adapter
     consola.info('Starting Elysia adapter...');
-    const adapter = new ElysiaAdapter({
-      elysia: undefined, // Let it auto-create
-    });
+    const adapter = new ElysiaAdapter();
 
     // Proxy Vite asset requests
     adapter.app.all('/_kiln/client/*', async (ctx) => {
@@ -115,21 +147,43 @@ const devCommand = defineCommand({
       }
     });
 
-    await startKiln(adapter, config, pagesDir, fsr);
+    await startKiln(adapter, config, pagesDir, runtime.fsr);
+
+    await adapter.listen(port, (addr) => {
+      consola.success(`Kiln.js dev server listening at ${addr}`);
+    }, config.web?.host);
+
+    registerShutdown(runtime, () => viteServer.close());
+  },
+});
+
+const startCommand = defineCommand({
+  meta: {
+    name: 'start',
+    description: 'Start the application in production mode (no Vite dev server)',
+  },
+  async run() {
+    consola.info('Starting Kiln.js production server...');
+
+    const config = await loadKilnConfig();
+    const port = config.port || config.web?.port || 3000;
+    const pagesDir = config.pagesDir || './pages';
+
+    if (!config.fsr?.postgresUrl) {
+      consola.info('No fsr.postgresUrl configured — running without FSR promotion/live features.');
+    }
+    const runtime = await initFsr(config);
+
+    const adapter = new ElysiaAdapter({
+      bodyLimitBytes: config.web?.requestBodyLimitBytes,
+    });
+    await startKiln(adapter, config, pagesDir, runtime.fsr);
 
     await adapter.listen(port, (addr) => {
       consola.success(`Kiln.js server listening at ${addr}`);
-    });
+    }, config.web?.host);
 
-    // Handle shutdown
-    process.on('SIGINT', async () => {
-      consola.info('Shutting down dev servers...');
-      if (watcher) await watcher.stop();
-      if (redisCache) await redisCache.disconnect();
-      bunSql?.close();
-      await viteServer.close();
-      process.exit(0);
-    });
+    registerShutdown(runtime);
   },
 });
 
@@ -151,10 +205,7 @@ const buildCommand = defineCommand({
   },
   async run() {
     consola.info('Building Kiln.js application for production...');
-    const { config } = await loadConfig<KilnConfig>({
-      name: 'kiln',
-      configFile: 'kiln.config',
-    });
+    const config = await loadKilnConfig();
 
     const pagesDir = config.pagesDir || './pages';
     const entries = await findClientEntries(path.resolve(process.cwd(), pagesDir));
@@ -207,6 +258,7 @@ const mainCommand = defineCommand({
   },
   subCommands: {
     dev: devCommand,
+    start: startCommand,
     build: buildCommand,
   },
 });

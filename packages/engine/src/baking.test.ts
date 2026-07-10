@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { injectFsrSlots, findSLiveSlots } from './baking.js';
+import { injectFsrSlots } from './baking.js';
 
 function runTests() {
   console.log('Running FSR baking tests...');
@@ -72,47 +72,7 @@ function runTests() {
     console.log('✅ unrelated_slot_name_not_matched passed');
   }
 
-  // 8. finds_single_slot_name
-  {
-    const html = '<span s-live="ticket_status">Loading</span>';
-    const names = findSLiveSlots(html);
-    assert.deepEqual(names, ['ticket_status']);
-    console.log('✅ finds_single_slot_name passed');
-  }
-
-  // 9. finds_multiple_distinct_slot_names
-  {
-    const html = '<span s-live="a">x</span><span s-live="b">y</span><span s-live="c">z</span>';
-    const names = findSLiveSlots(html);
-    assert.deepEqual(names, ['a', 'b', 'c']);
-    console.log('✅ finds_multiple_distinct_slot_names passed');
-  }
-
-  // 10. deduplicates_repeated_slot_names
-  {
-    const html = '<span s-live="status">x</span><div s-live="status">y</div>';
-    const names = findSLiveSlots(html);
-    assert.deepEqual(names, ['status']);
-    console.log('✅ deduplicates_repeated_slot_names passed');
-  }
-
-  // 11. returns_empty_vec_when_no_slots_present
-  {
-    const html = '<span class="foo">hello</span>';
-    const names = findSLiveSlots(html);
-    assert.deepEqual(names, []);
-    console.log('✅ returns_empty_vec_when_no_slots_present passed');
-  }
-
-  // 12. ignores_data_kiln_live_field_attributes
-  {
-    const html = '<span data-kiln-live-field="status">x</span><span s-live="count">0</span>';
-    const names = findSLiveSlots(html);
-    assert.deepEqual(names, ['count']);
-    console.log('✅ ignores_data_kiln_live_field_attributes passed');
-  }
-
-  // 13. patches_generated_data_kiln_live_field_markers
+  // 8. patches_generated_data_kiln_live_field_markers
   {
     const shell = '<span data-kiln-live-field="status">in_progress</span>';
     const slots: [string, any][] = [['status', 'complete']];

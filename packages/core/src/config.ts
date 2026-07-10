@@ -3,6 +3,13 @@ export interface WebConfig {
   port: number;
   backendUrl: string;
   requestBodyLimitBytes: number;
+  /** Per-request handler deadline (ms). Default 30000. */
+  requestTimeoutMs?: number;
+  /** Trust x-forwarded-host for CSRF host checks. Only enable behind a proxy
+   * that strips client-supplied forwarding headers. Default false. */
+  trustProxy?: boolean;
+  /** Log request/response lines. Default false. */
+  tracing?: boolean;
 }
 
 export interface BackendConfig {
@@ -109,8 +116,11 @@ export const DEFAULT_CONFIG: KilnConfig = {
     host: '127.0.0.1',
     port: 4000,
   },
+  // 'filesystem' is the only fully-implemented cold tier (Redis fronts it
+  // when fsr.redisUrl / cache.url is set); 'memory' and 'sqlite' are typed
+  // but not implemented, and startKiln rejects them at boot.
   cache: {
-    provider: 'memory',
+    provider: 'filesystem',
   },
   serviceWorker: {
     enabled: false,
@@ -211,8 +221,15 @@ export function defineConfig(config: DeepPartial<KilnConfig>): KilnConfig {
 }
 
 export function loadConfigFromEnv(baseConfig: KilnConfig): KilnConfig {
-  const config = { ...baseConfig };
-  
+  // Copy the sub-objects that get mutated below — a shallow spread would
+  // alias them, so env overrides would bleed into baseConfig (and, when the
+  // caller didn't override web/backend, into the shared DEFAULT_CONFIG).
+  const config = {
+    ...baseConfig,
+    web: { ...baseConfig.web },
+    backend: { ...baseConfig.backend },
+  };
+
   if (process.env.KILN_WEB_HOST) {
     config.web.host = process.env.KILN_WEB_HOST;
   }

@@ -7,7 +7,7 @@ export type BunSqlClient = {
   unsafe(query: string, params?: unknown[]): Promise<any[]>;
 };
 
-export type HitStatus = 'Tombstoned' | 'JustPromoted' | 'Normal';
+export type HitStatus = 'Tombstoned' | 'JustPromoted' | 'Normal' | 'Missing';
 
 export interface StaleSlot {
   route: string;
@@ -154,6 +154,11 @@ export class FsrStore {
       const checkRow = checkRows[0] as any;
       if (checkRow && checkRow.tombstoned) {
         return 'Tombstoned';
+      }
+      // No row at all — it was never ensured, or an idle purge deleted it.
+      // Callers should re-ensure the route row and retry.
+      if (!checkRow) {
+        return 'Missing';
       }
       return 'Normal';
     }

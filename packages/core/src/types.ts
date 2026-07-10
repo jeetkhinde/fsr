@@ -46,6 +46,11 @@ export interface MiddlewareConfig {
   timeoutMs?: number;
   bodyLimitBytes?: number;
   compression?: boolean;
+  /** Log request/response lines. Off by default. */
+  tracing?: boolean;
+  /** Trust x-forwarded-host for CSRF host comparison. Only enable behind a
+   * proxy that strips client-supplied forwarding headers. */
+  trustProxy?: boolean;
 }
 
 // ── Server Adapter Interface ──
@@ -70,8 +75,12 @@ export interface ServerAdapter {
   /** Apply all middleware */
   applyMiddleware(config: MiddlewareConfig): void;
 
-  /** Start the server */
-  listen(port: number, callback?: (addr: string) => void): Promise<void>;
+  /** Load and apply the project's server hooks file (hooks.ts at appRoot:
+   * onRequest/onError/onStart/onStop), when the adapter supports it. */
+  applyServerHooks?(appRoot: string): Promise<void>;
+
+  /** Start the server. `host` binds a specific interface (default adapter-chosen). */
+  listen(port: number, callback?: (addr: string) => void, host?: string): Promise<void>;
 }
 
 // ── Page & Route Metadata Definitions ──

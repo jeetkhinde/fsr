@@ -1,17 +1,36 @@
 # Active Work Context
 
-Last updated: 2026-07-09
+Last updated: 2026-07-10
 
 ## Current State
 
-Branch `main` is clean and up to date with `origin/main`.
-Last commit: `7276441` — feat: add json_first page export for JSON-default routes
+Branch `fix/audit-fixes` (worktree off `main` @ `e7e599d`) — full-codebase audit fixes, awaiting merge/PR.
 
 `tsc --noEmit` is clean across all packages: `core`, `live`, `engine`, `routekit`, `adapter-elysia`, `react`, `cli`, `create-kiln`.
+Unit suite: 110 pass; 1 pre-existing env-dependent failure (address-book route test needs live Postgres).
 
 ---
 
-## Completed This Session (2026-07-09)
+## Completed This Session (2026-07-10) — audit fixes, branch `fix/audit-fixes`
+
+Bugs fixed (see `.memory/bugs.md` §"Fixed in the 2026-07-10 audit" for detail):
+- [x] Server hooks (`hooks.ts`) wired via `adapter.applyServerHooks()` — was implemented but never called
+- [x] Request timeout actually enforced (`withTimeout` wrap in adapter; old derive() was a no-op)
+- [x] `AppError` statuses honored on page routes; `_error.tsx` / `_not-found.tsx` now render (nearest-dir)
+- [x] `/__kiln/fsr/snapshot` returned empty body (was registered via registerSSE); now a page route, and reads the baked snapshot before re-querying
+- [x] SSG prebake real: startup runs the page handler with a synthetic request (old code only wrote raw entry params; its condition was also always-false)
+- [x] Watcher Redis JSON patches merged into `snapshot.data` (were top-level → Redis-served promoted pages never saw patches); `watcherTick`/`watcherTickRedis` unified
+- [x] `cache.delete(route)` no longer wipes descendant routes' disk caches
+- [x] `fsr.artifactTtlSecs` wired into KilnCache TTL (variant Redis keys were immortal)
+- [x] XSS: JSON seed serialization escapes `<` (`toScriptJson`)
+- [x] Watcher loaders use a sanitized request (no first-visitor headers/cookies); live features skipped + warned for `cache_key` variants
+- [x] Tombstoned routes no longer resurrect cache artifacts
+- [x] `loadConfigFromEnv` deep-copies (was mutating DEFAULT_CONFIG); providers honest (`memory`/`sqlite` → StartupError, default now `filesystem`)
+- [x] CLI: new `kiln start` production command; FSR optional (redisUrl without postgresUrl is a config error); host binding honored
+- [x] `cache_key` snake_case export (camelCase `cacheKey` deprecated), route-row ensure once per process + `Missing` hit-status retry, atomic watcher file writes, db-notify cursor ordering, image handler NaN→400 + no upscaling, `hoistHeadTags` leaves `<svg><title>` alone, CSRF `x-forwarded-host` behind `web.trustProxy`
+- [x] Dead code removed: adapter `handlers/` stubs, `layout-intercept`, `smoke.ts`, `injectFsrScriptTag`, `assembleFragments`, `injectStylesheet`, `findSLiveSlots`, `extractLiveLists`, `rawSnapshotProps`, `prebakeNext` wrapper, `StartKilnOptions.promoteAfter`, `/__kiln/live/*` stub, `test-app/api/health.ts`
+
+## Completed Previously (2026-07-09)
 
 - [x] **Redis fully optional** — Production guard in `cli.ts` now only requires `postgresUrl` (not `redisUrl`). `startKiln()` in `routekit/boot.ts` auto-creates `KilnCache` Redis client from `config.fsr.redisUrl` when `options.redis` is not passed. `FsrWatcher` already handled `redis: null` gracefully (polling fallback). SSE hub never used Redis. (`packages/cli/src/cli.ts`, `packages/routekit/src/boot.ts`)
 

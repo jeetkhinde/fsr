@@ -4,15 +4,18 @@ import type { KilnRequest, KilnResponse, ImageConfig } from '@kiln/core';
 export function buildImageHandler(config: ImageConfig) {
   return async (req: KilnRequest, res: KilnResponse) => {
     const src = req.query.src ?? '';
-    const w = Math.min(parseInt(req.query.w ?? '0', 10) || config.maxWidth, config.maxWidth);
-    const q = Math.max(1, Math.min(parseInt(req.query.q ?? '75', 10), 100));
+    const wRaw = parseInt(req.query.w ?? '0', 10);
+    const qRaw = parseInt(req.query.q ?? '75', 10);
     const fmt = (req.query.f ?? 'webp') as 'webp' | 'jpeg' | 'png';
 
-    if (!src || !config.formats.includes(fmt)) {
+    // Malformed numeric params are a client error, not a sharp crash (500).
+    if (!src || !config.formats.includes(fmt) || Number.isNaN(wRaw) || Number.isNaN(qRaw)) {
       res.status = 400;
       res.json({ error: 'invalid params' });
       return;
     }
+    const w = Math.min(wRaw || config.maxWidth, config.maxWidth);
+    const q = Math.max(1, Math.min(qRaw, 100));
 
     const cacheKey = `${src}_${w}_${q}_${fmt}`;
     const cachePath = `${config.cacheDir}/${Buffer.from(cacheKey).toString('base64url')}.${fmt}`;
@@ -49,7 +52,8 @@ export function buildImageHandler(config: ImageConfig) {
         return;
       }
       const buf = Buffer.from(await srcFile.arrayBuffer());
-      const pipeline = sharp(buf).resize(w > 0 ? { width: w } : undefined);
+      // Never upscale — serving a source-sized image beats inventing pixels.
+      const pipeline = sharp(buf).resize(w > 0 ? { width: w, withoutEnlargement: true } : undefined);
       const out = await pipeline[fmt]({ quality: q }).toBuffer();
 
       // Write to disk cache (fire-and-forget)

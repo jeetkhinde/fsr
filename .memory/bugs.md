@@ -2,7 +2,27 @@
 
 This file tracks compiler blockers, runtime issues, and type mismatches currently present in the codebase.
 
-> **Last verified**: 2026-07-07 (layout-level caching work, ADR-011). `tsc --noEmit -p .` clean across every package (`core`, `live`, `engine`, `routekit`, `adapter-elysia`, `react`, `cli`, `create-kiln`). Full unit suite (`bun test` with the same `--path-ignore-patterns` as `package.json`'s `test:unit`, i.e. excluding the Postgres/Redis-dependent engine tests): **102 pass, 1 fail** — the 1 failure (`examples/address-book/tests/routes.test.ts`, "returns a missing contact state for an unknown id") needs a live Postgres connection and isn't reproducible in this sandbox (`ERR_POSTGRES_CONNECTION_CLOSED`), consistent with the "Database Invalidation Integration Failures" entry below.
+> **Last verified**: 2026-07-10 (full-codebase audit, branch `fix/audit-fixes`). `tsc --noEmit` clean across every package. Unit suite: **110 pass, 1 fail** — the 1 failure (`examples/address-book/tests/routes.test.ts`, "returns a missing contact state for an unknown id") needs a live Postgres connection and isn't reproducible in this sandbox (`ERR_POSTGRES_CONNECTION_CLOSED`), consistent with the "Database Invalidation Integration Failures" entry below.
+
+## 0. Fixed in the 2026-07-10 audit (branch `fix/audit-fixes`)
+
+All found by a systematic read of every package (not by tests failing). One-line summaries; the diff is the reference:
+
+*   **Server hooks never wired** — `loadHooks`/`serverHooks` existed in adapter-elysia but nothing called them; a project's `hooks.ts` was silently ignored. Now: `ServerAdapter.applyServerHooks?()`, called by `startKiln()` before route registration.
+*   **Timeout middleware was a no-op** — derive() created an AbortController nobody consumed. Now the adapter wraps each page/action handler in `withTimeout` (SSE exempt); `timeout()` middleware just maps to 408.
+*   **`AppError` → 500 on page routes** — only `Redirect` was caught. Now a top-level catch maps AppError statuses, renders nearest `_error.tsx`/`_not-found.tsx` (previously discovered but unused), and returns `{ error, status }` JSON to JSON clients. `_loading.tsx` remains unwired (no server-side semantic).
+*   **`/__kiln/fsr/snapshot` empty body** — registered via `registerSSE`, whose generator drops non-SSE bodies. Now a page route; also reads the baked JSON snapshot before falling back to per-slot query re-execution.
+*   **SSG prebake didn't bake** — the startup loop's condition (`page.promoteAfter === 0`) was always false (field never set at discovery time), and its body only wrote the raw entry params as "JSON". Now it checks `extractPageOptions(mod).promoteAfter === 0` and runs the real page handler with a synthetic request per entry.
+*   **Watcher Redis JSON patches at wrong level** — `watcherTickRedis` merged slot values into the snapshot's top level while the disk path targeted `snapshot.data`; Redis-served promoted pages never saw patches. Ticks unified into one `watcherTick`; Redis merge now targets `data`.
+*   **`cache.delete(route)` deleted descendants** — it `rm -r`'d the route's directory, where nested routes also cache. Now deletes only the base html/json + `_v/` variant subtree. Covered by a new cache.test.ts test.
+*   **Variant Redis keys immortal** — `startKiln` hardcoded `ttlSecs: 0` while `delete()` relied on TTL to age out variant keys. `fsr.artifactTtlSecs` is now wired through.
+*   **Seed XSS** — `injectJsonSeed`/`injectFsrSlots` embedded `JSON.stringify` output raw in a script tag; a loaded string containing `</script>` broke out. `toScriptJson` escapes `<`. Covered by a new assembler.test.ts test.
+*   **Watcher loaders captured the first request** — `registerLoader` closures held the first visitor's full `req` (headers/cookies) and re-ran `load()` with it for everyone, and ignored `cache_key` variants. Loaders now get a sanitized path/params/query-only request; live registrations are skipped (with a one-time warning) for variant requests.
+*   **Tombstoned routes resurrected** — the handler kept writing JSON snapshots for tombstoned routes every request. Cache writes and live registrations now skip when `hitStatus === 'Tombstoned'`.
+*   **`loadConfigFromEnv` mutated `DEFAULT_CONFIG`** — shallow copy aliased `web`/`backend`. Deep-copied now.
+*   **Phantom cache providers** — `memory`/`sqlite` were typed + documented but KilnCache always wrote disk. `startKiln` now throws `StartupError('UnsupportedProvider')` for them; default provider changed `memory` → `filesystem` (matches actual behavior, not a behavior change).
+*   Smaller: route-row ensure once per process with new `'Missing'` HitStatus retry (was 2 DB writes/request); db-notify advances the event cursor only after invalidations persist, cursor path respects `cacheDir`, NaN cursor guard; Redis-watcher reconnect no longer accumulates abort listeners; watcher file writes are atomic; image handler returns 400 on NaN params and never upscales; `hoistHeadTags` masks `<svg>` regions; `applyLivePropMarkers` refuses to tag matches inside tags/attributes; CSRF honors `x-forwarded-host` only behind `web.trustProxy`; CLI gains `kiln start` and errors on redisUrl-without-postgresUrl; `adapter.listen` honors `web.host`; `cache_key` is the canonical export (camelCase deprecated).
+*   Dead code removed: adapter `handlers/` stubs, `layout-intercept.ts` (parsing lives in `wrapRequest`), `smoke.ts`, `injectFsrScriptTag`, `assembleFragments`, `injectStylesheet`, `findSLiveSlots`, `extractLiveLists`, `rawSnapshotProps`, the no-op `prebakeNext` wrapper, `StartKilnOptions.promoteAfter`, the `/__kiln/live/*` ping stub, `test-app/api/health.ts`.
 
 ## 1. Resolved (previously tracked here, no longer present)
 

@@ -1,7 +1,8 @@
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { FsrStore, StaleSlot } from './store.js';
-import { RedisCache } from './cache.js';
+import { RedisCache, atomicWrite } from './cache.js';
 import {
   applyListPatchToHtml,
   applyListPatchToJson,
@@ -26,6 +27,8 @@ export interface WatcherConfig {
   purgeAfterSeconds: number;
   purgeSweepSeconds?: number;
   revalidateSeconds?: number;
+  /** Directory the watcher's event cursor file lives in. Default '.kiln-cache'. */
+  cacheDir?: string;
   scheduledInvalidations: ScheduledInvalidation[];
   /** @deprecated Use purgeSweepSeconds. */
   idleEvictSecs?: number;
@@ -159,11 +162,7 @@ export class FsrWatcher {
   }
 
   async runOnce(): Promise<void> {
-    if (this.redis) {
-      await this.watcherTickRedis();
-    } else {
-      await this.watcherTick();
-    }
+    await this.watcherTick();
   }
 
   async start(): Promise<void> {
@@ -198,8 +197,11 @@ export class FsrWatcher {
     this.abortController.abort();
   }
 
-  notifyChange(depKey: string): void {
-    this.store.invalidateDepKey(depKey)
+  /** Returns a promise so callers (e.g. the DB notification pipeline) can
+   * sequence follow-up work — like advancing the event cursor — after the
+   * invalidation has actually been persisted. Errors are logged, never thrown. */
+  notifyChange(depKey: string): Promise<void> {
+    return this.store.invalidateDepKey(depKey)
       .then(async () => {
         if (this.redis) {
           await this.redis.publishInvalidate({
@@ -214,8 +216,8 @@ export class FsrWatcher {
       });
   }
 
-  notifyDelete(depKey: string): void {
-    this.store.tombstoneDependentRoutes(depKey).then(async (routes) => {
+  notifyDelete(depKey: string): Promise<void> {
+    return this.store.tombstoneDependentRoutes(depKey).then(async (routes) => {
       if (this.redis) {
         for (const route of routes) {
           await this.redis.publishInvalidate({
@@ -230,17 +232,21 @@ export class FsrWatcher {
     });
   }
 
+  private cursorPath(): string {
+    return path.join(this.config.cacheDir ?? '.kiln-cache', 'cursor');
+  }
+
   updateCursor(eventId: number): void {
-    const cursorPath = '.kiln-cache/cursor';
-    fs.writeFile(cursorPath, String(eventId), 'utf8').catch(() => {});
+    fs.writeFile(this.cursorPath(), String(eventId), 'utf8').catch(() => {});
   }
 
   private async catchUpMissedEvents(): Promise<void> {
     try {
-      const cursorPath = '.kiln-cache/cursor';
+      const cursorPath = this.cursorPath();
       let cursor = 0;
       try {
-        cursor = Number(await fs.readFile(cursorPath, 'utf8'));
+        const parsed = Number(await fs.readFile(cursorPath, 'utf8'));
+        if (Number.isFinite(parsed)) cursor = parsed;
       } catch {}
 
       const events = await this.store.fetchEventsSince(cursor);
@@ -334,13 +340,17 @@ export class FsrWatcher {
     const run = async () => {
       let subClient: any = null;
       while (!signal.aborted) {
+        // Both are cleaned up in `finally` each iteration so reconnect loops
+        // never accumulate timers or abort listeners on the shared signal.
+        let reconciliationInterval: ReturnType<typeof setInterval> | null = null;
+        let onAbort: (() => void) | null = null;
         try {
           if (!this.redis) break;
           subClient = await this.redis.getClient().duplicate();
 
-          const reconciliationInterval = setInterval(async () => {
+          reconciliationInterval = setInterval(async () => {
             try {
-              await this.watcherTickRedis();
+              await this.watcherTick();
             } catch (err: any) {
               console.error('FSR watcher: reconciliation tick failed:', err.message);
             }
@@ -348,20 +358,19 @@ export class FsrWatcher {
 
           await new Promise<void>((_, reject) => {
             subClient.onclose = (err?: Error) => {
-              clearInterval(reconciliationInterval);
               reject(err ?? new Error('Redis connection closed'));
             };
 
-            signal.addEventListener('abort', () => {
-              clearInterval(reconciliationInterval);
+            onAbort = () => {
               subClient?.close();
               reject(new Error('Aborted'));
-            });
+            };
+            signal.addEventListener('abort', onAbort, { once: true });
 
             subClient
               .subscribe('kiln:invalidate', async (_message: string) => {
                 try {
-                  await this.watcherTickRedis();
+                  await this.watcherTick();
                 } catch (err: any) {
                   console.error('FSR watcher: tick failed after invalidation event:', err.message);
                 }
@@ -375,12 +384,14 @@ export class FsrWatcher {
           if (signal.aborted) break;
           console.warn('FSR watcher: Redis connection dropped or failed. Switching to poll fallback...', err.message);
           try {
-            await this.watcherTickRedis();
+            await this.watcherTick();
           } catch (e: any) {
             console.error('FSR watcher: fallback tick failed:', e.message);
           }
           await new Promise((resolve) => setTimeout(resolve, Math.max(100, this.config.pollIntervalMs)));
         } finally {
+          if (reconciliationInterval) clearInterval(reconciliationInterval);
+          if (onAbort) signal.removeEventListener('abort', onAbort);
           if (subClient) subClient.close();
           subClient = null;
         }
@@ -389,6 +400,8 @@ export class FsrWatcher {
     run();
   }
 
+  /** Single tick for both polling and Redis modes — Redis-specific steps
+   * no-op when no Redis client is configured. */
   private async watcherTick(): Promise<void> {
     const stale = await this.store.fetchStaleSlots();
     if (stale.length === 0) {
@@ -411,94 +424,24 @@ export class FsrWatcher {
       }
     }
 
+    // Phase 2a: batch patches per JSON file (disk) and per route (Redis).
     // JSON snapshots are authoritative; shells are immutable.
     const jsonPatches = new Map<string, [string, any][]>();
-    for (const { slotRow, value, err } of results) {
-      if (err) continue;
-      if (slotRow.promoted) {
-        if (slotRow.jsonPath) {
-          if (!jsonPatches.has(slotRow.jsonPath)) jsonPatches.set(slotRow.jsonPath, []);
-          jsonPatches.get(slotRow.jsonPath)!.push([slotRow.slot, value]);
-        }
-      }
-    }
-
-    // Phase 2b: write to files
-    for (const [jsonPath, patches] of jsonPatches.entries()) {
-      await this.patchJsonFileBatch(jsonPath, patches);
-    }
-
-    const htmlToMaterialize = new Set<string>();
-    for (const { slotRow, err } of results) {
-      if (err) continue;
-      if (slotRow.promoted && slotRow.patchMode === 'both' && slotRow.htmlPath && slotRow.jsonPath) {
-        htmlToMaterialize.add(JSON.stringify({ htmlPath: slotRow.htmlPath, jsonPath: slotRow.jsonPath }));
-      }
-    }
-    for (const pairStr of htmlToMaterialize) {
-      const { htmlPath, jsonPath } = JSON.parse(pairStr);
-      await this.materializeHtmlFile(htmlPath, jsonPath);
-    }
-
-    // Phase 2c: broadcast SSE and mark fresh
-    for (const { slotRow, value, err } of results) {
-      if (err) continue;
-
-      this.emitter.emit('patch', createWatcherPatch(slotRow, value));
-
-      try {
-        await this.store.markFresh(slotRow.route, slotRow.slot);
-      } catch (err: any) {
-        console.warn(`FSR watcher: failed to mark slot fresh for ${slotRow.route}/${slotRow.slot}:`, err.message);
-      }
-    }
-
-    await this.processStaleLists();
-  }
-
-  private async watcherTickRedis(): Promise<void> {
-    const stale = await this.store.fetchStaleSlots();
-    if (stale.length === 0) {
-      await this.processStaleLists();
-      return;
-    }
-
-    // Phase 1: run DB queries
-    const loaderRows = stale.filter((slotRow) => !slotRow.query);
-    const queryRows = stale.filter((slotRow) => Boolean(slotRow.query));
-    await this.refreshRegisteredLoaders(loaderRows);
-    const results: { slotRow: StaleSlot; value: any; err?: any }[] = [];
-    for (const slotRow of queryRows) {
-      try {
-        const value = await this.store.reExecuteQuery(slotRow);
-        results.push({ slotRow, value });
-      } catch (err: any) {
-        console.warn(
-          `FSR watcher (Redis): failed to re-execute query for ${slotRow.route}/${slotRow.slot}:`,
-          err.message
-        );
-        results.push({ slotRow, value: null, err });
-      }
-    }
-
-    // Phase 2a: build batches
-    const jsonPatches = new Map<string, [string, any][]>();
     const redisJsonPatches = new Map<string, [string, any][]>();
-
     for (const { slotRow, value, err } of results) {
       if (err) continue;
-      if (slotRow.promoted) {
-        if (slotRow.jsonPath) {
-          if (!jsonPatches.has(slotRow.jsonPath)) jsonPatches.set(slotRow.jsonPath, []);
-          jsonPatches.get(slotRow.jsonPath)!.push([slotRow.slot, value]);
+      if (slotRow.promoted && slotRow.jsonPath) {
+        if (!jsonPatches.has(slotRow.jsonPath)) jsonPatches.set(slotRow.jsonPath, []);
+        jsonPatches.get(slotRow.jsonPath)!.push([slotRow.slot, value]);
 
+        if (this.redis) {
           if (!redisJsonPatches.has(slotRow.route)) redisJsonPatches.set(slotRow.route, []);
           redisJsonPatches.get(slotRow.route)!.push([slotRow.slot, value]);
         }
       }
     }
 
-    // Phase 2b: patch files
+    // Phase 2b: patch disk files
     for (const [jsonPath, patches] of jsonPatches.entries()) {
       await this.patchJsonFileBatch(jsonPath, patches);
     }
@@ -515,14 +458,22 @@ export class FsrWatcher {
       await this.materializeHtmlFile(htmlPath, jsonPath);
     }
 
-    // Phase 2c: Redis JSON read/merge/write
+    // Phase 2c: Redis JSON read/merge/write. The Redis entry holds the same
+    // BakedSnapshot shape as the disk file ({ schemaVersion, data, ... }),
+    // and materializeBakedShell only reads `data` — so patches must land
+    // inside `data`, exactly like patchJsonFileBatch does for disk.
     if (this.redis) {
       for (const [route, patches] of redisJsonPatches.entries()) {
         try {
           const existing = (await this.redis.getJson(route)) || {};
+          const target =
+            existing.data && typeof existing.data === 'object' && !Array.isArray(existing.data)
+              ? existing.data
+              : existing;
           for (const [slot, val] of patches) {
-            existing[slot] = val;
+            target[slot] = val;
           }
+          if ('updatedAt' in existing) existing.updatedAt = new Date().toISOString();
           await this.redis.setJson(route, existing);
         } catch (e: any) {
           console.warn(`FSR watcher: Redis setJson failed for ${route}:`, e.message);
@@ -530,7 +481,7 @@ export class FsrWatcher {
       }
     }
 
-    // Phase 2d: update Redis HASH, Redis HTML, publish, SSE, mark fresh
+    // Phase 2d: Redis slot hash + pub/sub, local SSE, mark fresh
     for (const { slotRow, value, err } of results) {
       if (err) continue;
 
@@ -619,7 +570,7 @@ export class FsrWatcher {
           await this.store.markFresh(route, row.slot);
         }
         if ('updatedAt' in snapshot) snapshot.updatedAt = new Date().toISOString();
-        if (paths?.jsonPath) await fs.writeFile(paths.jsonPath, JSON.stringify(snapshot), 'utf8');
+        if (paths?.jsonPath) await atomicWrite(paths.jsonPath, JSON.stringify(snapshot));
         if (this.redis) await this.redis.setJson(route, snapshot);
 
         const patchMode = await this.store.getRoutePatchMode(route);
@@ -712,7 +663,7 @@ export class FsrWatcher {
       }
 
       if (snapshot.jsonPath && patchedJson !== null) {
-        await fs.writeFile(snapshot.jsonPath, JSON.stringify(patchedJson), 'utf8');
+        await atomicWrite(snapshot.jsonPath, JSON.stringify(patchedJson));
       }
       if (this.redis) {
         if (patchedJson !== null) await this.redis.setJson(snapshot.route, patchedJson);
@@ -768,7 +719,7 @@ export class FsrWatcher {
         target[slot] = value;
       }
       if ('updatedAt' in obj) obj.updatedAt = new Date().toISOString();
-      await fs.writeFile(jsonPath, JSON.stringify(obj), 'utf8');
+      await atomicWrite(jsonPath, JSON.stringify(obj));
     } catch (err: any) {
       console.warn(`FSR watcher: failed to patch JSON file at ${jsonPath}:`, err.message);
     }
@@ -784,16 +735,12 @@ export class FsrWatcher {
       const materialized = materializeBakedShell(htmlShell, jsonSnapshot);
       
       if (materialized) {
-        await fs.writeFile(htmlPath, materialized, 'utf8');
+        await atomicWrite(htmlPath, materialized);
       }
     } catch (err: any) {
       console.warn(`FSR watcher: failed to materialize HTML file at ${htmlPath}:`, err.message);
     }
   }
-}
-
-function escapeAttribute(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }
 
 function createWatcherPatch(slotRow: StaleSlot, value: any): LivePatch {

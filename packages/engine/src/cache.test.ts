@@ -42,6 +42,20 @@ describe('KilnCache', () => {
     expect(await cache.getJson('/contacts')).toBeNull();
   });
 
+  it('delete of a parent route keeps descendant route caches intact', async () => {
+    await cache.setHtml('/contacts', '<ul>parent</ul>');
+    await cache.setHtml('/contacts/archive', '<ul>child</ul>');
+    await cache.setHtml('/contacts', '<p>variant</p>', false, 'admin');
+
+    await cache.delete('/contacts');
+
+    expect(await cache.getHtml('/contacts')).toBeNull();
+    expect(await cache.getHtml('/contacts', 'admin')).toBeNull();
+    // Nested route caches live inside the parent's directory — they must
+    // survive a parent-route invalidation.
+    expect(await cache.getHtml('/contacts/archive')).toBe('<ul>child</ul>');
+  });
+
   it('normalises dynamic route to safe disk path', () => {
     // /contacts/123 → contacts/123/index.html (no colon in filename)
     const htmlPath = cache.diskHtmlPath('/contacts/123');

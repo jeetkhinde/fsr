@@ -1,7 +1,7 @@
 # Kiln Feature Inventory (Source-Verified)
 
-Last verified: 2026-07-08 by reading actual package source code.
-Commit: `7276441` (feat: add json_first page export for JSON-default routes)
+Last verified: 2026-07-10 on branch `fix/audit-fixes` (full-codebase audit + fixes).
+Previous baseline: `7276441` (feat: add json_first page export for JSON-default routes)
 
 **Read this file before scanning code or answering "does Kiln support X?"**
 
@@ -22,9 +22,12 @@ Commit: `7276441` (feat: add json_first page export for JSON-default routes)
 | File | Purpose |
 |------|---------|
 | `_layout.tsx` | Shared layout wrapping all child routes |
-| `_error.tsx` | Error boundary UI for that directory |
-| `_loading.tsx` | Loading state UI for that directory |
-| `_not-found.tsx` | 404 UI for that directory |
+| `_error.tsx` | Error UI when a page in/below that directory throws (nearest wins; receives `{ error: { status, message, type }, path }`) |
+| `_loading.tsx` | Discovered but **not wired yet** — no server-side semantic today |
+| `_not-found.tsx` | UI for `AppError.notFound()` thrown by a page (falls back to `_error.tsx`) |
+
+Thrown `AppError`s map to their real status (404/401/422/500) on page routes;
+JSON clients get `{ error, status }`. Non-AppError throws render a 500.
 
 ---
 
@@ -34,7 +37,7 @@ All modes controlled by a **single integer export** `promote_after` on the page 
 
 | Export value | Mode | Behaviour |
 |---|---|---|
-| `0` | SSG | Baked at startup (`entries()` required for dynamic routes) |
+| `0` | SSG | Baked at startup via the real page handler + synthetic request (`entries()` required for dynamic routes) |
 | `1` | ISR | Baked on first request, cached forever after |
 | `N` | FSR | Baked after N hits, cached after |
 | absent / `false` | Pure SSR | Baked on every request, never cached |
@@ -116,11 +119,12 @@ All built-in, applied automatically by `startKiln()` via `adapter.applyMiddlewar
 
 | Middleware | File | Default |
 |---|---|---|
-| CSRF protection | `csrf.ts` | On — origin/referer double-submit on POST/PUT/PATCH/DELETE with form content-type |
-| Request timeout | `timeout.ts` | 30 s — AbortController-based, returns 408 |
-| Layout intercept | `layout-intercept.ts` | Always — parses `silcrow-target` + `X-PS-Present` into `req.isEnhanced`, `req.layoutsPresent` |
+| CSRF protection | `csrf.ts` | On — origin/referer double-submit on POST/PUT/PATCH/DELETE with form content-type. `web.trustProxy: true` opts into honoring `x-forwarded-host` |
+| Request timeout | `timeout.ts` | 30 s (`web.requestTimeoutMs`) — enforced by the adapter wrapping each page/action handler in `withTimeout`; returns 408. SSE routes exempt |
 | Compression | `compression.ts` | Stub (pass-through) |
-| Request tracing | `tracing.ts` | Optional — logs `→ METHOD /path` + `← METHOD /path STATUS` |
+| Request tracing | `tracing.ts` | Off — enable with `web.tracing: true`; logs `→ METHOD /path` + `← METHOD /path STATUS` |
+
+(`silcrow-target` + `X-PS-Present` parsing into `req.isEnhanced` / `req.layoutsPresent` happens in `wrapRequest` in `context.ts` — the old layout-intercept middleware was redundant and removed.)
 
 ### Server hooks (`hooks.ts` at project root)
 ```ts
@@ -129,7 +133,8 @@ export const onError   = async (ctx) => { }
 export const onStart   = async () => { }
 export const onStop    = async () => { }
 ```
-Auto-loaded by the adapter on boot. This is Kiln's middleware / lifecycle hook layer.
+Loaded by `startKiln()` via `adapter.applyServerHooks(process.cwd())` before routes are
+registered. This is Kiln's middleware / lifecycle hook layer.
 
 ---
 
@@ -174,20 +179,19 @@ const r = failure(appError)    // { ok: false, error }
 
 ## Caching & Storage (`packages/core/src/config.ts`, `packages/engine/src/cache.ts`)
 
-### Four cache providers
+### Cache providers
 
 ```ts
-cache: { provider: 'memory' | 'filesystem' | 'sqlite' | 'redis' }
+cache: { provider: 'filesystem' | 'redis' }   // default: 'filesystem'
 ```
 
-| Provider | When to use |
+| Provider | Behaviour |
 |---|---|
-| `'memory'` | Dev / single-instance / testing |
-| `'filesystem'` | Single-instance with persistence |
-| `'sqlite'` | Lightweight production — no Redis needed |
-| `'redis'` | Multi-instance and/or FSR live SSE (required for LiveProp) |
+| `'filesystem'` | Disk cache at `cache.dir` (default `.kiln-cache`). Redis hot tier added when `fsr.redisUrl` is set |
+| `'redis'` | Same disk cold tier + Redis hot tier from `cache.url` (or `fsr.redisUrl`) |
+| `'memory'` / `'sqlite'` | **Not implemented** — typed in `CacheProvider` but `startKiln()` throws `StartupError('UnsupportedProvider')` |
 
-**Redis is only required when FSR/LiveProp SSE features are used.** A pure SSG/SSR/ISR Kiln app runs on SQLite or in-memory cache.
+**Redis is only required when FSR/LiveProp SSE features are used.** A pure SSG/SSR/ISR Kiln app runs on the disk cache alone. `fsr.artifactTtlSecs` sets Redis expiry for non-pinned entries (also what ages out per-variant `cache_key` Redis keys).
 
 ### Three-layer storage (when Redis is active)
 1. **Redis** — hot serve + pub/sub event bus

@@ -18,6 +18,7 @@ import {
   isLiveList,
   type LiveList,
   LiveProp,
+  StartupError,
 } from '@kiln/core';
 import {
   KilnCache,
@@ -34,21 +35,6 @@ import {
 } from '@kiln/engine';
 
 // ---------------------------------------------------------------------------
-// Legacy FSR script injection (kept for backward compat)
-// ---------------------------------------------------------------------------
-
-const FSR_SCRIPT_TAG = '<script src="/_kiln/live.js" defer></script>';
-
-/** Insert the FSR client script tag before </head>, or append if no </head>. */
-export function injectFsrScriptTag(html: string): string {
-  const headEnd = html.indexOf('</head>');
-  if (headEnd !== -1) {
-    return html.slice(0, headEnd) + FSR_SCRIPT_TAG + html.slice(headEnd);
-  }
-  return html + FSR_SCRIPT_TAG;
-}
-
-// ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
@@ -61,10 +47,16 @@ export interface CacheOptions {
 export interface StartKilnOptions {
   ignoreGlobs?: string[];
   fsr?: boolean;
-  promoteAfter?: number;
   store?: FsrStore;
   watcher?: FsrWatcher;
   redis?: { getClient(): any };
+}
+
+/** Files a page falls back to when its handler throws (nearest _error.tsx /
+ * _not-found.tsx up the directory tree, resolved at boot). */
+export interface PageErrorFiles {
+  errorFile?: string;
+  notFoundFile?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -107,26 +99,17 @@ export function buildPageHandler(
   cacheOpts: CacheOptions,
   kilnConfig?: KilnConfig,
   store?: FsrStore,
-  watcher?: FsrWatcher
+  watcher?: FsrWatcher,
+  errorFiles?: PageErrorFiles
 ) {
   const cache = new KilnCache(cacheOpts);
   let localHitCount = 0;
   let locallyPromoted = false;
+  // Page options are static per module, so the route row only needs to be
+  // (re-)ensured once per process instead of one extra DB write per request.
+  const ensuredRoutes = new Set<string>();
 
-  return async (req: KilnRequest, res: KilnResponse) => {
-    // Wire prebakeNext as fire-and-forget prefetch for subsequent routes
-    if (typeof req.prebakeNext === 'function') {
-      const originalPrebake = req.prebakeNext;
-      req.prebakeNext = (nextPath: string) => {
-        // Fire and forget — no await
-        try {
-          originalPrebake(nextPath);
-        } catch {
-          /* ignore */
-        }
-      };
-    }
-
+  const handle = async (req: KilnRequest, res: KilnResponse) => {
     // 1. Resolve layout patterns for content negotiation
     const layoutPatterns = pageMeta.layouts.map((layoutPath) => {
       const node = layoutNodes.find((l) => l.filePath === layoutPath);
@@ -137,18 +120,28 @@ export function buildPageHandler(
     const promoteAfter = options.promoteAfter ?? kilnConfig?.fsr?.promoteAfterHits ?? 2;
     const revalidate = options.revalidate ?? kilnConfig?.fsr?.revalidateSeconds ?? 300;
     const purgeAfter = options.purgeAfter ?? kilnConfig?.fsr?.purgeAfterSeconds ?? 2_592_000;
-    let hitStatus: 'Tombstoned' | 'JustPromoted' | 'Normal' = 'Normal';
+    let hitStatus: 'Tombstoned' | 'JustPromoted' | 'Normal' | 'Missing' = 'Normal';
     let promoted = false;
 
     if (store && typeof store.ensureRouteRow === 'function' && typeof store.incrementHit === 'function') {
-      await store.ensureRouteRow(
-        req.path,
-        promoteAfter === false ? null : promoteAfter,
-        revalidate === false ? 0 : revalidate,
-        purgeAfter,
-        options.patchMode
-      );
+      const ensureRow = () =>
+        store.ensureRouteRow(
+          req.path,
+          promoteAfter === false ? null : promoteAfter,
+          revalidate === false ? 0 : revalidate,
+          purgeAfter,
+          options.patchMode
+        );
+      if (!ensuredRoutes.has(req.path)) {
+        await ensureRow();
+        ensuredRoutes.add(req.path);
+      }
       hitStatus = await store.incrementHit(req.path);
+      if (hitStatus === 'Missing') {
+        // Row was purged (idle eviction) after we ensured it — recreate.
+        await ensureRow();
+        hitStatus = await store.incrementHit(req.path);
+      }
       promoted = hitStatus === 'JustPromoted' || await store.isPromoted?.(req.path) === true;
     } else {
       if (promoteAfter !== false) {
@@ -160,6 +153,11 @@ export function buildPageHandler(
         promoted = locallyPromoted;
       }
     }
+
+    // A tombstoned route's data was deliberately deleted (e.g. its dependency
+    // row was removed). Serve it fresh, but never re-create cache artifacts
+    // or live registrations for it — that would resurrect the purged entry.
+    const tombstoned = hitStatus === 'Tombstoned';
 
     let pageProps: any = {};
     let rawPageProps: any = {};
@@ -233,11 +231,12 @@ export function buildPageHandler(
       if (loaded === null) return;
 
       const liveFields = extractLiveFields(rawPageProps);
-      if (store && watcher && liveFields.length > 0) {
+      if (store && watcher && liveFields.length > 0 && !variant) {
+        const loaderReq = makeLoaderRequest(req);
         watcher.registerLoader({
           route: req.path,
           load: async () => {
-            const l = typeof module.load === 'function' ? await module.load(req) : {};
+            const l = typeof module.load === 'function' ? await module.load(loaderReq) : {};
             return l as Record<string, unknown>;
           },
         });
@@ -343,7 +342,6 @@ export function buildPageHandler(
         html,
       );
     }
-    const rawSnapshotProps = Object.assign({}, ...rawLayoutPropsArr, rawPageProps);
     const snapshotProps = Object.assign({}, ...layoutPropsArr, pageProps);
 
     // 7b. Hoist React 19 metadata (<title>/<meta>/<link>) from body into <head>
@@ -376,12 +374,14 @@ export function buildPageHandler(
     // the freshly rendered HTML would contain the new value, but the next
     // request would materialize the shell against the *old* cached JSON via
     // materializeBakedShell, silently reverting the value it had just baked.
-    const layoutSignature =
-      layoutPatterns.length > 0 ? await computeLayoutSignature(layoutPatterns, cache) : undefined;
-    await cache.setJson(req.path, createBakedSnapshot(snapshotProps, undefined, layoutSignature), variant);
-    jsonPath = variant ? null : cache.diskJsonPath(req.path);
-    if (store && !variant) {
-      await store.setBakedPaths(req.path, null, jsonPath);
+    if (!tombstoned) {
+      const layoutSignature =
+        layoutPatterns.length > 0 ? await computeLayoutSignature(layoutPatterns, cache) : undefined;
+      await cache.setJson(req.path, createBakedSnapshot(snapshotProps, undefined, layoutSignature), variant);
+      jsonPath = variant ? null : cache.diskJsonPath(req.path);
+      if (store && !variant) {
+        await store.setBakedPaths(req.path, null, jsonPath);
+      }
     }
 
     // B. Save Fully Baked HTML if promoted
@@ -393,7 +393,18 @@ export function buildPageHandler(
       }
     }
 
-    if (watcher) {
+    // Live registrations write to the route's BASE cache paths; a cacheKey
+    // page's per-variant artifacts would be silently poisoned by them, so
+    // live features are not registered for variant requests.
+    if (variant && watcher && (hasLiveLists(rawPageProps) || extractLiveFields(rawPageProps).length > 0)) {
+      warnOnce(
+        `variant-live:${req.path}`,
+        `[kiln] route "${req.path}" combines cacheKey with LiveProp/Live.list; ` +
+          `live updates are not supported for cacheKey variants yet and were skipped.`,
+      );
+    }
+
+    if (watcher && !tombstoned && !variant) {
       await registerLiveLists({
         route: req.path,
         pageComponent,
@@ -425,7 +436,7 @@ export function buildPageHandler(
 
     // 12. Extract live fields and persist on pageMeta
     const liveFields = extractLiveFields(rawPageProps);
-    if (store && liveFields.length > 0) {
+    if (store && liveFields.length > 0 && !tombstoned && !variant) {
       for (const field of liveFields) {
         await store.upsertSlot(
           req.path,
@@ -436,10 +447,11 @@ export function buildPageHandler(
           field.debounce ?? options.debounce ?? kilnConfig?.fsr?.patchDebounceSecs,
         );
       }
+      const loaderReq = makeLoaderRequest(req);
       watcher?.registerLoader?.({
         route: req.path,
         load: async () => {
-          const loaded = typeof module.load === 'function' ? await module.load(req) : {};
+          const loaded = typeof module.load === 'function' ? await module.load(loaderReq) : {};
           return loaded as Record<string, unknown>;
         },
       });
@@ -457,6 +469,96 @@ export function buildPageHandler(
 
     respondWithNavigationShape(res, req, layoutPatterns, pageMeta.pattern, finalHtml);
   };
+
+  return async (req: KilnRequest, res: KilnResponse) => {
+    try {
+      await handle(req, res);
+    } catch (err: any) {
+      // Redirects thrown outside loadPageProps (e.g. from a layout's load())
+      // are control flow, not errors.
+      if (err?.type === 'Redirect') {
+        res.redirect(err.message, err.status);
+        return;
+      }
+      await respondWithErrorPage(err, req, res, errorFiles);
+    }
+  };
+}
+
+const warnedOnce = new Set<string>();
+function warnOnce(key: string, message: string): void {
+  if (warnedOnce.has(key)) return;
+  warnedOnce.add(key);
+  console.warn(message);
+}
+
+/**
+ * A stripped request the watcher can safely re-run load() with long after the
+ * original request ended. Only the route identity (path/params/query) is
+ * kept — the first visitor's headers, cookies, and body must never leak into
+ * a cache entry that is served to everyone.
+ */
+function makeLoaderRequest(req: KilnRequest): KilnRequest {
+  return {
+    path: req.path,
+    method: 'GET',
+    params: { ...req.params },
+    query: { ...req.query },
+    headers: new Headers(),
+    formData: async () => new FormData(),
+    json: async () => ({}),
+    isEnhanced: false,
+    layoutsPresent: [],
+    prebakeNext: () => {},
+  };
+}
+
+/**
+ * Map a thrown error to a response: AppError statuses are honored (404/401/
+ * 422/500), and the nearest _error.tsx / _not-found.tsx renders the body when
+ * one exists for the page's directory.
+ */
+async function respondWithErrorPage(
+  err: any,
+  req: KilnRequest,
+  res: KilnResponse,
+  errorFiles?: PageErrorFiles,
+): Promise<void> {
+  const isAppError = err?.name === 'AppError' && typeof err?.status === 'number';
+  const status = isAppError ? err.status : 500;
+  const message = isAppError ? (err.message || 'Error') : 'Internal Server Error';
+  if (!isAppError) {
+    console.error(`[kiln] unhandled error rendering ${req.path}:`, err);
+  }
+
+  res.status = status;
+  const accept = req.headers.get('accept') ?? '';
+  if (!accept.includes('text/html') && accept.includes('application/json')) {
+    res.json({ error: message, status });
+    return;
+  }
+
+  const file = status === 404 ? (errorFiles?.notFoundFile ?? errorFiles?.errorFile) : errorFiles?.errorFile;
+  if (file) {
+    try {
+      const mod = await import(pathToFileURL(path.resolve(file)).href);
+      if (typeof mod.default === 'function') {
+        const baked = await bakeSegment(
+          mod.default,
+          { error: { status, message, type: isAppError ? err.type : 'Internal' }, path: req.path },
+          false,
+        );
+        res.html(baked.html);
+        return;
+      }
+    } catch (renderErr: any) {
+      console.error(`[kiln] error page ${file} failed to render:`, renderErr?.message ?? renderErr);
+    }
+  }
+
+  res.html(
+    `<!DOCTYPE html><html><head><title>${status}</title></head><body><h1>${status}</h1><p>${escapeHtml(message)}</p></body></html>`,
+  );
 }
 
 function wrapPageSegment(pattern: string, html: string): string {
@@ -574,6 +676,18 @@ export function applyLivePropMarkers(html: string, props: Record<string, unknown
       );
       continue;
     }
+
+    // The single occurrence must be in text position. If it sits inside a
+    // tag (e.g. an attribute value), wrapping it in a <span> would produce
+    // broken markup — skip and ask for an explicit attribute instead.
+    const idx = result.indexOf(text);
+    if (result.lastIndexOf('<', idx) > result.lastIndexOf('>', idx)) {
+      console.warn(
+        `[kiln] LiveProp "${name}" (value ${JSON.stringify(String(value))}) only appears inside a tag/attribute; ` +
+          `auto-tagging was skipped. Add an explicit s-live="${name}" attribute in the component.`,
+      );
+      continue;
+    }
     result = result.replace(text, `<span s-live="${escapeAttribute(name)}">${text}</span>`);
   }
   return result;
@@ -644,31 +758,52 @@ export async function startKiln(
   options: StartKilnOptions = {}
 ) {
   const fsrEnabled = options.fsr === true || !!options.store || !!options.watcher;
+
+  // Implemented cache storage: disk ('filesystem'), optionally fronted by a
+  // Redis hot tier ('redis' provider or fsr.redisUrl). Fail loudly on the
+  // providers the config type advertises but the runtime doesn't back,
+  // instead of silently writing to disk anyway.
+  const provider = config.cache?.provider ?? 'filesystem';
+  if (provider === 'memory' || provider === 'sqlite') {
+    throw new StartupError(
+      'UnsupportedProvider',
+      `cache.provider "${provider}" is not implemented; use "filesystem" or "redis"`,
+    );
+  }
+
   // 1. Discover routes
   const manifest = await discoverRoutes(pagesDir, {
     ignoreGlobs: options.ignoreGlobs ?? []
   });
 
   // 2. Build cache options from config
+  const cacheRedisUrl = provider === 'redis' ? (config.cache?.url ?? config.fsr?.redisUrl) : config.fsr?.redisUrl;
   const redisClient =
     options.redis?.getClient?.() ??
-    (config.fsr?.redisUrl ? new RedisCache(config.fsr.redisUrl).getClient() : null);
+    (cacheRedisUrl ? new RedisCache(cacheRedisUrl).getClient() : null);
   const cacheOpts: CacheOptions = {
     redis: redisClient,
-    cacheDir: config.cache?.provider === 'filesystem' ? (config.cache.dir ?? '.kiln-cache') : '.kiln-cache',
-    ttlSecs: 0
+    cacheDir: config.cache?.dir ?? '.kiln-cache',
+    // Governs Redis expiry of non-pinned entries — without it, variant keys
+    // created by cacheKey pages would accumulate in Redis forever.
+    ttlSecs: config.fsr?.artifactTtlSecs ?? 0
   };
+  const hubCache = new KilnCache(cacheOpts);
 
   if (options.store && config.fsr?.patchDebounceSecs !== undefined) {
     options.store.withGlobalDebounce(config.fsr.patchDebounceSecs);
   }
 
-  // 3. Apply middleware
+  // 3. Apply middleware, then the project's hooks.ts (onRequest/onError/
+  // onStart/onStop) so both cover every route registered below.
   adapter.applyMiddleware({
     csrf: true,
-    timeoutMs: 30000,
-    compression: true
+    timeoutMs: config.web?.requestTimeoutMs ?? 30000,
+    compression: true,
+    tracing: config.web?.tracing === true,
+    trustProxy: config.web?.trustProxy === true
   });
+  await adapter.applyServerHooks?.(process.cwd());
 
   // 4. Register /_image endpoint if images config is present
   if ((config as any).images?.enabled) {
@@ -681,6 +816,11 @@ export async function startKiln(
     const absolutePagePath = path.resolve(page.filePath);
     const mod = await import(pathToFileURL(absolutePagePath).href);
 
+    const errorFiles: PageErrorFiles = {
+      errorFile: nearestSpecialFile(page.relativePath, manifest.errorPages),
+      notFoundFile: nearestSpecialFile(page.relativePath, manifest.notFoundPages),
+    };
+
     const pageHandler = buildPageHandler(
       mod,
       page,
@@ -688,7 +828,8 @@ export async function startKiln(
       cacheOpts,
       config,
       options.store,
-      options.watcher
+      options.watcher,
+      errorFiles
     );
     adapter.registerPage(page.pattern, page.layouts, pageHandler);
 
@@ -696,29 +837,27 @@ export async function startKiln(
       adapter.registerAction(page.pattern, buildActionHandler(mod.actions));
     }
 
-    // Prebake at startup for pages with hasEntries && promoteAfter === 0
-    if (page.hasEntries && page.promoteAfter === 0 && typeof mod.entries === 'function') {
+    // SSG: prebake at startup for pages exporting entries() + promote_after 0.
+    // Runs the real page handler against a synthetic request so the entry is
+    // fully loaded, baked, and cached — identical to what the first live
+    // request would have produced.
+    const pageOptions = extractPageOptions(mod);
+    if (page.hasEntries && pageOptions.promoteAfter === 0 && typeof mod.entries === 'function') {
       Promise.resolve()
         .then(async () => {
-          try {
-            const entries: Record<string, string>[] = await mod.entries();
-            const cache = new KilnCache(cacheOpts);
-            for (const entry of entries) {
-              // Entries provide path param mappings — build the concrete path
-              const concretePath = Object.entries(entry).reduce((p, [k, v]) => p.replace(`:${k}`, v), page.pattern);
-              // Skip if already cached
-              const existing = await cache.getHtml(concretePath);
-              if (!existing) {
-                // Warm up: fire a synthetic prebake request
-                // (Full bake requires a real req context; we just note intent here)
-                await cache.setJson(concretePath, entry);
-              }
-            }
-          } catch {
-            // Non-fatal: startup prebake failure
+          const entries: Record<string, string>[] = await mod.entries();
+          const cache = new KilnCache(cacheOpts);
+          for (const entry of entries) {
+            // Entries provide path param mappings — build the concrete path
+            const concretePath = Object.entries(entry).reduce((p, [k, v]) => p.replace(`:${k}`, v), page.pattern);
+            const existing = await cache.getHtml(concretePath);
+            if (existing) continue;
+            await pageHandler(makePrebakeRequest(concretePath, entry), makeNoopResponse());
           }
         })
-        .catch(() => {});
+        .catch((err) => {
+          console.warn(`[kiln] startup prebake failed for ${page.pattern}:`, err?.message ?? err);
+        });
     }
   }
 
@@ -753,12 +892,15 @@ export async function startKiln(
           connectionTtlSecs: config.fsr?.connectionTtlSecs ?? 3600,
           keepaliveSecs: config.fsr?.keepaliveSecs ?? 30
         },
-        watcher: options.watcher
+        watcher: options.watcher,
+        cache: hubCache
       });
       res.sse(stream);
     });
 
-    adapter.registerSSE('/__kiln/fsr/snapshot', async (req, res) => {
+    // JSON endpoint, so it must go through registerPage — registerSSE only
+    // forwards SSE bodies and would drop the JSON payload entirely.
+    adapter.registerPage('/__kiln/fsr/snapshot', [], async (req, res) => {
       const route = req.query.route || '';
       const slots = (req.query.slots || '').split(',').filter(Boolean);
       const { fsrSnapshotHandler } = await import('@kiln/engine' as any);
@@ -774,14 +916,6 @@ export async function startKiln(
       });
     });
   }
-
-  adapter.registerSSE('/__kiln/live/*', async (_req, res) => {
-    res.sse({
-      async *[Symbol.asyncIterator]() {
-        yield { event: 'ping', data: 'hello' };
-      }
-    });
-  });
 
   // 10. Register inspect endpoint
   adapter.registerPage('/__kiln/inspect', [], async (_req, res) => {
@@ -811,6 +945,46 @@ export async function startKiln(
   }
 
   return manifest;
+}
+
+/** Walk up from the page's directory to the pages root, returning the first
+ * matching special file (_error.tsx / _not-found.tsx) from the manifest. */
+function nearestSpecialFile(pageRelPath: string, table: Record<string, string>): string | undefined {
+  let dir = path.dirname(pageRelPath);
+  while (true) {
+    const key = dir === '.' ? '' : dir;
+    if (table[key]) return table[key];
+    if (key === '') return undefined;
+    dir = path.dirname(dir);
+  }
+}
+
+function makePrebakeRequest(concretePath: string, params: Record<string, string>): KilnRequest {
+  return {
+    path: concretePath,
+    method: 'GET',
+    params: { ...params },
+    query: {},
+    headers: new Headers(),
+    formData: async () => new FormData(),
+    json: async () => ({}),
+    isEnhanced: false,
+    layoutsPresent: [],
+    prebakeNext: () => {},
+  };
+}
+
+/** Response sink for startup prebakes — the handler's side effect (writing
+ * the cache) is the point; the rendered body has no recipient. */
+function makeNoopResponse(): KilnResponse {
+  return {
+    status: 200,
+    headers: {},
+    html: () => {},
+    json: () => {},
+    redirect: () => {},
+    sse: () => {},
+  };
 }
 
 async function materializeLiveLists(loadResult: any, store?: FsrStore): Promise<any> {

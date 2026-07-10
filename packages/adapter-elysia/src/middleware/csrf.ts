@@ -16,8 +16,10 @@ function needsCsrfCheck(method: string, headers: Headers): boolean {
   );
 }
 
-function getRequestHost(headers: Headers): string | null {
-  const host = headers.get('x-forwarded-host') || headers.get('host');
+function getRequestHost(headers: Headers, trustProxy: boolean): string | null {
+  // x-forwarded-host is client-suppliable; only honor it when the deployment
+  // explicitly says a trusted proxy sits in front and strips inbound copies.
+  const host = (trustProxy ? headers.get('x-forwarded-host') : null) || headers.get('host');
   return host ? host.toLowerCase() : null;
 }
 
@@ -30,13 +32,18 @@ function parseHostFromUrl(urlStr: string): string | null {
   }
 }
 
-export const csrf = () => (app: Elysia) =>
+export interface CsrfOptions {
+  /** Honor x-forwarded-host for the host comparison. Default false. */
+  trustProxy?: boolean;
+}
+
+export const csrf = (options: CsrfOptions = {}) => (app: Elysia) =>
   app.onBeforeHandle(({ request, set }) => {
     if (!needsCsrfCheck(request.method, request.headers)) {
       return;
     }
 
-    const host = getRequestHost(request.headers);
+    const host = getRequestHost(request.headers, options.trustProxy === true);
     if (!host) {
       set.status = 403;
       return 'CSRF: missing Host header';

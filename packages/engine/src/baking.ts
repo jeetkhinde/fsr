@@ -1,5 +1,6 @@
 import { applyScalarPatchToHtml, createScalarPatch } from '@kiln/live';
 import { applyListPatchToHtml } from '@kiln/live';
+import { toScriptJson } from './assembler.js';
 
 export const BAKED_SNAPSHOT_VERSION = 1;
 export const BAKED_RENDER_VERSION = 1;
@@ -85,32 +86,16 @@ export function injectFsrSlots(shell: string, slots: [string, any][]): string {
       for (const [slotName, jsonVal] of slots) {
         seed[slotName] = jsonVal;
       }
+      // Function replacement so "$" sequences in the JSON are inert, and
+      // toScriptJson so patched values can't break out of the script tag.
       result = result.replace(
         seedMatch[0],
-        `<script>window.__kiln_seed=${JSON.stringify(seed)}</script>`
+        () => `<script>window.__kiln_seed=${toScriptJson(seed)}</script>`
       );
     } catch (e) {}
   }
 
   return result;
-}
-
-export function findSLiveSlots(html: string): string[] {
-  const names: string[] = [];
-  let remaining = html;
-  while (true) {
-    const pos = remaining.indexOf('s-live="');
-    if (pos === -1) break;
-    remaining = remaining.slice(pos + 8);
-    const end = remaining.indexOf('"');
-    if (end === -1) break;
-    const name = remaining.slice(0, end);
-    if (name && !names.includes(name)) {
-      names.push(name);
-    }
-    remaining = remaining.slice(end + 1);
-  }
-  return names;
 }
 
 import { renderToReadableStream } from 'react-dom/server';
