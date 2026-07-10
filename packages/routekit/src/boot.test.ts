@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { buildPageHandler, applyLivePropMarkers } from './boot.js';
+import { buildPageHandler, applyLivePropMarkers, warnDomLiveInsideIslands } from './boot.js';
 import type { KilnRequest, KilnResponse } from '@kiln/core';
 import * as os from 'os';
 import * as path from 'path';
@@ -796,5 +796,52 @@ describe('applyLivePropMarkers', () => {
     const html = '<main><p>Count: <span s-live="count">3</span></p></main>';
     const result = applyLivePropMarkers(html, { count: new LiveProp(3) });
     expect(result).toBe(html);
+  });
+
+  it('does not auto-tag store-target LiveProps (ADR-014 I-4)', async () => {
+    const { LiveProp } = await import('@kiln/core');
+    const html = '<main><p>Active: 7</p></main>';
+    const result = applyLivePropMarkers(html, {
+      activeUsers: new LiveProp(7, ['sessions'], { target: 'store' }),
+    });
+    // Store-target fields flow through Silcrow atoms, never DOM slots.
+    expect(result).toBe(html);
+  });
+});
+
+describe('warnDomLiveInsideIslands', () => {
+  function captureWarnings(fn: () => void): string[] {
+    const original = console.warn;
+    const warnings: string[] = [];
+    console.warn = (msg?: any) => { warnings.push(String(msg)); };
+    try { fn(); } finally { console.warn = original; }
+    return warnings;
+  }
+
+  it('warns when a dom-target live slot renders inside an island marker', () => {
+    const html =
+      '<main><div data-kiln-island="Chart" data-kiln-hydrate="load" style="display:contents">' +
+      '<p>Total: <span s-live="total">5</span></p></div></main>';
+    const warnings = captureWarnings(() => warnDomLiveInsideIslands(html, '/warn-island-a'));
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain('island "Chart"');
+    expect(warnings[0]).toContain("target: 'store'");
+  });
+
+  it('is silent when live slots are outside islands', () => {
+    const html =
+      '<main><span s-live="total">5</span>' +
+      '<div data-kiln-island="Chart" style="display:contents"><p>static</p></div></main>';
+    const warnings = captureWarnings(() => warnDomLiveInsideIslands(html, '/warn-island-b'));
+    expect(warnings).toEqual([]);
+  });
+
+  it('warns only once per route+island (warnOnce)', () => {
+    const html =
+      '<div data-kiln-island="Feed" style="display:contents"><i s-live="n">1</i></div>';
+    const first = captureWarnings(() => warnDomLiveInsideIslands(html, '/warn-island-c'));
+    const second = captureWarnings(() => warnDomLiveInsideIslands(html, '/warn-island-c'));
+    expect(first.length).toBe(1);
+    expect(second).toEqual([]);
   });
 });

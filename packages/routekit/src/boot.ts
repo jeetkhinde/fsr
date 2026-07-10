@@ -333,6 +333,9 @@ export function buildPageHandler(
       applyLiveListMarkers(pageBaked.html, rawPageProps, req.path),
       rawPageProps,
     );
+    if (markedPageHtml.includes('data-kiln-island')) {
+      warnDomLiveInsideIslands(markedPageHtml, req.path);
+    }
     const pageFragment = wrapPageSegment(pageMeta.pattern, markedPageHtml);
     let html = pageFragment;
     for (let index = layoutBaked.length - 1; index >= 0; index--) {
@@ -629,7 +632,13 @@ function extractLayoutFragment(html: string, pattern: string): string | null {
   const marker = `data-ps-layout="${escapeAttribute(pattern)}"`;
   const markerIndex = html.indexOf(marker);
   if (markerIndex < 0) return null;
-  const start = html.lastIndexOf('<div', markerIndex);
+  return extractBalancedDiv(html, markerIndex);
+}
+
+/** From an index inside a div's open tag, return that whole balanced
+ * `<div>…</div>` region, or null when the markup never closes it. */
+function extractBalancedDiv(html: string, fromIndex: number): string | null {
+  const start = html.lastIndexOf('<div', fromIndex);
   if (start < 0) return null;
   const tag = /<\/?div\b[^>]*>/gi;
   tag.lastIndex = start;
@@ -639,6 +648,27 @@ function extractLayoutFragment(html: string, pattern: string): string | null {
     if (depth === 0) return html.slice(start, tag.lastIndex);
   }
   return null;
+}
+
+/**
+ * ADR-014 I-4: silcrow never patches DOM inside `[data-kiln-island]`, so a
+ * dom-target LiveProp slot rendered inside an island would bake fine but
+ * silently never update. Warn the developer to use target: 'store' +
+ * useLiveValue() instead. Exported for tests.
+ */
+export function warnDomLiveInsideIslands(html: string, route: string): void {
+  const re = /data-kiln-island="([^"]+)"/g;
+  for (let m = re.exec(html); m; m = re.exec(html)) {
+    const fragment = extractBalancedDiv(html, m.index);
+    if (fragment && fragment.includes('s-live="')) {
+      warnOnce(
+        `island-dom-live:${route}:${m[1]}`,
+        `[kiln] route "${route}": island "${m[1]}" contains a dom-target LiveProp slot (s-live). ` +
+          `Silcrow does not patch DOM inside islands — declare the field with target: 'store' and ` +
+          `read it with useLiveValue() from @kiln/react.`,
+      );
+    }
+  }
 }
 
 function escapeAttribute(value: string): string {
@@ -660,6 +690,10 @@ export function applyLivePropMarkers(html: string, props: Record<string, unknown
   let result = html;
   for (const [name, raw] of Object.entries(props ?? {})) {
     if (!(raw instanceof LiveProp) && (raw as any)?.constructor?.name !== 'LiveProp') continue;
+    // Store-target fields have no DOM slot by design (ADR-014 I-4): their
+    // updates flow through the Silcrow store (useLiveValue), and silcrow
+    // does not patch DOM inside islands.
+    if ((raw as LiveProp<unknown>).deliveryTarget === 'store') continue;
     const value = (raw as LiveProp<unknown>).value;
     if (!['string', 'number', 'boolean'].includes(typeof value)) continue;
     const text = escapeHtml(String(value));

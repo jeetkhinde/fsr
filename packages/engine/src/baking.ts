@@ -3,7 +3,11 @@ import { applyListPatchToHtml } from '@kiln/live';
 import { toScriptJson } from './assembler.js';
 
 export const BAKED_SNAPSHOT_VERSION = 1;
-export const BAKED_RENDER_VERSION = 1;
+// 2: island markers (data-kiln-island) may exist in shells — pre-island
+// cached snapshots must not be materialized against island-aware
+// expectations (ADR-014). normalizeSnapshot rejects the old version,
+// forcing a clean re-bake on first request after deploy.
+export const BAKED_RENDER_VERSION = 2;
 
 export interface BakedSnapshot {
   schemaVersion: number;
