@@ -35,8 +35,9 @@ This file documents the major architecture decisions and developer experience (D
 *   **Decision**: Dynamic fields map to an `s-live="slot_name"` attribute. List items follow the naming structure: `list_name__row_id__field_name` (e.g., `contacts__42__favorite`).
 
 ### ADR-007: HTTP Adapter (Elysia on Bun)
-*   **Status**: LOCKED
-*   **Decision**: `adapter-elysia` exposes the standard server handlers (`handlePage`, `handleFsrHub`, `handleFsrSnapshot`, `handleAction`). It registers internal FSR endpoints under `/__kiln/fsr` and `/__kiln/fsr/snapshot`.
+*   **Status**: LOCKED (wording revised 2026-07-10)
+*   **Decision**: `adapter-elysia` implements the framework-agnostic `ServerAdapter` interface (`registerPage`/`registerAction`/`registerSSE`/`registerAsset`/`applyMiddleware`/`applyServerHooks`/`listen`); route handlers are closures built by `startKiln()`. Internal FSR endpoints live under `/__kiln/fsr` (SSE) and `/__kiln/fsr/snapshot` (JSON page route).
+*   **Revision note**: the original wording named standalone `handlePage`/`handleFsrHub`/`handleFsrSnapshot`/`handleAction` functions — those were placeholder stubs that were never wired and were deleted in the 2026-07-10 audit.
 
 ### ADR-008: Route Discovery (Routekit + Vite)
 *   **Status**: LOCKED
@@ -67,6 +68,22 @@ This file documents the major architecture decisions and developer experience (D
 *   **Status**: DECISION (2026-07-08)
 *   **Decision**: Kiln will not implement Streaming SSR or React Suspense boundaries.
 *   **Rationale**: Streaming SSR solves "my `load()` is slow so the user sees a blank screen." Kiln's FSR architecture eliminates this problem at a higher level: promoted routes serve pre-baked HTML from Redis instantly (nothing to stream); un-promoted routes should keep `load()` fast by returning a shell + `LiveProp` placeholders, which the SSE channel fills after the shell renders. This pattern is strictly superior to streaming — it handles initial load AND ongoing updates. Adding streaming SSR would solve a problem the architecture already eliminates.
+
+### ADR-014: React Islands over Baked HTML (Store-Bridge Hydration)
+*   **Status**: ACCEPTED 2026-07-10 · **Implementation spec**: `docs/design/adr-014-react-islands.md` (prescriptive, phase-by-phase — read it before writing any code)
+*   **Decision**: Client-side React is supported through **islands only**. Baked HTML remains the canonical UI; interactive components are authored in an `islands/` directory (sibling of `pages/`), wrapped with `island(Component, name, { hydrate })` from `@kiln/react`, SSR'd into the baked shell inside a `data-kiln-island` marker, and hydrated individually by a react-free bootstrap (`/_silcrow/islands.js`). Full-page hydration is prohibited.
+*   **Invariants** (normative; each has a test — see spec §3):
+    1. With JS disabled every page still renders fully from baked HTML (islands degrade to their SSR output).
+    2. `hydrateRoot` is only ever called on island markers — never on `document`/`body`/layouts.
+    3. silcrow's DOM patchers never touch anything inside `[data-kiln-island]`.
+    4. Live data inside an island uses `target: 'store'` + `useLiveValue()`; a dom-target `LiveProp` inside an island is a bake-time warning, not an auto-tag.
+    5. Hydration props come from the marker (`data-kiln-props`, bake-time values via the seed codec); freshness afterwards comes only from Silcrow store subscriptions. Islands never self-fetch initial data.
+    6. Markers embed island *names*, never chunk URLs; the bootstrap resolves names through a `no-store` manifest (`/_kiln/islands.json`) — this is the deploy-skew defense. A failed chunk gets one guarded reload, then fails static.
+    7. Any hydration failure leaves baked HTML intact and emits `kiln:island-error`.
+    8. Everything embedded in HTML goes through `encodeSeed`/`decodeSeed` (`@kiln/core/seed-codec`), never bare `JSON.stringify`.
+*   **Rationale**: FSR's value is that promoted routes serve pre-baked HTML and never re-run component code; silcrow patches that HTML surgically. Full hydration hands the DOM to React, which would overwrite silcrow's patches and re-run the whole tree client-side — rebuilding Next.js on top of FSR while destroying its cost model. Islands capture the actual motivation (React-dependent ecosystem: component libraries, forms, animation, charts work inside islands) while the store remains the single seam between the two renderers — a seam Kiln already built (`LiveProp` `target: 'store'`, Silcrow atoms, `@kiln/react` hooks).
+*   **Division of labor**: Kiln owns rendering, caching, transport, data, navigation, and the store. React owns interactivity inside declared islands, always reading through the store. App-scoped React libraries (TanStack Query, Redux) integrate by hydrating from the seed and subscribing to `live:*` store publishes — never by owning fetching.
+*   **Consequences**: `BAKED_RENDER_VERSION` bumps to 2 when markers ship (forces clean re-bake of all cached routes); `applyLivePropMarkers` stops tagging store-target fields; a new `islands/` app directory convention; nested islands, client routers, and Server Components are explicitly out of scope (see spec non-goals).
 
 ---
 

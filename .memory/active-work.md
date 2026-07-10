@@ -70,3 +70,12 @@ Bugs fixed (see `.memory/bugs.md` §"Fixed in the 2026-07-10 audit" for detail):
    - ~~Cache partitioning~~ done — `cacheKey(req)` export; per-variant disk+Redis storage
    - External watcher process (`fsr.watcher: 'external'` typed, implementation partial)
    - Fine-grained debounce scheduling per-field
+
+3. **React Islands (ADR-014)** — accepted 2026-07-10, not started.
+   Implementation spec with exact files/signatures/tests per phase:
+   `docs/design/adr-014-react-islands.md`. Execute phases in order:
+   - Phase 0: seed codec (`@kiln/core/seed-codec`)
+   - Phase 1: `island()` wrapper + bake-time guards + `BAKED_RENDER_VERSION` 2
+   - Phase 2: build pipeline (virtual hydration wrappers, manifest) + serving
+   - Phase 3: client bootstrap (`islands.js`) + silcrow patch exclusion
+   - Phase 4: `useLiveValue` store bridge + test-app demo + docs
