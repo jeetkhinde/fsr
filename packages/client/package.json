@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     "./silcrow.js": "./dist/silcrow.js",
-    "./silcrow.min.js": "./dist/silcrow.min.js"
+    "./silcrow.min.js": "./dist/silcrow.min.js",
+    "./islands.js": "./dist/islands.js"
   },
   "files": ["dist"],
   "scripts": {

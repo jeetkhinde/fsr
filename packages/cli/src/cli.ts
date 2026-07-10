@@ -10,7 +10,7 @@ import { SQL } from 'bun';
 import { Glob } from 'bun';
 import { createServer, build as viteBuild } from 'vite';
 import react from '@vitejs/plugin-react';
-import { kilnVitePlugin } from '@kiln/routekit';
+import { kilnVitePlugin, kilnIslandsPlugin } from '@kiln/routekit';
 import * as path from 'path';
 
 interface FsrRuntime {
@@ -116,6 +116,7 @@ const devCommand = defineCommand({
             consola.info('Routes changed, reloading manifest...');
           },
         }),
+        kilnIslandsPlugin({ appRoot: process.cwd() }),
       ],
       server: {
         port: 5173,
@@ -147,7 +148,11 @@ const devCommand = defineCommand({
       }
     });
 
-    await startKiln(adapter, config, pagesDir, runtime.fsr);
+    await startKiln(adapter, config, pagesDir, {
+      ...(runtime.fsr ?? {}),
+      // Dev: island names resolve through the Vite dev server's manifest.
+      islandsManifestUrl: 'http://localhost:5173/kiln-islands.json',
+    });
 
     await adapter.listen(port, (addr) => {
       consola.success(`Kiln.js dev server listening at ${addr}`);
@@ -231,7 +236,7 @@ const buildCommand = defineCommand({
       await viteBuild({
         base: '/_kiln/client/',
         root: process.cwd(),
-        plugins: [react()],
+        plugins: [react(), kilnIslandsPlugin({ appRoot: process.cwd() })],
         build: {
           outDir: 'dist/client',
           emptyOutDir: true,

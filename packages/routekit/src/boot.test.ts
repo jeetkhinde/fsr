@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { buildPageHandler, applyLivePropMarkers, warnDomLiveInsideIslands } from './boot.js';
+import { buildPageHandler, applyLivePropMarkers, warnDomLiveInsideIslands, startKiln } from './boot.js';
 import type { KilnRequest, KilnResponse } from '@kiln/core';
 import * as os from 'os';
 import * as path from 'path';
@@ -843,5 +843,74 @@ describe('warnDomLiveInsideIslands', () => {
     const second = captureWarnings(() => warnDomLiveInsideIslands(html, '/warn-island-c'));
     expect(first.length).toBe(1);
     expect(second).toEqual([]);
+  });
+});
+
+describe('islands bootstrap injection', () => {
+  async function renderPage(component: any): Promise<string> {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-island-inject-'));
+    const handler = buildPageHandler(
+      { default: component },
+      {
+        pattern: '/inject',
+        layouts: [],
+        liveFields: [],
+        hasEntries: false,
+        filePath: '',
+        relativePath: ''
+      },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null }
+    );
+    const res = makeRes();
+    await handler(makeReq({ path: '/inject' }) as any, res);
+    await fs.rm(tmpDir, { recursive: true, force: true });
+    return String(res.captured?.body ?? '');
+  }
+
+  it('injects the islands bootstrap exactly once when markers are present', async () => {
+    const { createElement } = await import('react');
+    const html = await renderPage(() =>
+      createElement(
+        'div',
+        { 'data-kiln-island': 'Counter', 'data-kiln-hydrate': 'load', 'data-kiln-props': '{}' },
+        createElement('p', null, 'hi'),
+      ),
+    );
+    const matches = html.match(/src="\/_silcrow\/islands\.js"/g) ?? [];
+    expect(matches.length).toBe(1);
+    expect(html).toContain('type="module"');
+  });
+
+  it('does not inject the bootstrap on pages without island markers', async () => {
+    const { createElement } = await import('react');
+    const html = await renderPage(() => createElement('p', null, 'plain'));
+    expect(html).not.toContain('/_silcrow/islands.js');
+  });
+});
+
+describe('startKiln islands manifest route', () => {
+  it('registers /_kiln/islands.json and serves an empty no-store manifest without a build', async () => {
+    const pagesDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-pages-'));
+    const routes = new Map<string, (req: any, res: any) => Promise<void>>();
+    const adapter: any = {
+      registerPage: (p: string, _l: string[], h: any) => { routes.set(p, h); },
+      registerAction: () => {},
+      registerSSE: () => {},
+      registerAsset: () => {},
+      applyMiddleware: () => {},
+      applyServerHooks: async () => {},
+      listen: async () => {},
+    };
+    await startKiln(adapter, { cache: { provider: 'filesystem' } } as any, pagesDir);
+
+    const handler = routes.get('/_kiln/islands.json');
+    expect(handler).toBeDefined();
+    const res = makeRes();
+    await handler!(makeReq({ path: '/_kiln/islands.json' }) as any, res);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.captured?.type).toBe('json');
+    expect(res.captured?.body).toEqual({ version: 'none', islands: {} });
+    await fs.rm(pagesDir, { recursive: true, force: true });
   });
 });

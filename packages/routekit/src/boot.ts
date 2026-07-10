@@ -32,6 +32,7 @@ import {
   hoistHeadTags,
   injectJsonSeed,
   injectKilnScript,
+  injectModuleScript,
   materializeBakedShell,
 } from '@kiln/engine';
 
@@ -51,6 +52,9 @@ export interface StartKilnOptions {
   store?: FsrStore;
   watcher?: FsrWatcher;
   redis?: { getClient(): any };
+  /** Dev only: upstream URL for the islands manifest (the Vite dev server's
+   * /kiln-islands.json). Production reads dist/client/kiln-islands.json. */
+  islandsManifestUrl?: string;
 }
 
 /** Files a page falls back to when its handler throws (nearest _error.tsx /
@@ -363,6 +367,13 @@ export function buildPageHandler(
     const clientSrc = '/_silcrow/silcrow.js';
     if (!html.includes(`src="${clientSrc}"`)) {
       html = injectKilnScript(html, clientSrc);
+    }
+
+    // 9b. Pages containing island markers also get the islands bootstrap.
+    // This lands in the cached promoted shell too — cache-hit requests need
+    // it just as much as fresh bakes.
+    if (html.includes('data-kiln-island')) {
+      html = injectModuleScript(html, '/_silcrow/islands.js');
     }
 
     // 10. Wrap with doctype if it looks like a full page
@@ -908,6 +919,41 @@ export async function startKiln(
   } catch {
     // @kiln/client not installed
   }
+
+  // 6b. Islands bootstrap + manifest (ADR-014). The manifest is served
+  // no-store and maps island NAMES to current chunk URLs — cached HTML never
+  // embeds URLs, so week-old promoted shells hydrate against today's build.
+  try {
+    const islandsPath = fileURLToPath(import.meta.resolve('@kiln/client/islands.js'));
+    adapter.registerAsset('/_silcrow/islands.js', islandsPath);
+  } catch {
+    // @kiln/client not installed
+  }
+  adapter.registerPage('/_kiln/islands.json', [], async (_req, res) => {
+    res.headers['cache-control'] = 'no-store';
+    // Dev: the CLI points this at the Vite dev server's manifest.
+    if (options.islandsManifestUrl) {
+      try {
+        const upstream = await fetch(options.islandsManifestUrl);
+        if (upstream.ok) {
+          res.json(await upstream.json());
+          return;
+        }
+      } catch {
+        // fall through to dist/empty
+      }
+    }
+    const manifestFile = Bun.file(path.resolve('dist/client/kiln-islands.json'));
+    if (await manifestFile.exists()) {
+      try {
+        res.json(JSON.parse(await manifestFile.text()));
+        return;
+      } catch {
+        // corrupt manifest — treat as absent
+      }
+    }
+    res.json({ version: 'none', islands: {} });
+  });
 
   // 7. Serve FSR live client script when FSR is active
   if (fsrEnabled) {

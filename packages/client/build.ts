@@ -2,10 +2,12 @@ import { join } from 'path';
 
 const dir = import.meta.dir;
 const src = join(dir, 'src/silcrow.js');
+const islandsSrc = join(dir, 'src/islands.js');
 const distDir = join(dir, 'dist');
 
-// Copy source as-is (dev/debug build)
+// Copy sources as-is (dev/debug builds)
 await Bun.write(join(distDir, 'silcrow.js'), Bun.file(src));
+await Bun.write(join(distDir, 'islands.js'), Bun.file(islandsSrc));
 
 // Minified build
 const result = await Bun.build({
