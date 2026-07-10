@@ -13,6 +13,7 @@ import type {
   ServerAdapter,
 } from '@kiln/core';
 import {
+  assertSeedSafe,
   cloneLiveListRows,
   getLiveListMeta,
   isLiveList,
@@ -347,7 +348,12 @@ export function buildPageHandler(
     // 7b. Hoist React 19 metadata (<title>/<meta>/<link>) from body into <head>
     html = hoistHeadTags(html);
 
-    // 8. Inject JSON seed before </body>
+    // 8. Inject JSON seed before </body>. In dev, warn about values the JSON
+    // codec silently corrupts (Date/Map/undefined/...) — islands and clients
+    // would otherwise hydrate with different data than the server rendered.
+    if (process.env.NODE_ENV !== 'production') {
+      assertSeedSafe(snapshotProps, req.path);
+    }
     html = injectJsonSeed(html, snapshotProps);
 
     // 9. Optionally inject Kiln client script

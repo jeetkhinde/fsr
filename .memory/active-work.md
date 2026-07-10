@@ -71,10 +71,10 @@ Bugs fixed (see `.memory/bugs.md` §"Fixed in the 2026-07-10 audit" for detail):
    - External watcher process (`fsr.watcher: 'external'` typed, implementation partial)
    - Fine-grained debounce scheduling per-field
 
-3. **React Islands (ADR-014)** — accepted 2026-07-10, not started.
+3. **React Islands (ADR-014)** — accepted 2026-07-10, in progress.
    Implementation spec with exact files/signatures/tests per phase:
    `docs/design/adr-014-react-islands.md`. Execute phases in order:
-   - Phase 0: seed codec (`@kiln/core/seed-codec`)
+   - ~~Phase 0: seed codec~~ done 2026-07-10 — `@kiln/core/seed-codec` (`encodeSeed`/`decodeSeed`/`assertSeedSafe`); engine `toScriptJson` re-exports `encodeSeed`; boot warns on unsafe seed values in dev
    - Phase 1: `island()` wrapper + bake-time guards + `BAKED_RENDER_VERSION` 2
    - Phase 2: build pipeline (virtual hydration wrappers, manifest) + serving
    - Phase 3: client bootstrap (`islands.js`) + silcrow patch exclusion
