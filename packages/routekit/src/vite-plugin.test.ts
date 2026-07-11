@@ -68,4 +68,22 @@ describe('kilnIslandsPlugin', () => {
     ).toThrow('not found');
     await fs.rm(appRoot, { recursive: true, force: true });
   });
+
+  it('adds island entries and preserves entry exports in build config', async () => {
+    const appRoot = await makeApp();
+    const plugin = pluginFor(appRoot);
+    const config: any = {};
+    plugin.config(config, { command: 'build' });
+
+    expect(config.build.rollupOptions.input).toEqual([
+      ISLAND_VIRTUAL_PREFIX + 'Chart',
+      ISLAND_VIRTUAL_PREFIX + 'Counter',
+    ]);
+    // Vite app builds default preserveEntrySignatures to false, which would
+    // strip the wrapper's hydrate() export — the chunk would load but the
+    // bootstrap would find no hydrate() (prod-only failure; dev serves real
+    // modules and was unaffected).
+    expect(config.build.rollupOptions.preserveEntrySignatures).toBe('exports-only');
+    await fs.rm(appRoot, { recursive: true, force: true });
+  });
 });

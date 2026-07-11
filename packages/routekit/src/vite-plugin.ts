@@ -99,6 +99,12 @@ export function kilnIslandsPlugin(options: KilnIslandsPluginOptions = {}): Plugi
       if (ids.length === 0) return;
       config.build ??= {};
       config.build.rollupOptions ??= {};
+      // Vite app builds default preserveEntrySignatures to false, which
+      // STRIPS entry exports — the island wrapper's hydrate() would be
+      // dropped, leaving a hollow react-only chunk the bootstrap can't use
+      // ("island chunk has no hydrate() export" in production, dev unaffected
+      // since it serves real modules). exports-only keeps entry exports.
+      config.build.rollupOptions.preserveEntrySignatures = 'exports-only';
       const existing = config.build.rollupOptions.input;
       if (existing === undefined) {
         config.build.rollupOptions.input = ids;
