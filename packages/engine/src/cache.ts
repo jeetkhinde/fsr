@@ -1,6 +1,7 @@
 import type { RedisClient } from 'bun';
 import * as path from 'path';
 import * as fs from 'fs/promises';
+import { BAKED_RENDER_VERSION } from './baking.js';
 
 export interface KilnCacheOptions {
   redis: RedisClient | null;
@@ -41,17 +42,29 @@ export class KilnCache {
   // entry, regardless of how many routes sit under it.
   // ---------------------------------------------------------------------
 
+  // Layout entries embed markup conventions (marker attributes, outlet
+  // wrapping) that page snapshots version via BAKED_RENDER_VERSION — but a
+  // page's layoutSignature compares the layout cache against ITSELF, so it
+  // can never detect that the cached layout was baked by an older Kiln.
+  // Versioning the keys/paths makes every render-version bump miss cleanly
+  // and re-bake layouts too. Older-version entries are simply orphaned
+  // (small; disk under layouts/v<N>, Redis keys age out via server TTL
+  // policy or manual cleanup).
   diskLayoutHtmlPath(pattern: string): string {
     const safe = pattern === '/' ? 'index' : pattern.replace(/^\//, '').replace(/\//g, path.sep);
-    return path.join(this.cacheDir, 'layouts', safe, 'shell.html');
+    return path.join(this.cacheDir, 'layouts', `v${BAKED_RENDER_VERSION}`, safe, 'shell.html');
   }
 
   diskLayoutJsonPath(pattern: string): string {
     return this.diskLayoutHtmlPath(pattern).replace(/\.html$/, '.json');
   }
 
-  private redisLayoutHtmlKey(pattern: string): string { return `kiln:layout:html:${pattern}`; }
-  private redisLayoutJsonKey(pattern: string): string { return `kiln:layout:json:${pattern}`; }
+  private redisLayoutHtmlKey(pattern: string): string {
+    return `kiln:layout:html:v${BAKED_RENDER_VERSION}:${pattern}`;
+  }
+  private redisLayoutJsonKey(pattern: string): string {
+    return `kiln:layout:json:v${BAKED_RENDER_VERSION}:${pattern}`;
+  }
 
   async getLayoutHtml(pattern: string): Promise<string | null> {
     if (this.redis) {
