@@ -1950,10 +1950,10 @@ function processSideEffectHeaders(sideEffects, primaryTarget) {
 
 // ── Layout-Aware Navigation Helpers ───────────────────────
 function collectLayoutPatterns() {
-  const els = document.querySelectorAll("[data-ps-layout]");
+  const els = document.querySelectorAll("[data-kiln-layout]");
   const patterns = [];
   els.forEach(function(el) {
-    const v = el.getAttribute("data-ps-layout");
+    const v = el.getAttribute("data-kiln-layout");
     if (v) patterns.push(v);
   });
   return patterns.length > 0 ? patterns.join(",") : "";

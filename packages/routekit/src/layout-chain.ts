@@ -8,7 +8,7 @@ export interface LayoutComponentConfig {
 
 /**
  * Composes a page component and its parent layouts into a single React tree.
- * Wraps layouts in <div data-ps-layout="..."> containers and children in <div data-ps-slot="...">
+ * Wraps layouts in <div data-kiln-layout="..."> containers and children in <div data-ps-slot="...">
  * using display: contents to avoid affecting layout styling.
  *
  * Each layout entry carries its own `props` (from its load() result), while
@@ -28,7 +28,7 @@ export function composeLayoutChain(
   // 2. Wrap page in its own ps-layout wrapper
   currentElement = react.createElement(
     'div',
-    { 'data-ps-layout': pagePattern, style: { display: 'contents' } },
+    { 'data-kiln-layout': pagePattern, style: { display: 'contents' } },
     currentElement
   );
 
@@ -57,7 +57,7 @@ export function composeLayoutChain(
     if (i > 0) {
       currentElement = react.createElement(
         'div',
-        { 'data-ps-layout': layoutPattern, style: { display: 'contents' } },
+        { 'data-kiln-layout': layoutPattern, style: { display: 'contents' } },
         layoutElement
       );
     } else {

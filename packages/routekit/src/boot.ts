@@ -604,7 +604,7 @@ function wrapPageSegment(
   html: string,
   live?: { route: string; storeFields: string[] } | null,
 ): string {
-  let attrs = `data-ps-layout="${escapeAttribute(pattern)}"`;
+  let attrs = `data-kiln-layout="${escapeAttribute(pattern)}"`;
   if (live) {
     attrs += ` data-kiln-live="${escapeAttribute(live.route)}"`;
     if (live.storeFields.length > 0) {
@@ -620,10 +620,10 @@ function materializeLayoutSegment(pattern: string, shell: string, child: string)
   if (/^\s*(?:<!DOCTYPE html>)?<html\b/i.test(rendered)) {
     return rendered.replace(
       /<body\b/i,
-      `<body data-ps-layout="${escapeAttribute(pattern)}"`,
+      `<body data-kiln-layout="${escapeAttribute(pattern)}"`,
     );
   }
-  return `<div data-ps-layout="${escapeAttribute(pattern)}" style="display:contents">${rendered}</div>`;
+  return `<div data-kiln-layout="${escapeAttribute(pattern)}" style="display:contents">${rendered}</div>`;
 }
 
 function respondWithNavigationShape(
@@ -669,7 +669,7 @@ function respondWithNavigationShape(
 }
 
 function extractLayoutFragment(html: string, pattern: string): string | null {
-  const marker = `data-ps-layout="${escapeAttribute(pattern)}"`;
+  const marker = `data-kiln-layout="${escapeAttribute(pattern)}"`;
   const markerIndex = html.indexOf(marker);
   if (markerIndex < 0) return null;
   return extractBalancedDiv(html, markerIndex);

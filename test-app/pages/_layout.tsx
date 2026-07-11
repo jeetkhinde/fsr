@@ -10,7 +10,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script src="/_silcrow/silcrow.js" defer></script>
       </head>
       <body>
-        <div id="app" data-ps-layout="/">
+        <div id="app" data-kiln-layout="/">
           <header style={{ padding: '1rem', background: '#111', color: '#fff' }}>
             Kiln Demo — DEPLOY V3, LAYOUT-CACHE-INVALIDATED. This should only appear in the response on a
             full page load, never on a nested/"enhanced" navigation.

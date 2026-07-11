@@ -15,7 +15,7 @@ export default function DashboardLayout({
 }: Awaited<ReturnType<typeof load>> & { children: React.ReactNode }) {
   return (
     <div
-      data-ps-layout="/dashboard"
+      data-kiln-layout="/dashboard"
       style={{ display: 'flex', minHeight: '40vh', borderTop: '3px solid #0070f3' }}
     >
       <nav style={{ width: 200, padding: '1rem', background: '#f5f7fa', borderRight: '1px solid #ddd' }}>

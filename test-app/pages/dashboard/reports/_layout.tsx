@@ -13,7 +13,7 @@ export default function ReportsLayout({
   children,
 }: Awaited<ReturnType<typeof load>> & { children: React.ReactNode }) {
   return (
-    <div data-ps-layout="/dashboard/reports" style={{ border: '2px dashed #7c3aed', padding: '0.75rem' }}>
+    <div data-kiln-layout="/dashboard/reports" style={{ border: '2px dashed #7c3aed', padding: '0.75rem' }}>
       <div
         style={{
           display: 'flex',
