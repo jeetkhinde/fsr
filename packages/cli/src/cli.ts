@@ -182,6 +182,26 @@ const startCommand = defineCommand({
     const adapter = new ElysiaAdapter({
       bodyLimitBytes: config.web?.requestBodyLimitBytes,
     });
+
+    // Serve the built client assets (island chunks, bundles) that Vite
+    // proxies in dev. Hashed filenames are immutable; the islands manifest
+    // itself is served no-store by startKiln, so skew resolves there.
+    const clientDir = path.resolve(process.cwd(), 'dist/client');
+    adapter.app.get('/_kiln/client/*', async (ctx) => {
+      const rel = decodeURIComponent(new URL(ctx.request.url).pathname.slice('/_kiln/client/'.length));
+      const filePath = path.resolve(clientDir, rel);
+      if (filePath !== clientDir && !filePath.startsWith(clientDir + path.sep)) {
+        return new Response('Not found', { status: 404 });
+      }
+      const f = Bun.file(filePath);
+      if (!(await f.exists())) {
+        return new Response('Not found', { status: 404 });
+      }
+      return new Response(f, {
+        headers: { 'cache-control': 'public, max-age=31536000, immutable' },
+      });
+    });
+
     await startKiln(adapter, config, pagesDir, runtime.fsr);
 
     await adapter.listen(port, (addr) => {

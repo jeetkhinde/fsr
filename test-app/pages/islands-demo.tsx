@@ -9,12 +9,13 @@ export async function load(_req: KilnRequest) {
   return {
     bakedAt: new Date().toISOString(),
     // Store-target live field: no s-live DOM slot is generated; updates
-    // reach the Counter island through useLiveValue('activeUsers').
-    activeUsers: Live.value<number>(0, ['kiln_fsr'], { target: 'store' }),
+    // reach the Counter island through useLiveValue('activeUsers'). The
+    // time-varying initial value makes watcher refreshes observable.
+    activeUsers: Live.value<number>(Date.now() % 100, ['kiln_fsr'], { target: 'store' }),
   };
 }
 
-export default function IslandsDemo({ bakedAt }: Awaited<ReturnType<typeof load>>) {
+export default function IslandsDemo({ bakedAt, activeUsers }: Awaited<ReturnType<typeof load>>) {
   return (
     <main style={{ fontFamily: 'sans-serif', padding: 24 }}>
       <h1>React islands demo (ADR-014)</h1>
@@ -22,7 +23,11 @@ export default function IslandsDemo({ bakedAt }: Awaited<ReturnType<typeof load>
         Page baked at <code>{bakedAt}</code>. With JavaScript disabled this
         island still renders below — just without interactivity.
       </p>
-      <CounterIsland start={3} label="I am a hydrated React island" />
+      <CounterIsland
+        start={3}
+        label="I am a hydrated React island"
+        initialActiveUsers={activeUsers as unknown as number}
+      />
       <p>Everything outside the island stays silcrow-owned baked HTML.</p>
     </main>
   );
