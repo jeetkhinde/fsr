@@ -31,6 +31,13 @@ function _getSlots(){
       if(s&&r.indexOf(s)===-1)r.push(s);
     });
   });
+  // Store-target fields (ADR-014): no DOM slot — names ride on the baked
+  // page wrapper so the SSE subscription still covers them.
+  document.querySelectorAll('[data-kiln-live-store]').forEach(function(el){
+    String(el.getAttribute('data-kiln-live-store')||'').split(',').forEach(function(s){
+      if(s&&r.indexOf(s)===-1)r.push(s);
+    });
+  });
   return r;
 }
 

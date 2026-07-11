@@ -2922,6 +2922,20 @@ function openLiveConnection(el) {
     var k = n.getAttribute('data-kiln-live-field');
     if (k && !slots.includes(k)) slots.push(k);
   });
+  // Auto-tagged LiveProp slots baked by the server use s-live.
+  el.querySelectorAll('[s-live]').forEach(function(n) {
+    var k = n.getAttribute('s-live');
+    if (k && !slots.includes(k)) slots.push(k);
+  });
+  // Store-target fields (ADR-014): no DOM slot exists — the baked wrapper
+  // carries their names so the subscription still covers them. Patches for
+  // these flow to the Silcrow store (useLiveValue), not the DOM.
+  var storeNames = el.getAttribute('data-kiln-live-store');
+  if (storeNames) {
+    storeNames.split(',').forEach(function(k) {
+      if (k && !slots.includes(k)) slots.push(k);
+    });
+  }
   el.querySelectorAll('[data-kiln-list]').forEach(function(n) {
     var k = n.getAttribute('data-kiln-list');
     if (k) {

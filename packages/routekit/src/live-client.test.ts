@@ -108,6 +108,14 @@ run('list patcher skips containers inside islands', () => {
   assert.ok(patchList.includes('_inIsland(list)'));
 });
 
+run('subscribes to store-target field names from the baked wrapper (ADR-014)', () => {
+  const getSlots = KILN_LIVE_CLIENT_SCRIPT.slice(
+    KILN_LIVE_CLIENT_SCRIPT.indexOf('function _getSlots'),
+    KILN_LIVE_CLIENT_SCRIPT.indexOf('function _setText'),
+  );
+  assert.ok(getSlots.includes("querySelectorAll('[data-kiln-live-store]')"));
+});
+
 run('scalar patches are also published to the live: store scope (ADR-014 bridge)', () => {
   // The same patch that is DOM-ignored inside an island must still reach the
   // island through the store: _patch publishes { value } to 'live:<field>'.

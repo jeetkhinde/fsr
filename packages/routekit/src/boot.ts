@@ -340,7 +340,25 @@ export function buildPageHandler(
     if (markedPageHtml.includes('data-kiln-island')) {
       warnDomLiveInsideIslands(markedPageHtml, req.path);
     }
-    const pageFragment = wrapPageSegment(pageMeta.pattern, markedPageHtml);
+    // Pages with live fields must tell the client to open the /__kiln/fsr
+    // SSE subscription — silcrow only connects for [data-kiln-live]
+    // containers. Store-target fields have no DOM slot to discover, so
+    // their names ride along in data-kiln-live-store (the store bridge that
+    // feeds useLiveValue inside islands). Baked into the shell, so cached
+    // promoted pages subscribe too.
+    const pageLiveFields = extractLiveFields(rawPageProps);
+    const pageFragment = wrapPageSegment(
+      pageMeta.pattern,
+      markedPageHtml,
+      pageLiveFields.length > 0 || hasLiveLists(rawPageProps)
+        ? {
+            route: req.path,
+            storeFields: pageLiveFields
+              .filter((f) => f.deliveryTarget === 'store' || f.deliveryTarget === 'dom-and-store')
+              .map((f) => f.name),
+          }
+        : null,
+    );
     let html = pageFragment;
     for (let index = layoutBaked.length - 1; index >= 0; index--) {
       const layoutRoute = layoutPatterns[index] ?? '/';
@@ -454,8 +472,8 @@ export function buildPageHandler(
       }
     }
 
-    // 12. Extract live fields and persist on pageMeta
-    const liveFields = extractLiveFields(rawPageProps);
+    // 12. Persist live fields on pageMeta (extracted once at step 7)
+    const liveFields = pageLiveFields;
     if (store && liveFields.length > 0 && !tombstoned && !variant) {
       for (const field of liveFields) {
         await store.upsertSlot(
@@ -581,8 +599,19 @@ async function respondWithErrorPage(
   );
 }
 
-function wrapPageSegment(pattern: string, html: string): string {
-  return `<div data-ps-layout="${escapeAttribute(pattern)}" style="display:contents">${html}</div>`;
+function wrapPageSegment(
+  pattern: string,
+  html: string,
+  live?: { route: string; storeFields: string[] } | null,
+): string {
+  let attrs = `data-ps-layout="${escapeAttribute(pattern)}"`;
+  if (live) {
+    attrs += ` data-kiln-live="${escapeAttribute(live.route)}"`;
+    if (live.storeFields.length > 0) {
+      attrs += ` data-kiln-live-store="${escapeAttribute(live.storeFields.join(','))}"`;
+    }
+  }
+  return `<div ${attrs} style="display:contents">${html}</div>`;
 }
 
 function materializeLayoutSegment(pattern: string, shell: string, child: string): string {

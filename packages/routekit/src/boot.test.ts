@@ -698,6 +698,57 @@ describe('buildPageHandler', () => {
     await fs.rm(tmpDir, { recursive: true });
   });
 
+  it('marks pages with live fields for SSE subscription (data-kiln-live wrapper)', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-live-wrap-'));
+    const { createElement } = await import('react');
+    const { Live } = await import('@kiln/core');
+    const pageModule = {
+      load: async () => ({
+        title: 'Stats',
+        activeUsers: Live.value<number>(0, ['sessions'], { target: 'store' }),
+      }),
+      default: ({ title }: any) => createElement('h1', null, title),
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/stats', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null }
+    );
+
+    const res = makeRes();
+    await handler(makeReq({ path: '/stats' }) as any, res);
+    const html = String(res.captured?.body);
+    // silcrow only opens the /__kiln/fsr subscription for [data-kiln-live]
+    // containers; store-target fields have no DOM slot, so their names must
+    // ride along explicitly.
+    expect(html).toContain('data-kiln-live="/stats"');
+    expect(html).toContain('data-kiln-live-store="activeUsers"');
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it('does not mark pages without live fields for SSE subscription', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-live-wrap2-'));
+    const { createElement } = await import('react');
+    const pageModule = {
+      load: async () => ({ title: 'Plain' }),
+      default: ({ title }: any) => createElement('h1', null, title),
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/plain', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null }
+    );
+
+    const res = makeRes();
+    await handler(makeReq({ path: '/plain' }) as any, res);
+    const html = String(res.captured?.body);
+    expect(html).not.toContain('data-kiln-live=');
+    expect(html).not.toContain('data-kiln-live-store=');
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
   it('serves different cached HTML per cacheKey variant with no cross-contamination', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-variant-'));
     const { createElement } = await import('react');
