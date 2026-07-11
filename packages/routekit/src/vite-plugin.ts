@@ -172,7 +172,18 @@ export function kilnIslandsPlugin(options: KilnIslandsPluginOptions = {}): Plugi
         );
         res.setHeader('content-type', 'application/json');
         res.setHeader('cache-control', 'no-store');
-        res.end(JSON.stringify({ version: 'dev', islands }));
+        // `preamble` (dev only): @vitejs/plugin-react's transform asserts
+        // the react-refresh preamble is installed before any transformed
+        // component module runs. Baked pages aren't served by Vite, so the
+        // islands bootstrap installs it from this URL before the first
+        // island import. Production manifests carry no preamble field.
+        res.end(
+          JSON.stringify({
+            version: 'dev',
+            preamble: `${publicBase}@react-refresh`,
+            islands,
+          }),
+        );
       });
     },
   };

@@ -104,6 +104,45 @@ describe('islands bootstrap', () => {
     expect(state.hydrateCalls.length).toBe(1);
   });
 
+  it('installs the dev react-refresh preamble once, before the first island import', async () => {
+    const injections: any[] = [];
+    (globalThis as any).window.__KILN_ISLANDS_TEST_HOOKS.importModule = async (url: string) => {
+      state.imported.push(url);
+      if (url === '/_kiln/client/@react-refresh') {
+        return { default: { injectIntoGlobalHook: (w: any) => injections.push(w) } };
+      }
+      return { hydrate: (el2: any, props: any) => state.hydrateCalls.push({ el: el2, props }) };
+    };
+    state.manifest = {
+      version: 'dev',
+      preamble: '/_kiln/client/@react-refresh',
+      islands: { Counter: '/dev/Counter.js' },
+    };
+
+    await islands.hydrateIsland(fakeMarker({ 'data-kiln-island': 'Counter', 'data-kiln-props': '{}' }));
+    await islands.hydrateIsland(fakeMarker({ 'data-kiln-island': 'Counter', 'data-kiln-props': '{}' }));
+
+    // Preamble imported exactly once, ordered before the first island chunk,
+    // and the vite-plugin-react guard flags are set.
+    expect(state.imported).toEqual([
+      '/_kiln/client/@react-refresh',
+      '/dev/Counter.js',
+      '/dev/Counter.js',
+    ]);
+    expect(injections.length).toBe(1);
+    expect((globalThis as any).window.__vite_plugin_react_preamble_installed__).toBe(true);
+    expect(typeof (globalThis as any).window.$RefreshReg$).toBe('function');
+    expect(state.hydrateCalls.length).toBe(2);
+
+    // restore shared hook + window flags for later tests
+    delete (globalThis as any).window.__vite_plugin_react_preamble_installed__;
+    (globalThis as any).window.__KILN_ISLANDS_TEST_HOOKS.importModule = async (url: string) => {
+      state.imported.push(url);
+      if (state.moduleError) throw state.moduleError;
+      return { hydrate: (el2: any, props: any) => state.hydrateCalls.push({ el: el2, props }) };
+    };
+  });
+
   it('reloads once for a missing island (deploy skew), then fails static with an event', async () => {
     state.manifest = { version: 'v2', islands: {} };
 

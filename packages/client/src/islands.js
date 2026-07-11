@@ -103,6 +103,34 @@ export function decodeProps(el) {
   }
 }
 
+/**
+ * Dev only: @vitejs/plugin-react's transform asserts the react-refresh
+ * preamble is installed before any transformed component module executes.
+ * Baked pages aren't served by Vite, so when the (dev) manifest advertises a
+ * preamble URL we install it once before the first island import.
+ * Production manifests carry no preamble field — this is a no-op there.
+ */
+let preamblePromise = null;
+function ensurePreamble(manifest) {
+  if (!manifest || !manifest.preamble) return Promise.resolve();
+  if (typeof window !== 'undefined' && window.__vite_plugin_react_preamble_installed__) {
+    return Promise.resolve();
+  }
+  if (!preamblePromise) {
+    preamblePromise = Promise.resolve(importModule(manifest.preamble)).then((mod) => {
+      const runtime = mod && mod.default ? mod.default : mod;
+      runtime.injectIntoGlobalHook(window);
+      window.$RefreshReg$ = () => {};
+      window.$RefreshSig$ = () => (type) => type;
+      window.__vite_plugin_react_preamble_installed__ = true;
+    }).catch((err) => {
+      preamblePromise = null;
+      throw err;
+    });
+  }
+  return preamblePromise;
+}
+
 export async function hydrateIsland(el) {
   if (el.__kilnHydrated) return;
   el.__kilnHydrated = true;
@@ -111,6 +139,7 @@ export async function hydrateIsland(el) {
     const manifest = await getManifest();
     const url = manifest && manifest.islands ? manifest.islands[name] : undefined;
     if (!url) throw new Error('island "' + name + '" not in manifest');
+    await ensurePreamble(manifest);
     const mod = await importModule(url);
     if (typeof mod.hydrate !== 'function') {
       throw new Error('island chunk for "' + name + '" has no hydrate() export');
@@ -163,9 +192,10 @@ export function boot(root) {
   });
 }
 
-/** Test-only: forget the memoized manifest between cases. */
+/** Test-only: forget the memoized manifest/preamble between cases. */
 export function __resetForTests() {
   manifestPromise = null;
+  preamblePromise = null;
 }
 
 if (typeof document !== 'undefined' && !hooks().disableAutoBoot) {
