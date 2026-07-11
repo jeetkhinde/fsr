@@ -113,6 +113,79 @@ Live.list({ query, key, dependsOn, initial?, debounce?, revalidate? })
 
 ---
 
+## React Islands (ADR-014 — `@kiln/react` `island()`, `packages/client/src/islands.js`)
+
+Client-side React is supported through **islands only** — full-page hydration
+is prohibited (see `.memory/decisions.md` ADR-014 and
+`docs/design/adr-014-react-islands.md`).
+
+### Authoring
+
+```
+app-root/
+  pages/dashboard.tsx
+  islands/Counter.tsx     ← file basename === island name
+```
+
+```tsx
+// pages/dashboard.tsx
+import Counter from '../islands/Counter.js';
+import { island } from '@kiln/react';
+const CounterIsland = island(Counter, 'Counter', { hydrate: 'visible' }); // 'load' (default) | 'idle' | 'visible'
+
+export async function load(req) {
+  return { start: 41, activeUsers: Live.value(0, ['sessions'], { target: 'store' }) };
+}
+export default function Dashboard({ start }) {
+  return <main><CounterIsland start={start} /></main>;
+}
+```
+
+```tsx
+// islands/Counter.tsx — ordinary React component, default export
+import { useLiveValue } from '@kiln/react';
+export default function Counter({ start }: { start: number }) {
+  const activeUsers = useLiveValue<number>('activeUsers', 0);
+  ...
+}
+```
+
+### The four island rules
+
+1. **Props are bake-time values** (embedded in the marker via the seed codec)
+   and must be plain JSON data — no Dates/Maps/functions.
+2. **Live data inside an island uses the store**: declare the field with
+   `target: 'store'` (no `s-live` DOM slot is generated) and read it with
+   `useLiveValue(field, fallback)` — pass the bake-time value as `fallback`
+   so SSR and first client render match. SSE scalar patches publish
+   `{ value }` to the `live:<field>` Silcrow atom scope.
+3. **Silcrow never patches DOM inside `[data-kiln-island]`** — the React root
+   owns that subtree. A dom-target LiveProp inside an island triggers a
+   bake-time warning.
+4. **Navigation stays with silcrow** — use plain `<a>` links; no client
+   router inside islands.
+
+### Mechanics
+
+- SSR: `island()` wraps the component's baked output in a
+  `data-kiln-island` marker (display:contents) with hydrate strategy + props.
+- Build: `kilnIslandsPlugin` (Vite) emits one chunk per island via
+  `virtual:kiln-island/<Name>` hydration wrappers (bootstrap stays
+  react-free), plus `dist/client/kiln-islands.json` (name → hashed URL,
+  content-hash version).
+- Serve: `/_kiln/islands.json` (no-store; dev proxies Vite) + bootstrap at
+  `/_silcrow/islands.js`, injected only into pages containing markers.
+- Skew defense: markers carry island **names**, never URLs; the bootstrap
+  resolves through the always-fresh manifest. A missing/failed chunk gets one
+  sessionStorage-guarded reload, then fails static and emits a
+  `kiln:island-error` CustomEvent (baked HTML always stays on screen).
+- Nested islands are unsupported (outermost marker wins).
+- `BAKED_RENDER_VERSION` is 2 since islands shipped — older cached snapshots
+  re-bake on first request.
+- Demo: `test-app/islands/Counter.tsx` + `test-app/pages/islands-demo.tsx`.
+
+---
+
 ## Middleware (`packages/adapter-elysia/src/middleware/`)
 
 All built-in, applied automatically by `startKiln()` via `adapter.applyMiddleware()`:

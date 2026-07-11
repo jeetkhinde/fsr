@@ -2846,6 +2846,13 @@ function applyKilnScalarPatch(root, data) {
     if (kilnInIsland(n)) return;
     n.textContent = value == null ? '' : String(value);
   });
+  // ADR-014 store bridge: islands read live data through the store
+  // (useLiveValue subscribes to 'live:<field>'), never via DOM patches.
+  try {
+    if (window.Silcrow && typeof window.Silcrow.publish === 'function') {
+      window.Silcrow.publish('live:' + field, { value: value });
+    }
+  } catch (err) { /* store unavailable */ }
 }
 
 function applyKilnListPatch(data) {

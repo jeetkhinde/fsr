@@ -11,6 +11,7 @@ import {
   useSilcrowResource,
   useSilcrowForm,
   useSilcrowMutation,
+  useLiveValue,
   KilnReactProvider,
   resolveKilnAction,
 } from "./hooks.js";
@@ -258,6 +259,29 @@ async function runTests() {
     });
 
     console.log("✅ useSilcrowMutation executes mutation callbacks and submits successfully");
+  }
+
+  // 13. useLiveValue — ADR-014 store bridge
+  {
+    function ActiveUsers() {
+      const n = useLiveValue<number>("activeUsers", -1);
+      return <span>{n}</span>;
+    }
+
+    // (a) live atom value wins when present ({ value } envelope on live:<field>)
+    mockSnapshot["live:activeUsers"] = { value: 9 };
+    assert.equal(renderToStaticMarkup(<ActiveUsers />), "<span>9</span>");
+
+    // (b) falls back to the baked seed when the atom has no value yet
+    delete mockSnapshot["live:activeUsers"];
+    (globalThis.window as any).__kiln_seed = { activeUsers: 7 };
+    assert.equal(renderToStaticMarkup(<ActiveUsers />), "<span>7</span>");
+
+    // (c) falls back to the provided fallback when neither exists
+    delete (globalThis.window as any).__kiln_seed;
+    assert.equal(renderToStaticMarkup(<ActiveUsers />), "<span>-1</span>");
+
+    console.log("✅ useLiveValue reads live atom, then seed, then fallback");
   }
 
   console.log("🎉 All @kilnjs/react tests passed!");

@@ -103,9 +103,21 @@ run('scalar patcher skips elements inside islands', () => {
 run('list patcher skips containers inside islands', () => {
   const patchList = KILN_LIVE_CLIENT_SCRIPT.slice(
     KILN_LIVE_CLIENT_SCRIPT.indexOf('function _patchList'),
-    KILN_LIVE_CLIENT_SCRIPT.indexOf('function _patch('),
+    KILN_LIVE_CLIENT_SCRIPT.indexOf('function _publishLive'),
   );
   assert.ok(patchList.includes('_inIsland(list)'));
+});
+
+run('scalar patches are also published to the live: store scope (ADR-014 bridge)', () => {
+  // The same patch that is DOM-ignored inside an island must still reach the
+  // island through the store: _patch publishes { value } to 'live:<field>'.
+  assert.ok(KILN_LIVE_CLIENT_SCRIPT.includes("window.Silcrow.publish('live:'+field,{value:value})"));
+  const patchFn = KILN_LIVE_CLIENT_SCRIPT.slice(
+    KILN_LIVE_CLIENT_SCRIPT.indexOf('function _patch('),
+    KILN_LIVE_CLIENT_SCRIPT.indexOf('function _connect'),
+  );
+  assert.ok(patchFn.includes('_publishLive(data.field,data.value)'));
+  assert.ok(patchFn.includes('_publishLive(slot,data[slot])'));
 });
 
 console.log('\n✓ All FSR live client tests passed.');

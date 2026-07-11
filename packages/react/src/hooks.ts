@@ -66,6 +66,36 @@ export function publishSilcrowAtom<T>(scope: string, data: T): void {
 }
 
 /**
+ * Read a live field inside a React island (ADR-014 store bridge).
+ *
+ * Declare the field in load() with target: 'store' — it then has no s-live
+ * DOM slot; SSE patches publish { value } to the `live:<field>` atom scope
+ * and this hook re-renders. Read order: live atom (freshest) → baked seed
+ * (window.__kiln_seed) → fallback. During server bake there is no window,
+ * so pass the bake-time value as `fallback` (usually the island prop) to
+ * keep SSR output and first client render identical.
+ */
+export function useLiveValue<T>(field: string, fallback?: T): T {
+  const read = (): T => {
+    if (typeof window === 'undefined') return fallback as T;
+    const snap = window.Silcrow?.snapshot?.<{ value: T }>('live:' + field);
+    if (snap && typeof snap === 'object' && 'value' in snap) {
+      return (snap as { value: T }).value;
+    }
+    const seed = (window as any).__kiln_seed;
+    if (seed && typeof seed === 'object' && field in seed) {
+      return seed[field] as T;
+    }
+    return fallback as T;
+  };
+  return useSyncExternalStore<T>(
+    (notify) => window.Silcrow?.subscribe?.('live:' + field, notify) ?? (() => {}),
+    read,
+    read,
+  );
+}
+
+/**
  * Prefetch a route and return Silcrow's memoized promise for React `use()`.
  */
 export function useSilcrowPrefetch<T>(path: string): Promise<T> {

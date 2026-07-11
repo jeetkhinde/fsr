@@ -104,9 +104,21 @@ function _patchList(data){
   });
 }
 
+// ADR-014 store bridge: every scalar patch is ALSO published to the
+// 'live:<field>' Silcrow atom scope, which is how React islands receive
+// live data (useLiveValue) since their DOM is never patched directly.
+function _publishLive(field,value){
+  try{
+    if(window.Silcrow&&typeof window.Silcrow.publish==='function'){
+      window.Silcrow.publish('live:'+field,{value:value});
+    }
+  }catch(err){/* store unavailable */}
+}
+
 function _patch(data){
   if(data&&data.kind==='scalar'){
     _patchScalar(data.field,data.value);
+    _publishLive(data.field,data.value);
     return;
   }
   if(data&&data.kind==='list'){
@@ -114,6 +126,7 @@ function _patch(data){
     return;
   }
   Object.keys(data).forEach(function(slot){
+    _publishLive(slot,data[slot]);
     document.querySelectorAll('[s-live="'+slot+'"]').forEach(function(el){
       if(_inIsland(el))return;
       _setText(el,data[slot]);
