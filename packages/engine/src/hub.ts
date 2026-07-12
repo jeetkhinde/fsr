@@ -16,11 +16,50 @@ export const defaultHubConfig: FsrHubConfig = {
   keepaliveSecs: 30
 };
 
-// Global active connections counter
+// Per-process fallback counter, used whenever no Redis client is
+// configured (or a Redis call itself fails — connection admission fails
+// open rather than blocking the SSE stream on a cache outage).
 let activeConnectionsCount = 0;
 
+const REDIS_CONN_COUNT_KEY = 'kiln:fsr:active-connections';
+
+/** Local-process count. With Redis configured, the *enforced* cross-process
+ * limit uses a separate Redis-backed counter this getter doesn't reflect —
+ * it only ever reports this process's own connections. */
 export function getActiveConnectionsCount(): number {
   return activeConnectionsCount;
+}
+
+function admitConnectionLocal(maxConnections: number): boolean {
+  if (activeConnectionsCount >= maxConnections) return false;
+  activeConnectionsCount++;
+  return true;
+}
+
+function releaseConnectionLocal(): void {
+  activeConnectionsCount = Math.max(0, activeConnectionsCount - 1);
+}
+
+/**
+ * Redis-backed admission: atomically increments first and backs out if that
+ * pushed the count over the limit — the standard INCR-then-correct pattern
+ * (INCR itself is atomic; a connection that loses the race between two
+ * processes' INCRs just gets immediately DECRemented back, so the count
+ * never permanently overshoots). Only called when a Redis client exists —
+ * kept separate from the local-counter path (rather than one function
+ * branching internally) so the common no-Redis case stays fully
+ * synchronous and doesn't pay an extra microtask hop on every connection.
+ */
+async function admitConnectionRedis(
+  redis: NonNullable<ReturnType<KilnCache['getClient']>>,
+  maxConnections: number
+): Promise<boolean> {
+  const count = await redis.incr(REDIS_CONN_COUNT_KEY);
+  if (count > maxConnections) {
+    await redis.decr(REDIS_CONN_COUNT_KEY);
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -52,12 +91,27 @@ export async function* fsrHubStream(options: FsrHubStreamOptions): AsyncGenerato
     return;
   }
 
-  // Check connection counter
-  if (activeConnectionsCount >= config.maxConnections) {
+  // Cross-process admission when Redis is configured (each worker
+  // otherwise enforces maxConnections independently, so the real cluster-
+  // wide cap becomes maxConnections * workerCount). The no-Redis path stays
+  // fully synchronous — no added await, no behavior change from before.
+  const redisClient = cache?.getClient();
+  let usedRedis = false;
+  let admitted: boolean;
+  if (redisClient) {
+    try {
+      admitted = await admitConnectionRedis(redisClient, config.maxConnections);
+      usedRedis = true;
+    } catch (err: any) {
+      console.warn('FSR hub: Redis connection-count check failed, falling back to local counter:', err?.message ?? err);
+      admitted = admitConnectionLocal(config.maxConnections);
+    }
+  } else {
+    admitted = admitConnectionLocal(config.maxConnections);
+  }
+  if (!admitted) {
     throw new Error('SERVICE_UNAVAILABLE: FSR connection limit reached');
   }
-
-  activeConnectionsCount++;
 
   const emitter = watcher.getEmitter();
   if (emitter.getMaxListeners() < config.maxConnections) {
@@ -168,7 +222,15 @@ export async function* fsrHubStream(options: FsrHubStreamOptions): AsyncGenerato
       }
     }
   } finally {
-    activeConnectionsCount--;
+    if (usedRedis && redisClient) {
+      try {
+        await redisClient.decr(REDIS_CONN_COUNT_KEY);
+      } catch (err: any) {
+        console.warn('FSR hub: Redis connection-count release failed:', err?.message ?? err);
+      }
+    } else {
+      releaseConnectionLocal();
+    }
     emitter.off('patch', onPatch);
     signal?.removeEventListener('abort', onAbort);
     if (keepaliveTimer) clearInterval(keepaliveTimer);

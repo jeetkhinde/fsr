@@ -148,7 +148,10 @@ async function runTests() {
     await heartbeatPromise;
 
     assert.ok(heartbeatItems.length >= 2);
-    assert.deepEqual(heartbeatItems[0], { data: '' });
+    // Named event, not a bare {data: ''} — a bare data-only event dispatches
+    // as a real 'message' on the client's EventSource, which a generic
+    // onmessage listener would otherwise pick up as if it were real data.
+    assert.deepEqual(heartbeatItems[0], { event: 'keepalive', data: '' });
 
     console.log('🎉 FSR SSE Hub and Snapshot tests PASSED!');
   } finally {
