@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { LiveProp } from '@kiln/core';
 import { FsrStore, StaleSlot } from './store.js';
 import { RedisCache, atomicWrite } from './cache.js';
 import {
@@ -102,10 +103,15 @@ export class FsrWatcher {
       }
     });
 
+    // Return the caught chain, not the raw `operation` — a caller that
+    // doesn't await this (registerLiveList is commonly fire-and-forget from
+    // load()) would otherwise get an unhandled rejection whenever `operation`
+    // rejects, since only `notificationQueue` was ever guaranteed to have a
+    // .catch() attached.
     this.notificationQueue = operation.catch((err) => {
       console.error(`Failed to register Live.list ${target.route}/${target.name}:`, err);
     });
-    return operation;
+    return this.notificationQueue;
   }
 
   private reconcileRegistration<T>(
@@ -237,7 +243,9 @@ export class FsrWatcher {
   }
 
   updateCursor(eventId: number): void {
-    fs.writeFile(this.cursorPath(), String(eventId), 'utf8').catch(() => {});
+    fs.writeFile(this.cursorPath(), String(eventId), 'utf8').catch((err: any) => {
+      console.warn(`FSR watcher: failed to persist cursor (eventId=${eventId}):`, err.message);
+    });
   }
 
   private async catchUpMissedEvents(): Promise<void> {
@@ -275,13 +283,13 @@ export class FsrWatcher {
   private spawnSupervisedInvalidation(scheduled: ScheduledInvalidation, signal: AbortSignal): void {
     const run = async () => {
       while (!signal.aborted) {
-        await new Promise((resolve) => setTimeout(resolve, scheduled.intervalMs));
-        if (signal.aborted) break;
         try {
           await this.store.invalidateDepKey(scheduled.depKey);
         } catch (err: any) {
           console.error(`FSR: scheduled invalidation failed for ${scheduled.depKey}:`, err.message);
         }
+        if (signal.aborted) break;
+        await new Promise((resolve) => setTimeout(resolve, scheduled.intervalMs));
       }
     };
     run();
@@ -564,7 +572,7 @@ export class FsrWatcher {
 
         for (const row of routeRows) {
           const raw = loaded[row.slot] as any;
-          const value = raw && raw.constructor?.name === 'LiveProp' ? raw.value : raw;
+          const value = raw instanceof LiveProp ? raw.value : raw;
           data[row.slot] = value;
           this.emitter.emit('patch', createScalarPatch(route, row.slot, value));
           await this.store.markFresh(route, row.slot);

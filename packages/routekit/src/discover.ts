@@ -69,7 +69,13 @@ export async function walkDir(dir: string, opts: DiscoverOptions = {}): Promise<
         fileName: path.basename(relPath),
       });
     }
-  } catch {
+  } catch (err: any) {
+    // ENOENT (missing pagesDir) is an expected, silent case — anything else
+    // (permissions, etc.) is worth surfacing so a bad `pagesDir` config
+    // doesn't silently discover zero routes.
+    if (err?.code !== 'ENOENT') {
+      console.warn(`[kiln] failed to scan directory "${dir}":`, err?.message ?? err);
+    }
     return [];
   }
   return results;

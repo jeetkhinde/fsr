@@ -178,7 +178,19 @@ describe('KilnCache', () => {
         async expire(key: string, secs: number) {
           expireCalls.push({ key, secs });
         },
-        async send() {
+        // Emulates the subset of raw commands KilnCache issues via .send()
+        // for atomic writes (SET key val EX secs) — the counterpart to the
+        // separate .set()/.expire() calls above, recorded the same way so
+        // existing assertions on `store`/`expireCalls` still hold regardless
+        // of which path a given method takes.
+        async send(command: string, args: string[]) {
+          if (command === 'SET') {
+            const [key, value, mode, secsStr] = args;
+            store.set(key, value);
+            if (mode === 'EX' && secsStr !== undefined) {
+              expireCalls.push({ key, secs: Number(secsStr) });
+            }
+          }
           return null;
         },
       };

@@ -170,9 +170,21 @@ function findNextElement(html: string, tagName: string, offset: number): Range |
   if (!match) return null;
   const start = match.index;
   const openEnd = start + match[0].length;
-  const closeStart = html.indexOf(`</${tagName}>`, openEnd);
-  if (closeStart === -1) return null;
-  return { start, openEnd, end: closeStart + tagName.length + 3 };
+
+  // Depth-track instead of a naive indexOf for the closing tag, so a
+  // same-tag element nested inside doesn't cause this element's range to
+  // end at the *inner* close tag.
+  const tag = new RegExp(`<\\/?${tagName}\\b[^>]*>`, "gi");
+  tag.lastIndex = openEnd;
+  let depth = 1;
+  let m: RegExpExecArray | null;
+  while ((m = tag.exec(html))) {
+    depth += m[0].startsWith("</") ? -1 : 1;
+    if (depth === 0) {
+      return { start, openEnd, end: tag.lastIndex };
+    }
+  }
+  return null;
 }
 
 function findNearestOpenTag(html: string, tagName: string, before: number): Range | null {

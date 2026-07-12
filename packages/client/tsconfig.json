@@ -1,13 +1,11 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
     "outDir": "./dist",
     "rootDir": "./src"
   },
   "include": ["src/**/*"],
-  "references": [
-    { "path": "../core" },
-    { "path": "../engine" },
-    { "path": "../client" }
-  ]
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }

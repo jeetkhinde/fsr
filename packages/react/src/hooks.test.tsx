@@ -18,7 +18,7 @@ import {
 import { submitSilcrow, silcrowSubmitHandler } from "./submit.js";
 
 async function runTests() {
-  console.log("Running @kilnjs/react hooks and helpers tests...");
+  console.log("Running @kiln/react hooks and helpers tests...");
 
   // Mock global window/Silcrow
   const subscribeCalls: any[] = [];
@@ -284,7 +284,7 @@ async function runTests() {
     console.log("✅ useLiveValue reads live atom, then seed, then fallback");
   }
 
-  console.log("🎉 All @kilnjs/react tests passed!");
+  console.log("🎉 All @kiln/react tests passed!");
 }
 
 runTests().catch((err) => {

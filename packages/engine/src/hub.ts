@@ -131,13 +131,21 @@ export async function* fsrHubStream(options: FsrHubStreamOptions): AsyncGenerato
 
       if (lagged) {
         lagged = false;
+        // The client is about to refetch full state — the buffered patches
+        // that triggered `lagged` are now stale relative to that refetch,
+        // so drop them instead of replaying them right after telling the
+        // client to resync.
+        queue.length = 0;
         yield { event: 'fsr-resync', data: 'lagged' };
         continue;
       }
 
       if (triggerKeepalive) {
         triggerKeepalive = false;
-        yield { data: '' }; // keepalive comment/heartbeat
+        // Named event (matches the 'ready' sentinel above) rather than a
+        // bare {data: ''}, which dispatches as a real 'message' event to
+        // any generic EventSource.onmessage listener on the client.
+        yield { event: 'keepalive', data: '' };
         continue;
       }
 
@@ -151,7 +159,11 @@ export async function* fsrHubStream(options: FsrHubStreamOptions): AsyncGenerato
         yield formatPatchEvent(patch);
         if (cache) {
           const scalar = normalizeScalarPatch(patch);
-          if (scalar) patchBakedFiles(cache, route, scalar.field, scalar.value).catch(() => {});
+          if (scalar) {
+            patchBakedFiles(cache, route, scalar.field, scalar.value).catch((err: any) => {
+              console.warn(`FSR hub: failed to patch baked cache for ${route}/${scalar.field}:`, err?.message ?? err);
+            });
+          }
         }
       }
     }

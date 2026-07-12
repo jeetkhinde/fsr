@@ -8,12 +8,20 @@ export interface KilnVitePluginOptions {
   onRoutesChanged?: () => void | Promise<void>;
 }
 
+// `startsWith` on raw paths false-matches sibling directories that share a
+// prefix (e.g. pagesDir "pages" would match a file in "pages-legacy/").
+// path.relative crossing up ("..") is the reliable way to test containment.
+function isInsideDir(file: string, dir: string): boolean {
+  const rel = path.relative(path.resolve(dir), path.resolve(file));
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
 export function kilnVitePlugin(options: KilnVitePluginOptions): Plugin {
   return {
     name: 'vite-plugin-kiln',
     configureServer(server) {
       const handleFileChange = async (filePath: string) => {
-        if (filePath.startsWith(options.pagesDir)) {
+        if (isInsideDir(filePath, options.pagesDir)) {
           if (options.onRoutesChanged) {
             await options.onRoutesChanged();
           }
@@ -24,7 +32,7 @@ export function kilnVitePlugin(options: KilnVitePluginOptions): Plugin {
       server.watcher.on('unlink', handleFileChange);
     },
     handleHotUpdate(ctx) {
-      if (ctx.file.startsWith(options.pagesDir)) {
+      if (isInsideDir(ctx.file, options.pagesDir)) {
         // Return modules to hot-reload in the browser
         return ctx.modules;
       }

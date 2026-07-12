@@ -779,6 +779,17 @@ function reconcile(container, template, items, alias, keyPath) {
       const frag = template.content.cloneNode(true);
       block = Array.from(frag.children).filter(n => n.nodeType === 1);
       block.forEach(el => el.setAttribute(":key", key));
+    } else {
+      // A template can legitimately have multiple root elements sharing one
+      // :key (all cloned together above) — that's not staleness. Only trim
+      // when this key has *more* DOM nodes than one template instance
+      // produces, which means leftover duplicates accumulated across
+      // renders rather than one intact block.
+      const expectedRootCount = Array.from(template.content.children).filter(n => n.nodeType === 1).length;
+      if (block.length > expectedRootCount) {
+        for (let i = expectedRootCount; i < block.length; i++) block[i].remove();
+        block = block.slice(0, expectedRootCount);
+      }
     }
 
     block.forEach(node => {
@@ -1039,7 +1050,6 @@ function unregisterLiveState(state) {
 function pauseLiveState(state) {
   state.paused = true;
   if (state.protocol !== "ws" && state.hub) {
-    state.paused = true;
     state.hub.paused = true;
     if (state.hub.reconnectTimer) {
       clearTimeout(state.hub.reconnectTimer);
@@ -1430,6 +1440,12 @@ function destroyAllLive() {
     if (hub.socket) hub.socket.close();
   }
   wsHubs.clear();
+
+  // Optimistic mutations tracked for confirm/revert have no live connection
+  // left to confirm or revert them once every hub is torn down — drop them
+  // too, or they leak for the remaining page lifetime.
+  pendingMutations.clear();
+  pendingByScope.clear();
 }
 
 /**

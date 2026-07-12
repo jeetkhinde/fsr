@@ -1,13 +1,22 @@
 # Active Work Context
 
-Last updated: 2026-07-10
+Last updated: 2026-07-12
 
 ## Current State
+
+Branch `fix/gemini-audit-round2` (worktree off `main` @ `3f6e900`) — fixes for every item confirmed real out of an external (Gemini) 159-item audit, awaiting merge/PR. See `.memory/bugs.md` §0 for the full list.
+
+`tsc --noEmit` is clean across all packages: `core`, `live`, `engine`, `routekit`, `adapter-elysia`, `react`, `cli`, `create-kiln`, `client`.
+Unit suite: **144 pass, 0 fail**.
+
+Correction to a previously-recorded belief: the line below (from the 2026-07-10 session) claiming the address-book route test needs live Postgres and fails without it was **wrong** — `examples/address-book/tests/routes.test.ts` was directly re-run in this session and passes cleanly with no DB. Left in `test:unit` as-is; don't re-exclude it without re-verifying first.
+
+## Previous State (2026-07-10, superseded above)
 
 Branch `fix/audit-fixes` (worktree off `main` @ `e7e599d`) — full-codebase audit fixes, awaiting merge/PR.
 
 `tsc --noEmit` is clean across all packages: `core`, `live`, `engine`, `routekit`, `adapter-elysia`, `react`, `cli`, `create-kiln`.
-Unit suite: 110 pass; 1 pre-existing env-dependent failure (address-book route test needs live Postgres).
+Unit suite: 110 pass; 1 pre-existing env-dependent failure (address-book route test needs live Postgres) — **see correction above, this was inaccurate.**
 
 ---
 

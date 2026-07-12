@@ -1,6 +1,8 @@
 import { applyScalarPatchToHtml, createScalarPatch } from '@kiln/live';
 import { applyListPatchToHtml } from '@kiln/live';
 import { toScriptJson } from './assembler.js';
+import { renderToReadableStream } from 'react-dom/server';
+import { createElement, type ReactElement } from 'react';
 
 export const BAKED_SNAPSHOT_VERSION = 1;
 // 2: island markers (data-kiln-island) may exist in shells (ADR-014).
@@ -97,14 +99,13 @@ export function injectFsrSlots(shell: string, slots: [string, any][]): string {
         seedMatch[0],
         () => `<script>window.__kiln_seed=${toScriptJson(seed)}</script>`
       );
-    } catch (e) {}
+    } catch (e) {
+      console.warn('[kiln] injectFsrSlots: failed to parse existing __kiln_seed, leaving it unpatched:', e instanceof Error ? e.message : e);
+    }
   }
 
   return result;
 }
-
-import { renderToReadableStream } from 'react-dom/server';
-import { createElement, type ReactElement } from 'react';
 
 export const OUTLET_TOKEN = '__KILN_OUTLET_7f3a9c4b__';
 

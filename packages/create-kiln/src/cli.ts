@@ -12,6 +12,8 @@ import {
   healthApi,
   migrationSql,
   mainRunner,
+  gitignore,
+  readme,
 } from './templates.js';
 
 const main = defineCommand({
@@ -31,6 +33,20 @@ const main = defineCommand({
     const targetDirName = args.dir || 'kiln-app';
     const targetDir = path.resolve(process.cwd(), targetDirName);
 
+    try {
+      const existing = await fs.readdir(targetDir).catch((err: any) => {
+        if (err.code === 'ENOENT') return [];
+        throw err;
+      });
+      if (existing.length > 0) {
+        consola.error(`Directory "${targetDirName}" already exists and is not empty. Choose a different name or empty it first.`);
+        process.exit(1);
+      }
+    } catch (err: any) {
+      consola.error(`Failed to check target directory: ${err.message}`);
+      process.exit(1);
+    }
+
     consola.info(`Scaffolding new Kiln app in ${targetDir}...`);
 
     try {
@@ -49,6 +65,8 @@ const main = defineCommand({
       await fs.writeFile(path.join(targetDir, 'api/health.ts'), healthApi);
       await fs.writeFile(path.join(targetDir, 'migrations/0000_init.sql'), migrationSql);
       await fs.writeFile(path.join(targetDir, 'src/main.ts'), mainRunner);
+      await fs.writeFile(path.join(targetDir, '.gitignore'), gitignore);
+      await fs.writeFile(path.join(targetDir, 'README.md'), readme(targetDirName));
 
       consola.success(`Successfully scaffolded Kiln app inside ${targetDirName}!`);
       consola.box({

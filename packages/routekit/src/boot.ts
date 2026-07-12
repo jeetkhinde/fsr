@@ -97,6 +97,16 @@ async function computeLayoutSignature(patterns: string[], cache: KilnCache): Pro
 // Page handler
 // ---------------------------------------------------------------------------
 
+// Caps process-lifetime dedup Sets (route-ensured markers, one-shot warning
+// keys) so a long-running server with high route/key cardinality can't grow
+// them without bound. Losing an entry just means the next occurrence does a
+// redundant (idempotent) DB write or re-logs a warning — never incorrect.
+const DEDUP_SET_MAX = 10_000;
+function addBounded(set: Set<string>, key: string): void {
+  if (set.size >= DEDUP_SET_MAX) set.clear();
+  set.add(key);
+}
+
 export function buildPageHandler(
   module: any,
   pageMeta: PageRoute,
@@ -139,7 +149,7 @@ export function buildPageHandler(
         );
       if (!ensuredRoutes.has(req.path)) {
         await ensureRow();
-        ensuredRoutes.add(req.path);
+        addBounded(ensuredRoutes, req.path);
       }
       hitStatus = await store.incrementHit(req.path);
       if (hitStatus === 'Missing') {
@@ -526,7 +536,7 @@ export function buildPageHandler(
 const warnedOnce = new Set<string>();
 function warnOnce(key: string, message: string): void {
   if (warnedOnce.has(key)) return;
-  warnedOnce.add(key);
+  addBounded(warnedOnce, key);
   console.warn(message);
 }
 
@@ -1032,8 +1042,15 @@ export async function startKiln(
     });
   }
 
-  // 10. Register inspect endpoint
+  // 10. Register inspect endpoint — dev/debug only. Exposes the full route
+  // manifest (patterns, layouts, live fields), which is reconnaissance data
+  // an unauthenticated production endpoint shouldn't hand out.
   adapter.registerPage('/__kiln/inspect', [], async (_req, res) => {
+    if (process.env.NODE_ENV === 'production') {
+      res.status = 404;
+      res.json({ error: 'Not Found' });
+      return;
+    }
     res.json({
       pages: manifest.pages.map((p) => ({
         pattern: p.pattern,

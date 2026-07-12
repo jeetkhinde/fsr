@@ -1,6 +1,7 @@
 packages:
   - 'packages/*'
   - 'test-app'
+  - 'examples/*'
 allowBuilds:
   es5-ext: true
   esbuild: true

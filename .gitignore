@@ -14,3 +14,4 @@ graphify-out/
 .superpowers/
 .kiln-cache/
 .aider*
+test-results/
