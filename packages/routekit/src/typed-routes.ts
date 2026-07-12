@@ -1,16 +1,21 @@
 import type { RouteManifest } from './manifest.js';
 
+// Capitalizes each non-alphanumeric-delimited word in a segment so
+// "user-profile" -> "UserProfile" instead of "User-profile" — the latter
+// isn't a valid unquoted object-key/identifier fragment.
+function capitalizeWords(segment: string): string {
+  return segment
+    .split(/[^a-zA-Z0-9]+/)
+    .filter(Boolean)
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join('');
+}
+
 function patternToName(pattern: string): string {
   if (pattern === '/') return 'home';
   const segments = pattern.split('/').filter(s => s);
   const camelCase = segments
-    .map(seg => {
-      if (seg.startsWith(':')) {
-        const param = seg.slice(1);
-        return param.charAt(0).toUpperCase() + param.slice(1);
-      }
-      return seg.charAt(0).toUpperCase() + seg.slice(1);
-    })
+    .map(seg => capitalizeWords(seg.startsWith(':') ? seg.slice(1) : seg))
     .join('');
   return camelCase.charAt(0).toLowerCase() + camelCase.slice(1);
 }
@@ -28,15 +33,18 @@ export function generateTypedRoutes(manifest: RouteManifest): string {
   for (const page of manifest.pages) {
     const name = patternToName(page.pattern);
     const params = extractParams(page.pattern);
+    // Quoted key: defensive against edge cases capitalizeWords can't fully
+    // rule out (e.g. a segment starting with a digit produces a name that's
+    // invalid as a bare identifier/object key).
     if (params.length === 0) {
-      lines.push(`  ${name}: '${page.pattern}',`);
+      lines.push(`  '${name}': '${page.pattern}',`);
     } else {
       const args = params.map(p => `${p}: string`).join(', ');
       const body = params.reduce(
         (pat, p) => pat.replace(`:${p}`, `\${${p}}`),
         page.pattern
       );
-      lines.push(`  ${name}: (${args}) => \`${body}\`,`);
+      lines.push(`  '${name}': (${args}) => \`${body}\`,`);
     }
   }
 

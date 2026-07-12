@@ -42,6 +42,8 @@ export interface InspectRow {
   lastHit: string | null;
 }
 
+const REQUERY_TIMEOUT_MS = 10_000;
+
 export class FsrStore {
   readonly lists: FsrListStore;
 
@@ -240,13 +242,15 @@ export class FsrStore {
     ])).sort();
 
     if (this.redis) {
-      for (const route of routes) {
-        await this.redis.publishInvalidate({
-          route,
-          slots: [],
-          deps: [depKey]
-        }).catch(() => {});
-      }
+      await Promise.all(
+        routes.map((route) =>
+          this.redis!.publishInvalidate({
+            route,
+            slots: [],
+            deps: [depKey],
+          }).catch(() => {})
+        )
+      );
     }
 
     return routes;
@@ -468,7 +472,22 @@ export class FsrStore {
   async reExecuteQuery(slot: StaleSlot): Promise<any> {
     if (!slot.query) return null;
     const params = Array.isArray(slot.queryParams) ? slot.queryParams : [];
-    const rows = await this.sql.unsafe(slot.query, params);
+    // A hung query here blocks FSR revalidation for that slot indefinitely;
+    // cap it so one bad query can't stall the watcher. Clear the timer once
+    // the race settles — otherwise a won race leaves a live timer dangling
+    // for the full timeout (keeping the event loop busy / delaying exit).
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const rows = await Promise.race([
+      this.sql.unsafe(slot.query, params),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`reExecuteQuery timed out after ${REQUERY_TIMEOUT_MS}ms for slot "${slot.slot}"`)),
+          REQUERY_TIMEOUT_MS
+        );
+      }),
+    ]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
     const row = rows[0];
     if (!row) return null;
     const colKey = slot.columnName || slot.slot;

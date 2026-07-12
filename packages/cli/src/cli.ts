@@ -10,7 +10,7 @@ import { SQL } from 'bun';
 import { Glob } from 'bun';
 import { createServer, build as viteBuild } from 'vite';
 import react from '@vitejs/plugin-react';
-import { kilnVitePlugin, kilnIslandsPlugin } from '@kiln/routekit';
+import { kilnVitePlugin, kilnIslandsPlugin, listIslands } from '@kiln/routekit';
 import * as path from 'path';
 
 interface FsrRuntime {
@@ -79,14 +79,22 @@ async function loadKilnConfig(): Promise<KilnConfig> {
 }
 
 function registerShutdown(runtime: FsrRuntime, extra?: () => Promise<void>): void {
-  process.on('SIGINT', async () => {
-    consola.info('Shutting down...');
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    consola.info(`Received ${signal}, shutting down...`);
     if (runtime.watcher) await runtime.watcher.stop();
     if (runtime.redisCache) await runtime.redisCache.disconnect();
     runtime.bunSql?.close();
     await extra?.();
     process.exit(0);
-  });
+  };
+  // SIGTERM is what container/orchestrator shutdowns (Docker, k8s) send —
+  // without a handler for it, they'd kill the process without a graceful
+  // watcher/Redis/DB shutdown.
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
 const devCommand = defineCommand({
@@ -94,11 +102,18 @@ const devCommand = defineCommand({
     name: 'dev',
     description: 'Start the application in development mode',
   },
-  async run() {
+  args: {
+    port: {
+      type: 'string',
+      description: 'Port to listen on (overrides config)',
+      required: false,
+    },
+  },
+  async run({ args }) {
     consola.info('Starting Kiln.js dev server...');
 
     const config = await loadKilnConfig();
-    const port = config.port || config.web?.port || 3000;
+    const port = (args.port ? parseInt(args.port, 10) : undefined) || config.port || config.web?.port || 3000;
     const pagesDir = config.pagesDir || './pages';
 
     const runtime = await initFsr(config);
@@ -167,11 +182,18 @@ const startCommand = defineCommand({
     name: 'start',
     description: 'Start the application in production mode (no Vite dev server)',
   },
-  async run() {
+  args: {
+    port: {
+      type: 'string',
+      description: 'Port to listen on (overrides config)',
+      required: false,
+    },
+  },
+  async run({ args }) {
     consola.info('Starting Kiln.js production server...');
 
     const config = await loadKilnConfig();
-    const port = config.port || config.web?.port || 3000;
+    const port = (args.port ? parseInt(args.port, 10) : undefined) || config.port || config.web?.port || 3000;
     const pagesDir = config.pagesDir || './pages';
 
     if (!config.fsr?.postgresUrl) {
@@ -234,6 +256,11 @@ const buildCommand = defineCommand({
 
     const pagesDir = config.pagesDir || './pages';
     const entries = await findClientEntries(path.resolve(process.cwd(), pagesDir));
+    // kilnIslandsPlugin registers island entries itself (via its own
+    // listIslands() scan) independent of `entries` — checking only
+    // entries.length below would skip the whole Vite build, and every
+    // island with it, for an app with islands but no other client files.
+    const hasIslands = listIslands(path.join(process.cwd(), 'islands')).length > 0;
 
     // 1. Compile TS modules
     consola.info('Compiling server TypeScript modules...');
@@ -244,8 +271,8 @@ const buildCommand = defineCommand({
     }
     consola.success('TypeScript compilation completed successfully.');
 
-    if (entries.length === 0) {
-      consola.warn('No client page files found. Skipping client asset build.');
+    if (entries.length === 0 && !hasIslands) {
+      consola.warn('No client-side files found. Skipping client asset build.');
       consola.success('Build completed successfully! Outputs are in dist/');
       return;
     }

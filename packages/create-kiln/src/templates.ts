@@ -1,25 +1,25 @@
 export const packageJson = (name: string) => `{
-  "name": "${name}",
+  "name": ${JSON.stringify(name)},
   "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "kiln dev",
     "build": "kiln build",
-    "start": "node dist/main.js"
+    "start": "bun dist/main.js"
   },
   "dependencies": {
-    "@kiln/core": "workspace:*",
-    "@kiln/react": "workspace:*",
-    "@kiln/adapter-elysia": "workspace:*",
-    "@kiln/engine": "workspace:*",
-    "@kiln/routekit": "workspace:*",
+    "@kiln/core": "^0.1.0",
+    "@kiln/react": "^0.1.0",
+    "@kiln/adapter-elysia": "^0.1.0",
+    "@kiln/engine": "^0.1.0",
+    "@kiln/routekit": "^0.1.0",
     "elysia": "^1.0.12",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "ioredis": "^5.4.1"
   },
   "devDependencies": {
-    "@kiln/cli": "workspace:*",
+    "@kiln/cli": "^0.1.0",
     "typescript": "^5.4.5",
     "vite": "^5.2.11",
     "@vitejs/plugin-react": "^4.2.1",
@@ -179,6 +179,55 @@ export const actions = {
 export const healthApi = `export async function get(req: any) {
   return Response.json({ status: "ok" });
 }
+`;
+
+export const gitignore = `node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+*.env
+*.local
+.kiln-cache/
+`;
+
+export const readme = (name: string) => `# ${name}
+
+A [Kiln](https://github.com/jeetkhinde/fsr) app, scaffolded with \`create-kiln\`.
+
+## Prerequisites
+
+- [Bun](https://bun.sh) — the framework's server runtime (\`SQL\`, \`Glob\`, etc. are Bun built-ins)
+- PostgreSQL — for FSR live features (\`Live.list\`, live-patched fields)
+- Redis (optional) — fronts the Postgres store for FSR caching at scale
+
+## Setup
+
+1. Install dependencies:
+
+   \`\`\`sh
+   pnpm install
+   \`\`\`
+
+2. Set \`DATABASE_URL\` (and optionally \`REDIS_URL\`) in your environment, or edit the
+   defaults in \`kiln.config.ts\`.
+
+3. Run migrations:
+
+   \`\`\`sh
+   psql "$DATABASE_URL" -f migrations/0000_init.sql
+   \`\`\`
+
+4. Start the dev server:
+
+   \`\`\`sh
+   pnpm run dev
+   \`\`\`
+
+## Scripts
+
+- \`pnpm run dev\` — start the dev server with hot reload
+- \`pnpm run build\` — build for production
+- \`pnpm run start\` — run the production build (requires \`pnpm run build\` first)
 `;
 
 export const migrationSql = `CREATE TABLE IF NOT EXISTS todos (

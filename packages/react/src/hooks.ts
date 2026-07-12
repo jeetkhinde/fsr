@@ -51,10 +51,14 @@ export function resolveKilnAction(name: string, base?: string): string {
  * Subscribe a React component to a Silcrow atom scope.
  */
 export function useSilcrowAtom<T>(scope: string, fallback: T): T {
+  const read = (): T => {
+    if (typeof window === 'undefined') return fallback;
+    return window.Silcrow?.snapshot?.<T>(scope) ?? fallback;
+  };
   return useSyncExternalStore<T>(
-    (notify) => window.Silcrow?.subscribe?.(scope, notify) ?? (() => {}),
-    () => window.Silcrow?.snapshot?.<T>(scope) ?? fallback,
-    () => window.Silcrow?.snapshot?.<T>(scope) ?? fallback,
+    (notify) => (typeof window === 'undefined' ? () => {} : window.Silcrow?.subscribe?.(scope, notify) ?? (() => {})),
+    read,
+    read,
   );
 }
 
@@ -101,7 +105,7 @@ export function useLiveValue<T>(field: string, fallback?: T): T {
 export function useSilcrowPrefetch<T>(path: string): Promise<T> {
   return useMemo(
     () =>
-      window.Silcrow?.prefetch?.<T>(path) ??
+      (typeof window === 'undefined' ? undefined : window.Silcrow?.prefetch?.<T>(path)) ??
       Promise.reject(new Error("Silcrow is not loaded")),
     [path],
   );

@@ -18,13 +18,15 @@ const manifest: RouteManifest = {
 describe('generateTypedRoutes', () => {
   it('generates static routes as string constants', () => {
     const code = generateTypedRoutes(manifest);
-    expect(code).toContain("home: '/'");
-    expect(code).toContain("about: '/about'");
+    // Keys are quoted (safe against segments that aren't valid bare
+    // identifiers, e.g. a leading digit or non-alphanumeric characters).
+    expect(code).toContain("'home': '/'");
+    expect(code).toContain("'about': '/about'");
   });
 
   it('generates dynamic routes as typed functions', () => {
     const code = generateTypedRoutes(manifest);
-    expect(code).toContain('contactsId: (id: string)');
-    expect(code).toContain('contactsIdEdit: (id: string)');
+    expect(code).toContain("'contactsId': (id: string)");
+    expect(code).toContain("'contactsIdEdit': (id: string)");
   });
 });

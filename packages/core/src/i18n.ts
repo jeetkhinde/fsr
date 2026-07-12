@@ -3,6 +3,16 @@ import { negotiateLanguages } from '@fluent/langneg';
 import { join } from 'pathe';
 import type { KilnRequest } from './types.js';
 
+// "en-US,en;q=0.9,fr;q=0.8" -> ["en-US", "en", "fr"]. negotiateLanguages
+// expects individual locale tags, not the raw header — passing the whole
+// header as a single "locale" never matches anything in practice.
+function parseAcceptLanguage(header: string): string[] {
+  return header
+    .split(',')
+    .map((part) => part.split(';')[0].trim())
+    .filter(Boolean);
+}
+
 export class KilnI18n {
   private bundles = new Map<string, FluentBundle>();
   private defaultLocale: string;
@@ -29,8 +39,9 @@ export class KilnI18n {
   }
 
   locale(req: KilnRequest): string {
-    const accept = req.headers.get('accept-language') ?? this.defaultLocale;
-    const [best] = negotiateLanguages([accept], this.locales, { defaultLocale: this.defaultLocale });
+    const header = req.headers.get('accept-language');
+    const requested = header ? parseAcceptLanguage(header) : [this.defaultLocale];
+    const [best] = negotiateLanguages(requested, this.locales, { defaultLocale: this.defaultLocale });
     return best ?? this.defaultLocale;
   }
 
@@ -40,6 +51,10 @@ export class KilnI18n {
     const msg = bundle.getMessage(id);
     if (!msg?.value) return id;
     const errors: Error[] = [];
-    return bundle.formatPattern(msg.value, args, errors);
+    const result = bundle.formatPattern(msg.value, args, errors);
+    if (errors.length > 0) {
+      console.warn(`[kiln] i18n: formatPattern errors for "${id}" (${locale}):`, errors.map((e) => e.message));
+    }
+    return result;
   }
 }

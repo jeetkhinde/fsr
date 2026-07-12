@@ -87,6 +87,16 @@ ALTER TABLE kiln_fsr ADD COLUMN IF NOT EXISTS patch_mode VARCHAR(10) DEFAULT 'js
 ALTER TABLE kiln_fsr_lists ADD COLUMN IF NOT EXISTS debounce_secs INTEGER;
 ALTER TABLE kiln_fsr_lists ADD COLUMN IF NOT EXISTS revalidate_secs INTEGER;
 ALTER TABLE kiln_fsr_lists ADD COLUMN IF NOT EXISTS refresh_claimed_until TIMESTAMP;
+
+-- Partial index over exactly the rows the backfill below still needs to
+-- touch. On a fresh/already-backfilled table this index stays empty, so
+-- the UPDATE's WHERE clause — which otherwise re-runs a full sequential
+-- scan matching zero rows on every process startup — becomes an
+-- essentially free index-scan-of-nothing instead.
+CREATE INDEX IF NOT EXISTS idx_kiln_fsr_needs_last_requested_backfill
+  ON kiln_fsr (route)
+  WHERE last_requested_at IS NULL;
+
 UPDATE kiln_fsr
 SET last_requested_at = COALESCE(last_requested_at, last_hit, NOW())
 WHERE last_requested_at IS NULL`;

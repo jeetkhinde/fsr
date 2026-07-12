@@ -196,7 +196,13 @@ export function defineConfig(config: DeepPartial<KilnConfig>): KilnConfig {
     console.warn('[kiln] config.live is deprecated; use config.fsr');
     merged.live = { ...DEFAULT_CONFIG.live, ...config.live } as any;
   }
-  if (config.fsr) merged.fsr = { ...DEFAULT_CONFIG.fsr, ...config.fsr } as any;
+  // Always produce a fresh object here (not just when config.fsr is passed):
+  // the live→fsr bridging below mutates merged.fsr in place, and if this
+  // stayed conditional, merged.fsr would still alias DEFAULT_CONFIG.fsr
+  // (from the shallow `{ ...DEFAULT_CONFIG }` spread above) whenever only
+  // config.live was set — corrupting the shared DEFAULT_CONFIG singleton
+  // for every future defineConfig() call in the process.
+  merged.fsr = { ...DEFAULT_CONFIG.fsr, ...config.fsr } as any;
   if (config.live && config.fsr?.promoteAfterHits === undefined) {
     merged.fsr.promoteAfterHits = merged.live.promoteAfterHits;
   }
@@ -235,7 +241,11 @@ export function loadConfigFromEnv(baseConfig: KilnConfig): KilnConfig {
   }
   if (process.env.KILN_WEB_PORT) {
     const port = parseInt(process.env.KILN_WEB_PORT, 10);
-    if (!isNaN(port)) config.web.port = port;
+    if (!isNaN(port)) {
+      config.web.port = port;
+    } else {
+      console.warn(`[kiln] KILN_WEB_PORT="${process.env.KILN_WEB_PORT}" is not a valid number; ignoring`);
+    }
   }
   if (process.env.KILN_BACKEND_URL) {
     config.web.backendUrl = process.env.KILN_BACKEND_URL;
@@ -245,7 +255,11 @@ export function loadConfigFromEnv(baseConfig: KilnConfig): KilnConfig {
   }
   if (process.env.KILN_BACKEND_PORT) {
     const port = parseInt(process.env.KILN_BACKEND_PORT, 10);
-    if (!isNaN(port)) config.backend.port = port;
+    if (!isNaN(port)) {
+      config.backend.port = port;
+    } else {
+      console.warn(`[kiln] KILN_BACKEND_PORT="${process.env.KILN_BACKEND_PORT}" is not a valid number; ignoring`);
+    }
   }
   
   return config;

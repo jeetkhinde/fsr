@@ -151,11 +151,15 @@ export class KilnCache {
     await atomicWrite(diskPath, html);
     if (this.redis) {
       try {
-        await this.redis.set(this.redisHtmlKey(route, variant), html);
-        // pinInRedis skips expire() so the entry never evicts; otherwise it
-        // follows the same ttlSecs policy as JSON snapshots.
+        const key = this.redisHtmlKey(route, variant);
+        // pinInRedis skips the TTL so the entry never evicts; otherwise it
+        // follows the same ttlSecs policy as JSON snapshots. SET...EX is a
+        // single atomic command — a separate SET + expire() pair can leave
+        // an immortal key if the process dies between the two calls.
         if (!pinInRedis && this.ttlSecs > 0) {
-          await this.redis.expire(this.redisHtmlKey(route, variant), this.ttlSecs);
+          await this.redis.send('SET', [key, html, 'EX', String(this.ttlSecs)]);
+        } else {
+          await this.redis.set(key, html);
         }
       } catch (err) { this.warnRedisError('setHtml', route, err); }
     }
@@ -178,8 +182,12 @@ export class KilnCache {
     await atomicWrite(this.diskJsonPath(route, variant), json);
     if (this.redis) {
       try {
-        await this.redis.set(this.redisJsonKey(route, variant), json);
-        if (this.ttlSecs > 0) await this.redis.expire(this.redisJsonKey(route, variant), this.ttlSecs);
+        const key = this.redisJsonKey(route, variant);
+        if (this.ttlSecs > 0) {
+          await this.redis.send('SET', [key, json, 'EX', String(this.ttlSecs)]);
+        } else {
+          await this.redis.set(key, json);
+        }
       } catch (err) { this.warnRedisError('setJson', route, err); }
     }
   }
@@ -273,7 +281,11 @@ export class RedisCache {
   private artifactTtlSecs = 0;
 
   constructor(url: string) {
-    this.client = new BunRedisClient(url);
+    try {
+      this.client = new BunRedisClient(url);
+    } catch (err) {
+      throw new Error(`[kiln] RedisCache: failed to construct Redis client for "${url}": ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   withArtifactTtl(ttlSecs: number): this {
@@ -304,10 +316,9 @@ export class RedisCache {
   async setHtml(route: string, html: string): Promise<void> {
     const key = this.htmlKey(route);
     if (this.artifactTtlSecs > 0) {
-      await Promise.all([
-        this.client.set(key, html),
-        this.client.expire(key, this.artifactTtlSecs),
-      ]);
+      // Single SET...EX command: atomic, so a crash mid-write can never
+      // leave the key without a TTL (the old SET + separate EXPIRE could).
+      await this.client.send('SET', [key, html, 'EX', String(this.artifactTtlSecs)]);
     } else {
       await this.client.set(key, html);
     }
@@ -316,9 +327,16 @@ export class RedisCache {
   async patchSlot(route: string, slot: string, value: string): Promise<void> {
     const key = this.slotKey(route);
     if (this.artifactTtlSecs > 0) {
-      await Promise.all([
-        this.client.send('HSET', [key, slot, value]),
-        this.client.expire(key, this.artifactTtlSecs),
+      // Redis has no single-command atomic "HSET + EXPIRE" (pre-7.4
+      // HEXPIRE sets a per-field TTL, not what we want here), so run both
+      // inside a Lua script — scripts execute atomically in Redis.
+      await this.client.send('EVAL', [
+        "redis.call('HSET', KEYS[1], ARGV[1], ARGV[2]); redis.call('EXPIRE', KEYS[1], ARGV[3]); return 1",
+        '1',
+        key,
+        slot,
+        value,
+        String(this.artifactTtlSecs),
       ]);
     } else {
       await this.client.send('HSET', [key, slot, value]);
@@ -327,17 +345,20 @@ export class RedisCache {
 
   async getSlots(route: string): Promise<Record<string, string>> {
     const result = await this.client.send('HGETALL', [this.slotKey(route)]);
-    return (result as Record<string, string>) || {};
+    if (!result || typeof result !== 'object' || Array.isArray(result)) {
+      if (result != null) {
+        console.warn(`[kiln] RedisCache.getSlots: unexpected HGETALL shape for route "${route}", ignoring`);
+      }
+      return {};
+    }
+    return result as Record<string, string>;
   }
 
   async setJson(route: string, json: any): Promise<void> {
     const key = this.jsonKey(route);
     const value = typeof json === 'string' ? json : JSON.stringify(json);
     if (this.artifactTtlSecs > 0) {
-      await Promise.all([
-        this.client.set(key, value),
-        this.client.expire(key, this.artifactTtlSecs),
-      ]);
+      await this.client.send('SET', [key, value, 'EX', String(this.artifactTtlSecs)]);
     } else {
       await this.client.set(key, value);
     }

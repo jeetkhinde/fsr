@@ -19,7 +19,12 @@ export async function loadHooks(appRoot: string): Promise<KilnHooks> {
   }
   try {
     return await import(pathToFileURL(hooksPath).href);
-  } catch {
+  } catch (err) {
+    // hooksPath exists (checked above) but failed to import — a syntax
+    // error or a throw at module init, not "no hooks file". Silently
+    // treating this the same as "absent" makes a broken hooks.ts
+    // indistinguishable from one that was never written.
+    console.error(`[kiln] failed to load hooks.ts at "${hooksPath}":`, err instanceof Error ? err.message : err);
     return {};
   }
 }

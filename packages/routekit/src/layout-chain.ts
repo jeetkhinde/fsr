@@ -53,16 +53,15 @@ export function composeLayoutChain(
       slotElement
     );
 
-    // Wrap layout in its own layout container if not outermost (i > 0)
-    if (i > 0) {
-      currentElement = react.createElement(
-        'div',
-        { 'data-kiln-layout': layoutPattern, style: { display: 'contents' } },
-        layoutElement
-      );
-    } else {
-      currentElement = layoutElement;
-    }
+    // Wrap every layout level in its own data-kiln-layout container,
+    // including the outermost one — code that walks these markers (fragment
+    // extraction for enhanced navigation, layout signature computation)
+    // expects one per layout level, not all-but-the-outermost.
+    currentElement = react.createElement(
+      'div',
+      { 'data-kiln-layout': layoutPattern, style: { display: 'contents' } },
+      layoutElement
+    );
   }
 
   return currentElement;

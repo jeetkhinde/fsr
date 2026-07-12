@@ -1,6 +1,6 @@
 export class AppError extends Error {
   constructor(
-    public readonly type: 'NotFound' | 'Unauthorized' | 'Validation' | 'Internal' | 'Redirect',
+    public readonly type: 'NotFound' | 'Unauthorized' | 'Forbidden' | 'Validation' | 'Internal' | 'Redirect',
     message: string,
     public readonly status: number
   ) {
@@ -15,6 +15,10 @@ export class AppError extends Error {
 
   static unauthorized(message = 'Unauthorized'): AppError {
     return new AppError('Unauthorized', message, 401);
+  }
+
+  static forbidden(message = 'Forbidden'): AppError {
+    return new AppError('Forbidden', message, 403);
   }
 
   static validation(message: string): AppError {
