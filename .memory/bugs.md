@@ -2,11 +2,13 @@
 
 This file tracks compiler blockers, runtime issues, and type mismatches currently present in the codebase.
 
-> **Last verified**: 2026-07-12 (Gemini-audit verification + fix pass, branch `fix/gemini-audit-round2`). `tsc --noEmit` clean across every package (`core`, `live`, `engine`, `routekit`, `adapter-elysia`, `react`, `cli`, `create-kiln`, `client`). Unit suite: **144 pass, 0 fail**.
+> **Last verified**: 2026-07-12 (Gemini-audit verification + fix pass, branch `fix/gemini-audit-round2`, 2 commits). `tsc --noEmit` clean across every package (`core`, `live`, `engine`, `routekit`, `adapter-elysia`, `react`, `cli`, `create-kiln`, `client`). Unit suite: **149 pass, 0 fail**. Also re-verified `store.test.ts`, `hub.test.ts`, `db-notify.test.ts`, `watcher.test.ts` directly against a real Postgres in this environment (all pass) — these are excluded from `test:unit` but exercise files this pass touched.
 
 ## 0. Fixed in the 2026-07-12 audit (branch `fix/gemini-audit-round2`)
 
-Source: an external (Gemini) audit produced a 159-item list across 4 sections; each item was independently re-verified against the actual source (not taken on faith — roughly a third of the original claims were false, mischaracterized, or already-fixed). Every item confirmed real and reasonably safe to fix in an automated pass is listed below; deeper architectural items (per-worker `activeConnectionsCount`, unbounded `list-chunk-cache.ts`, `schema.ts` re-running its backfill UPDATE on every `initialize()`) were flagged but left alone pending a design decision, not silently dropped.
+Source: an external (Gemini) audit produced a 159-item list across 4 sections; each item was independently re-verified against the actual source (not taken on faith — roughly a third of the original claims were false, mischaracterized, or already-fixed).
+
+**Commit 1** — every item confirmed real and safe to fix mechanically:
 
 *   **`defineConfig` could corrupt the shared `DEFAULT_CONFIG` singleton** — the deprecated `config.live` → `config.fsr` bridging mutated `merged.fsr` in place; when only `config.live` was passed (not `config.fsr`), `merged.fsr` still aliased `DEFAULT_CONFIG.fsr` from the initial shallow spread, so the mutation corrupted the shared default for every subsequent `defineConfig()` call in the process. `merged.fsr` is now unconditionally a fresh object. (`packages/core/src/config.ts`)
 *   **`i18n.locale()` never actually negotiated a language** — passed the raw, unsplit `Accept-Language` header (e.g. `"en-US,en;q=0.9,fr;q=0.8"`) to `negotiateLanguages` as a single locale tag, which essentially never matches. Now splits/strips q-values first. (`packages/core/src/i18n.ts`)
@@ -41,6 +43,12 @@ Source: an external (Gemini) audit produced a 159-item list across 4 sections; e
 *   Added `CHANGELOG.md`, `CONTRIBUTING.md` (repo root) and `examples/address-book/README.md` (none existed). Added `AppError.forbidden()` (403) alongside the existing status helpers.
 
 **Investigated and explicitly not changed**: the audit's item claiming `examples/address-book/tests/routes.test.ts` needs a live Postgres connection (and should be excluded from `test:unit` like its sibling integration test) was **wrong** — ran it directly, it passes cleanly with no DB. Left in the unit suite as-is.
+
+**Commit 2** — the 3 items deferred from commit 1 as needing a design decision, resolved:
+
+*   **`hub.ts`'s `activeConnectionsCount` was per-process only** — each worker in a multi-process deployment enforced `maxConnections` independently, so the real cluster-wide cap was `maxConnections × workerCount`. Added Redis-backed atomic admission (INCR-then-correct: INCR is atomic, and a connection that overshoots the limit gets immediately DECRemented back) used whenever a Redis client is configured; falls back to the local counter otherwise or on a Redis error (fails open rather than blocking the SSE stream on a cache outage). Kept the no-Redis path fully synchronous rather than routing both paths through one async wrapper — a first attempt at this added a microtask hop to the common (no-Redis) path and broke a timing-sensitive test in `hub.test.ts`, caught by running it against real Postgres, not just `tsc`.
+*   **`InMemoryListChunkCache` was an unbounded `Map`** — currently unused anywhere in the codebase (not a live leak today), but not safe to wire up as-is. Added LRU bounding (a `Map` already preserves insertion order, so re-inserting on every read/write keeps recency for free) and a new `list-chunk-cache.test.ts` (had zero coverage before, including the eviction/LRU-touch behavior).
+*   **`schema.ts`'s `last_requested_at` backfill `UPDATE` re-ran its `WHERE` clause on every `store.initialize()`** (i.e. every process start), paying a full-ish scan for zero matching rows after the first run on a large table. Added a partial index over exactly the rows still needing backfill (`WHERE last_requested_at IS NULL`) — stays empty once backfilled, so the repeat `UPDATE` becomes a near-free index scan of nothing instead of a sequential scan. Purely additive/declarative SQL, no application-level migration-versioning logic needed.
 
 ## 1. Fixed in the 2026-07-10 audit (branch `fix/audit-fixes`)
 
