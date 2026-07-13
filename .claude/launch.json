@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "kiln-dev",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["run", "--cwd", "test-app", "dev"],
+      "port": 3000
+    },
+    {
+      "name": "kiln-start",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "cd test-app && bunx kiln start"],
+      "port": 3000
+    }
+  ]
+}

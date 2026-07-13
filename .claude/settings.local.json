@@ -24,7 +24,19 @@
       "Bash(bun add *)",
       "Bash(git -C /Users/jagjeet/Development/workspace/fsr add packages/engine/src/baking.ts packages/engine/src/baking-fragment.test.ts packages/engine/package.json packages/engine/bun.lock)",
       "Bash(git -C /Users/jagjeet/Development/workspace/fsr commit -m ' *)",
-      "Bash(git *)"
+      "Bash(git *)",
+      "Skill(artifact-design)",
+      "Skill(artifact-design:*)",
+      "Bash(bun run *)",
+      "Skill(commit-commands:commit)",
+      "Skill(commit-commands:commit:*)",
+      "Skill(claude-api)",
+      "Skill(claude-api:*)",
+      "mcp__codebase-memory-mcp__get_architecture",
+      "mcp__codebase-memory-mcp__search_graph",
+      "mcp__codebase-memory-mcp__detect_changes",
+      "mcp__codebase-memory-mcp__list_projects",
+      "mcp__codebase-memory-mcp__index_repository"
     ]
   }
 }
