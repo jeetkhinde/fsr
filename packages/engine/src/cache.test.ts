@@ -110,7 +110,11 @@ describe('KilnCache', () => {
     it('sanitises variant strings for disk/redis safety', () => {
       const p = cache.diskHtmlPath('/x', 'user:42/evil/../path');
       expect(p).not.toContain(':');
-      expect(p).not.toContain('/../');
+      // Assert on the traversal token itself, not just '/../' — safeVariant
+      // strips dots entirely, so a '..' surviving anywhere in the variant
+      // segment is the real invariant to guard (a regex that kept dots would
+      // pass '/../' but still leave '..').
+      expect(p).not.toContain('..');
     });
   });
 
