@@ -16,7 +16,7 @@ describe.skipIf(!process.env.DATABASE_URL)('better-auth integration', () => {
       email: EMAIL,
       password: 'itest-password-1',
       name: 'ITest',
-      role: 'member',
+      role: 'user',
       handle: 'itest',
     });
 
@@ -36,7 +36,7 @@ describe.skipIf(!process.env.DATABASE_URL)('better-auth integration', () => {
     });
     expect(session?.user.email).toBe(EMAIL);
     expect((session?.user as any).handle).toBe('itest');
-    expect((session?.user as any).role).toBe('member');
+    expect((session?.user as any).role).toBe('user');
   });
 
   it('rejects public sign-up (disableSignUp)', async () => {

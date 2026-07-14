@@ -22,25 +22,31 @@ export const auth = betterAuth({
   },
   user: {
     additionalFields: {
-      role: { type: 'string', defaultValue: 'member', input: false },
+      role: { type: 'string', defaultValue: 'user', input: false },
       handle: { type: 'string', required: false, input: false },
     },
   },
   plugins: [admin()],
 });
 
+/** App role hierarchy: superadmin > admin > user. `superadmin` is the first
+ * user and is immutable; `admin` manages admins and users but never a
+ * superadmin; `user` is a regular member. */
+export type AppRole = 'superadmin' | 'admin' | 'user';
+
 /**
  * Server-side user creation for bootstrap + invite acceptance (public sign-up
  * is disabled). The better-auth admin plugin types `role` as its own enum
- * ('admin' | 'user'); this app's domain role is 'admin' | 'member'. The DB
- * column is TEXT and better-auth stores the string verbatim at runtime — the
- * cast only reconciles the compile-time types. See .memory/bugs.md.
+ * ('admin' | 'user'), which doesn't include the app's 'superadmin'/'user'
+ * vocabulary; the role column is TEXT and better-auth stores the string
+ * verbatim at runtime, so the cast only reconciles compile-time types.
+ * See .memory/bugs.md.
  */
 export function createAppUser(input: {
   email: string;
   password: string;
   name: string;
-  role: 'admin' | 'member';
+  role: AppRole;
   handle: string;
 }) {
   return auth.api.createUser({

@@ -31,7 +31,20 @@ export const actions = {
     const [taken] = await sql`SELECT 1 AS x FROM "user" WHERE lower(handle) = ${handle}`;
     if (taken) throw AppError.redirect(`/invite/${token}?error=handle-taken`);
 
-    await createAppUser({ email: invite.email, password, name, role: invite.role, handle });
+    // The invite targets a specific email. If an account already exists for
+    // it, show a friendly "sign in instead" message rather than letting
+    // better-auth's unique-email violation surface as a raw 500 (#4).
+    const [emailExists] = await sql`SELECT 1 AS x FROM "user" WHERE lower(email) = ${invite.email.toLowerCase()}`;
+    if (emailExists) throw AppError.redirect(`/invite/${token}?error=email-exists`);
+
+    try {
+      await createAppUser({ email: invite.email, password, name, role: invite.role, handle });
+    } catch (err) {
+      // Lost a race (concurrent accept, or the email/handle was claimed
+      // between the checks above and here) — stay graceful, never a 500.
+      if (err instanceof AppError) throw err;
+      throw AppError.redirect(`/invite/${token}?error=email-exists`);
+    }
     await markInviteUsed(token);
     throw AppError.redirect('/login?welcome=1');
   },
@@ -41,6 +54,7 @@ const ERRORS: Record<string, string> = {
   name: 'Enter your name.',
   handle: 'Handle must be 2–32 characters: a–z, 0–9, dashes.',
   'handle-taken': 'That handle is taken.',
+  'email-exists': 'An account already exists for this email — sign in instead.',
   password: 'Password must be at least 8 characters.',
 };
 
