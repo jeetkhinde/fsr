@@ -93,7 +93,14 @@ export interface CacheConfig {
    * set, all keys/channels are prefixed `kiln:<namespace>:…` instead of
    * `kiln:…`, so multiple Kiln apps sharing one Redis logical DB don't
    * collide on shared route strings (e.g. two apps both caching `/`). Leave
-   * unset for single-app deployments — keys stay `kiln:…` (unchanged). */
+   * unset for single-app deployments — keys stay `kiln:…` (unchanged).
+   *
+   * If the app also constructs its own `RedisCache` (e.g. to hand `redis` /
+   * `watcher` into `startKiln()`, as `examples/address-book` does), pass this
+   * SAME namespace string to that `RedisCache` constructor too — `startKiln()`
+   * only threads it into the `KilnCache` it builds internally, not into an
+   * app-supplied `RedisCache` instance. Mismatched namespaces between the two
+   * would desync the watcher's pub/sub channel from the served cache keys. */
   namespace?: string;
 }
 
