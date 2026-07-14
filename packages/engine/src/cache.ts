@@ -7,21 +7,37 @@ export interface KilnCacheOptions {
   redis: RedisClient | null;
   cacheDir: string;
   ttlSecs: number;
+  /** Optional per-app/deployment namespace. When set, all Redis keys and
+   * pub/sub channels are prefixed `kiln:<namespace>:…` instead of `kiln:…`,
+   * so multiple Kiln apps sharing one Redis logical DB don't collide on
+   * shared route strings (e.g. two apps both caching `/`). Unset keeps the
+   * historical `kiln:…` keys, so existing deployments are unaffected. */
+  namespace?: string;
 }
 
 function safeVariant(v: string): string {
   return v.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
 }
 
+/** Root prefix for every Redis key/channel. `kiln` when no namespace is set
+ * (backward-compatible), else `kiln:<namespace>`. Shared by KilnCache,
+ * RedisCache, and the SSE hub so a given namespace produces one consistent
+ * key space. */
+export function cacheKeyPrefix(namespace?: string): string {
+  return namespace ? `kiln:${namespace}` : 'kiln';
+}
+
 export class KilnCache {
   private redis: RedisClient | null;
   private readonly cacheDir: string;
   private readonly ttlSecs: number;
+  private readonly keyPrefix: string;
 
   constructor(opts: KilnCacheOptions) {
     this.redis = opts.redis;
     this.cacheDir = opts.cacheDir;
     this.ttlSecs = opts.ttlSecs;
+    this.keyPrefix = cacheKeyPrefix(opts.namespace);
   }
 
   diskHtmlPath(route: string, variant?: string): string {
@@ -59,11 +75,18 @@ export class KilnCache {
     return this.diskLayoutHtmlPath(pattern).replace(/\.html$/, '.json');
   }
 
+  /** Namespaced key for the cross-process SSE connection counter. Exposed so
+   * the hub increments a per-namespace counter — two apps sharing one Redis
+   * must not share a connection cap. */
+  fsrConnectionCountKey(): string {
+    return `${this.keyPrefix}:fsr:active-connections`;
+  }
+
   private redisLayoutHtmlKey(pattern: string): string {
-    return `kiln:layout:html:v${BAKED_RENDER_VERSION}:${pattern}`;
+    return `${this.keyPrefix}:layout:html:v${BAKED_RENDER_VERSION}:${pattern}`;
   }
   private redisLayoutJsonKey(pattern: string): string {
-    return `kiln:layout:json:v${BAKED_RENDER_VERSION}:${pattern}`;
+    return `${this.keyPrefix}:layout:json:v${BAKED_RENDER_VERSION}:${pattern}`;
   }
 
   async getLayoutHtml(pattern: string): Promise<string | null> {
@@ -128,11 +151,11 @@ export class KilnCache {
   }
 
   private redisHtmlKey(route: string, variant?: string): string {
-    return variant ? `kiln:html:${route}:v:${safeVariant(variant)}` : `kiln:html:${route}`;
+    return variant ? `${this.keyPrefix}:html:${route}:v:${safeVariant(variant)}` : `${this.keyPrefix}:html:${route}`;
   }
 
   private redisJsonKey(route: string, variant?: string): string {
-    return variant ? `kiln:json:${route}:v:${safeVariant(variant)}` : `kiln:json:${route}`;
+    return variant ? `${this.keyPrefix}:json:${route}:v:${safeVariant(variant)}` : `${this.keyPrefix}:json:${route}`;
   }
 
   async getHtml(route: string, variant?: string): Promise<string | null> {
@@ -279,13 +302,24 @@ import { RedisClient as BunRedisClient } from 'bun';
 export class RedisCache {
   private client: BunRedisClient;
   private artifactTtlSecs = 0;
+  private readonly keyPrefix: string;
 
-  constructor(url: string) {
+  constructor(url: string, namespace?: string) {
+    this.keyPrefix = cacheKeyPrefix(namespace);
     try {
       this.client = new BunRedisClient(url);
     } catch (err) {
       throw new Error(`[kiln] RedisCache: failed to construct Redis client for "${url}": ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  /** Pub/sub channel names — exposed so subscribers (e.g. FsrWatcher) resolve
+   * the same namespaced channel this instance publishes to. */
+  invalidateChannel(): string {
+    return `${this.keyPrefix}:invalidate`;
+  }
+  patchChannel(): string {
+    return `${this.keyPrefix}:patch`;
   }
 
   withArtifactTtl(ttlSecs: number): this {
@@ -298,15 +332,15 @@ export class RedisCache {
   }
 
   private htmlKey(route: string): string {
-    return `kiln:html:${route}`;
+    return `${this.keyPrefix}:html:${route}`;
   }
 
   private slotKey(route: string): string {
-    return `kiln:slot:${route}`;
+    return `${this.keyPrefix}:slot:${route}`;
   }
 
   private jsonKey(route: string): string {
-    return `kiln:json:${route}`;
+    return `${this.keyPrefix}:json:${route}`;
   }
 
   async getHtml(route: string): Promise<string | null> {
@@ -375,11 +409,11 @@ export class RedisCache {
   }
 
   async publishInvalidate(payload: InvalidatePayload): Promise<void> {
-    await this.client.publish('kiln:invalidate', JSON.stringify(payload));
+    await this.client.publish(this.invalidateChannel(), JSON.stringify(payload));
   }
 
   async publishPatch(payload: PatchPayload): Promise<void> {
-    await this.client.publish('kiln:patch', JSON.stringify(payload));
+    await this.client.publish(this.patchChannel(), JSON.stringify(payload));
   }
 
   async deleteRouteKeys(route: string): Promise<void> {

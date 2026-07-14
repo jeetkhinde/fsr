@@ -355,6 +355,9 @@ export class FsrWatcher {
         try {
           if (!this.redis) break;
           subClient = await this.redis.getClient().duplicate();
+          // Subscribe to the same namespaced channel this instance's
+          // RedisCache publishes to (default `kiln:invalidate`).
+          const invalidateChannel = this.redis.invalidateChannel();
 
           reconciliationInterval = setInterval(async () => {
             try {
@@ -376,7 +379,7 @@ export class FsrWatcher {
             signal.addEventListener('abort', onAbort, { once: true });
 
             subClient
-              .subscribe('kiln:invalidate', async (_message: string) => {
+              .subscribe(invalidateChannel, async (_message: string) => {
                 try {
                   await this.watcherTick();
                 } catch (err: any) {
@@ -384,7 +387,7 @@ export class FsrWatcher {
                 }
               })
               .then(() => {
-                console.log('FSR watcher: subscribed to kiln:invalidate');
+                console.log(`FSR watcher: subscribed to ${invalidateChannel}`);
               })
               .catch(reject);
           });

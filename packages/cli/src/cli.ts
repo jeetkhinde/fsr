@@ -43,7 +43,7 @@ async function initFsr(config: KilnConfig): Promise<FsrRuntime> {
   let redisCache: RedisCache | null = null;
   if (config.fsr.redisUrl) {
     consola.info('Initializing FSR Redis cache...');
-    redisCache = new RedisCache(config.fsr.redisUrl);
+    redisCache = new RedisCache(config.fsr.redisUrl, config.cache?.namespace);
     await redisCache.getClient().send('PING', []);
   }
 

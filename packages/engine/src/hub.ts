@@ -52,11 +52,12 @@ function releaseConnectionLocal(): void {
  */
 async function admitConnectionRedis(
   redis: NonNullable<ReturnType<KilnCache['getClient']>>,
-  maxConnections: number
+  maxConnections: number,
+  connCountKey: string
 ): Promise<boolean> {
-  const count = await redis.incr(REDIS_CONN_COUNT_KEY);
+  const count = await redis.incr(connCountKey);
   if (count > maxConnections) {
-    await redis.decr(REDIS_CONN_COUNT_KEY);
+    await redis.decr(connCountKey);
     return false;
   }
   return true;
@@ -96,11 +97,13 @@ export async function* fsrHubStream(options: FsrHubStreamOptions): AsyncGenerato
   // wide cap becomes maxConnections * workerCount). The no-Redis path stays
   // fully synchronous — no added await, no behavior change from before.
   const redisClient = cache?.getClient();
+  // Per-namespace connection counter key (default `kiln:fsr:active-connections`).
+  const connCountKey = cache?.fsrConnectionCountKey() ?? REDIS_CONN_COUNT_KEY;
   let usedRedis = false;
   let admitted: boolean;
   if (redisClient) {
     try {
-      admitted = await admitConnectionRedis(redisClient, config.maxConnections);
+      admitted = await admitConnectionRedis(redisClient, config.maxConnections, connCountKey);
       usedRedis = true;
     } catch (err: any) {
       console.warn('FSR hub: Redis connection-count check failed, falling back to local counter:', err?.message ?? err);
@@ -224,7 +227,7 @@ export async function* fsrHubStream(options: FsrHubStreamOptions): AsyncGenerato
   } finally {
     if (usedRedis && redisClient) {
       try {
-        await redisClient.decr(REDIS_CONN_COUNT_KEY);
+        await redisClient.decr(connCountKey);
       } catch (err: any) {
         console.warn('FSR hub: Redis connection-count release failed:', err?.message ?? err);
       }
