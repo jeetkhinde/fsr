@@ -59,6 +59,51 @@ describe.skipIf(!run)('app auth gate', () => {
 
   it('serves /login without a session', async () => {
     const res = await fetch(BASE + '/login');
-    expect([200, 404]).toContain(res.status); // 404 until Task 5 adds the page; Task 5 tightens to 200 + content
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('Sign in');
+  });
+
+  it('logs in via the form endpoint, loads home, logs out', async () => {
+    const form = new URLSearchParams({ email: EMAIL, password: PASSWORD });
+    const login = await fetch(BASE + '/auth/login', {
+      method: 'POST',
+      body: form,
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        origin: BASE, // Kiln CSRF middleware checks origin on form POSTs
+      },
+      redirect: 'manual',
+    });
+    expect(login.status).toBe(303);
+    expect(login.headers.get('location')).toBe('/');
+    const cookies = login.headers
+      .getSetCookie()
+      .map((c) => c.split(';')[0])
+      .join('; ');
+    expect(cookies).toContain('better-auth');
+
+    const home = await fetch(BASE + '/', { headers: { cookie: cookies } });
+    expect(home.status).toBe(200);
+    expect(await home.text()).toContain('@gatetest');
+
+    const logout = await fetch(BASE + '/auth/logout', {
+      method: 'POST',
+      headers: { cookie: cookies, origin: BASE },
+      redirect: 'manual',
+    });
+    expect(logout.status).toBe(303);
+    expect(logout.headers.get('location')).toBe('/login');
+  });
+
+  it('rejects a wrong password with a redirect back to /login', async () => {
+    const form = new URLSearchParams({ email: EMAIL, password: 'wrong-password' });
+    const res = await fetch(BASE + '/auth/login', {
+      method: 'POST',
+      body: form,
+      headers: { 'content-type': 'application/x-www-form-urlencoded', origin: BASE },
+      redirect: 'manual',
+    });
+    expect(res.status).toBe(303);
+    expect(res.headers.get('location')).toBe('/login?error=1');
   });
 });
