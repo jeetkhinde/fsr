@@ -9,9 +9,14 @@ import {
 import { startKiln } from '@kiln/routekit';
 import config from '../kiln.config.js';
 import { sql } from '../db/client.js';
+import { auth } from '../lib/auth.js';
 
 async function main() {
   const adapter = new ElysiaAdapter();
+  // better-auth endpoints (sign-in/out, session). NOTE: these are public via
+  // the hooks.ts allowlist — Elysia onRequest intercepts every route
+  // regardless of registration order (verified 2026-07-14).
+  adapter.app.all('/api/auth/*', (ctx: any) => auth.handler(ctx.request));
   const store = new FsrStore(sql);
   const fsrConfig = config.fsr;
   const redis = fsrConfig.redisUrl
