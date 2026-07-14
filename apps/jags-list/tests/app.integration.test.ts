@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { fileURLToPath } from 'node:url';
-import { auth } from '../lib/auth.js';
+import { createAppUser } from '../lib/auth.js';
 import { sql } from '../db/client.js';
 
 const PORT = 3299;
@@ -13,8 +13,8 @@ let proc: ReturnType<typeof Bun.spawn> | null = null;
 describe.skipIf(!run)('app auth gate', () => {
   beforeAll(async () => {
     await sql`DELETE FROM "user" WHERE email = ${EMAIL}`;
-    await auth.api.createUser({
-      body: { email: EMAIL, password: PASSWORD, name: 'Gate Test', role: 'member', data: { handle: 'gatetest' } },
+    await createAppUser({
+      email: EMAIL, password: PASSWORD, name: 'Gate Test', role: 'member', handle: 'gatetest',
     });
     proc = Bun.spawn(['bun', 'src/main.ts'], {
       cwd: fileURLToPath(new URL('..', import.meta.url)),

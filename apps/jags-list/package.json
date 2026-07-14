@@ -10,7 +10,7 @@
     "auth:migrate": "bunx @better-auth/cli@latest migrate -y",
     "bootstrap-admin": "bun scripts/bootstrap-admin.ts",
     "test": "bun test tests/smoke.test.ts",
-    "test:db": "bun --env-file=.env test db/schema.integration.test.ts lib/auth.integration.test.ts db/invites.integration.test.ts",
+    "test:db": "bun --env-file=.env test db/schema.integration.test.ts && bun --env-file=.env test lib/auth.integration.test.ts && bun --env-file=.env test db/invites.integration.test.ts",
     "test:app": "RUN_APP_TESTS=1 bun --env-file=.env test tests/app.integration.test.ts"
   },
   "dependencies": {

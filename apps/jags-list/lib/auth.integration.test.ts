@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'bun:test';
-import { auth } from './auth.js';
+import { auth, createAppUser } from './auth.js';
 import { sql } from '../db/client.js';
 
 const EMAIL = 'auth-itest@example.com';
@@ -12,14 +12,12 @@ describe.skipIf(!process.env.DATABASE_URL)('better-auth integration', () => {
 
   it('creates a user with role + handle, signs in, resolves the session', async () => {
     await sql`DELETE FROM "user" WHERE email = ${EMAIL}`;
-    await auth.api.createUser({
-      body: {
-        email: EMAIL,
-        password: 'itest-password-1',
-        name: 'ITest',
-        role: 'member',
-        data: { handle: 'itest' },
-      },
+    await createAppUser({
+      email: EMAIL,
+      password: 'itest-password-1',
+      name: 'ITest',
+      role: 'member',
+      handle: 'itest',
     });
 
     const res = await auth.api.signInEmail({

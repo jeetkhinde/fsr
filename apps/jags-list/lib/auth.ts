@@ -28,3 +28,28 @@ export const auth = betterAuth({
   },
   plugins: [admin()],
 });
+
+/**
+ * Server-side user creation for bootstrap + invite acceptance (public sign-up
+ * is disabled). The better-auth admin plugin types `role` as its own enum
+ * ('admin' | 'user'); this app's domain role is 'admin' | 'member'. The DB
+ * column is TEXT and better-auth stores the string verbatim at runtime — the
+ * cast only reconciles the compile-time types. See .memory/bugs.md.
+ */
+export function createAppUser(input: {
+  email: string;
+  password: string;
+  name: string;
+  role: 'admin' | 'member';
+  handle: string;
+}) {
+  return auth.api.createUser({
+    body: {
+      email: input.email,
+      password: input.password,
+      name: input.name,
+      role: input.role as 'admin' | 'user',
+      data: { handle: input.handle },
+    },
+  });
+}

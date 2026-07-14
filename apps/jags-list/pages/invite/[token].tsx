@@ -1,7 +1,7 @@
 import React from 'react';
 import { AppError, type KilnRequest } from '@kiln/core';
 import { sql } from '../../db/client.js';
-import { auth } from '../../lib/auth.js';
+import { createAppUser } from '../../lib/auth.js';
 import { findValidInvite, markInviteUsed } from '../../db/invites.js';
 import { validHandle, validPassword } from '../../db/validation.js';
 
@@ -31,9 +31,7 @@ export const actions = {
     const [taken] = await sql`SELECT 1 AS x FROM "user" WHERE lower(handle) = ${handle}`;
     if (taken) throw AppError.redirect(`/invite/${token}?error=handle-taken`);
 
-    await auth.api.createUser({
-      body: { email: invite.email, password, name, role: invite.role, data: { handle } },
-    });
+    await createAppUser({ email: invite.email, password, name, role: invite.role, handle });
     await markInviteUsed(token);
     throw AppError.redirect('/login?welcome=1');
   },
