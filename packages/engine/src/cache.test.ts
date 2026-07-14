@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { KilnCache } from './cache.js';
+import { KilnCache, RedisCache, cacheKeyPrefix } from './cache.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
@@ -208,6 +208,18 @@ describe('KilnCache', () => {
       expect(redis.expireCalls).toEqual([{ key: 'kiln:html:/contacts', secs: 60 }]);
     });
 
+    it('prefixes every Redis key with the namespace so two apps do not collide on the same route', async () => {
+      const redis = createMockRedis();
+      const nsCache = new KilnCache({ redis: redis as any, cacheDir: tmpDir, ttlSecs: 60, namespace: 'jags-list' });
+      await nsCache.setHtml('/', '<p>app A home</p>');
+      await nsCache.setJson('/', { data: {} });
+      await nsCache.setLayoutHtml('/', '<nav>A</nav>');
+      // Namespaced keys, and the un-namespaced key another app would use is absent.
+      expect(redis.store.get('kiln:jags-list:html:/')).toBe('<p>app A home</p>');
+      expect(redis.store.has('kiln:html:/')).toBe(false);
+      expect([...redis.store.keys()].every((k) => k.startsWith('kiln:jags-list:'))).toBe(true);
+    });
+
     it('skips TTL expiry (permanent pin) when pinInRedis is true', async () => {
       const redis = createMockRedis();
       const redisCache = new KilnCache({ redis: redis as any, cacheDir: tmpDir, ttlSecs: 60 });
@@ -276,5 +288,31 @@ describe('KilnCache', () => {
         console.warn = originalWarn;
       }
     });
+  });
+});
+
+describe('cache namespacing', () => {
+  it('cacheKeyPrefix is bare "kiln" without a namespace and "kiln:<ns>" with one', () => {
+    expect(cacheKeyPrefix()).toBe('kiln');
+    expect(cacheKeyPrefix(undefined)).toBe('kiln');
+    expect(cacheKeyPrefix('jags-list')).toBe('kiln:jags-list');
+  });
+
+  it('KilnCache.fsrConnectionCountKey is namespaced so apps do not share a connection cap', () => {
+    const plain = new KilnCache({ redis: null, cacheDir: '/tmp/x', ttlSecs: 0 });
+    const ns = new KilnCache({ redis: null, cacheDir: '/tmp/x', ttlSecs: 0, namespace: 'jags-list' });
+    expect(plain.fsrConnectionCountKey()).toBe('kiln:fsr:active-connections');
+    expect(ns.fsrConnectionCountKey()).toBe('kiln:jags-list:fsr:active-connections');
+  });
+
+  it('RedisCache pub/sub channels are namespaced so publisher and subscriber match per app', () => {
+    // Constructing does not connect (BunRedisClient connects lazily); the
+    // channel getters never touch the socket.
+    const plain = new RedisCache('redis://localhost:6379');
+    const ns = new RedisCache('redis://localhost:6379', 'jags-list');
+    expect(plain.invalidateChannel()).toBe('kiln:invalidate');
+    expect(plain.patchChannel()).toBe('kiln:patch');
+    expect(ns.invalidateChannel()).toBe('kiln:jags-list:invalidate');
+    expect(ns.patchChannel()).toBe('kiln:jags-list:patch');
   });
 });

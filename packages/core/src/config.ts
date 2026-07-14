@@ -89,6 +89,12 @@ export interface CacheConfig {
   url?: string;
   path?: string;
   dir?: string;
+  /** Per-app/deployment namespace for Redis keys and pub/sub channels. When
+   * set, all keys/channels are prefixed `kiln:<namespace>:…` instead of
+   * `kiln:…`, so multiple Kiln apps sharing one Redis logical DB don't
+   * collide on shared route strings (e.g. two apps both caching `/`). Leave
+   * unset for single-app deployments — keys stay `kiln:…` (unchanged). */
+  namespace?: string;
 }
 
 export interface KilnConfig {

@@ -44,6 +44,8 @@ export interface CacheOptions {
   redis: any | null;
   cacheDir: string;
   ttlSecs: number;
+  /** See CacheConfig.namespace — prefixes Redis keys/channels `kiln:<ns>:…`. */
+  namespace?: string;
 }
 
 export interface StartKilnOptions {
@@ -868,15 +870,17 @@ export async function startKiln(
 
   // 2. Build cache options from config
   const cacheRedisUrl = provider === 'redis' ? (config.cache?.url ?? config.fsr?.redisUrl) : config.fsr?.redisUrl;
+  const cacheNamespace = config.cache?.namespace;
   const redisClient =
     options.redis?.getClient?.() ??
-    (cacheRedisUrl ? new RedisCache(cacheRedisUrl).getClient() : null);
+    (cacheRedisUrl ? new RedisCache(cacheRedisUrl, cacheNamespace).getClient() : null);
   const cacheOpts: CacheOptions = {
     redis: redisClient,
     cacheDir: config.cache?.dir ?? '.kiln-cache',
     // Governs Redis expiry of non-pinned entries — without it, variant keys
     // created by cacheKey pages would accumulate in Redis forever.
-    ttlSecs: config.fsr?.artifactTtlSecs ?? 0
+    ttlSecs: config.fsr?.artifactTtlSecs ?? 0,
+    namespace: cacheNamespace
   };
   const hubCache = new KilnCache(cacheOpts);
 
