@@ -37,8 +37,8 @@ Everything else (validation, sessions gating, mentions parsing, fractional order
 
 **Registration order (load-bearing):**
 
-1. `adapter.app.mount('/api/auth', auth.handler)` — better-auth's fetch handler, mounted **before** `startKiln()`. Elysia hooks only apply to routes registered after them, so auth endpoints are public by construction.
-2. `startKiln(adapter, config, './pages', { fsr: true, store, watcher, redis })` — applies middleware + `hooks.ts`, then registers all pages, actions, SSE, and assets. Everything Kiln registers is therefore session-gated by `onRequest`, **including promoted-cache serves and the `/__kiln/fsr` SSE endpoint** (verified: `startKiln()` applies `applyServerHooks` before any `registerPage`).
+1. `adapter.app.all('/api/auth/*', (ctx) => auth.handler(ctx.request))` — better-auth's fetch handler on the raw Elysia app. **Correction (verified empirically 2026-07-14):** Elysia's `onRequest` intercepts every route regardless of registration order, so mount order does NOT make these endpoints public — the `hooks.ts` public allowlist does. Also registered directly on Elysia: `POST /auth/login` and `POST /auth/logout` form endpoints, because Kiln actions receive only `req` and cannot set `Set-Cookie` response headers (see §9 gap 3).
+2. `startKiln(adapter, config, './pages', { fsr: true, store, watcher, redis })` — applies middleware + `hooks.ts`, then registers all pages, actions, SSE, and assets. Every route except the public allowlist is session-gated by `onRequest`, **including promoted-cache serves and the `/__kiln/fsr` SSE endpoint** (verified: `onRequest` runs pre-routing on all requests, and returning a `Response` from it short-circuits).
 
 One Postgres database: better-auth tables (managed by `@better-auth/cli migrate`) + app tables (managed by our own SQL migrations in `apps/jags-list/migrations/`, applied by `scripts/migrate.ts`) + `kiln_fsr`.
 
@@ -66,7 +66,7 @@ apps/jags-list/
 - **Bootstrap:** `scripts/bootstrap-admin.ts` creates the first admin (email + password args) via better-auth's server API.
 - **Invites:** admins create invite tokens (app `invites` table: token, email, role, expires_at, used_at). `/invite/:token` (public) renders a sign-up form; its action verifies the token, calls better-auth's sign-up server API, stamps `used_at`. Invalid/expired/used token → 404.
 - **Session gate** in `hooks.ts onRequest`: call `auth.api.getSession({ headers })`. Attach the session user to the request context for pages/actions. Unauthenticated: redirect page requests to `/login`, return 401 JSON for JSON requests.
-- **Public path allowlist** (no session required): `/login`, `/invite/:token`, `/_silcrow/*`, `/_kiln/*`, `/assets/*`, `/favicon.ico`. `/api/auth/*` is public by mount order, not by allowlist. The SSE endpoint `/__kiln/fsr` is deliberately **not** on the allowlist — it carries team data and stays session-gated.
+- **Public path allowlist** (no session required): `/api/auth/*`, `/auth/login`, `/auth/logout`, `/login`, `/invite/:token`, `/_silcrow/*`, `/_kiln/*`, `/assets/*`, `/favicon.ico`. The allowlist is the sole public-access mechanism (registration order does not matter — verified). The SSE endpoint `/__kiln/fsr` is deliberately **not** on the allowlist — it carries team data and stays session-gated.
 - **Permission rule (complete):** admins may create invites, archive/delete projects, and delete columns. Members may do everything else — including all task/comment/label/subtask operations and deleting their own comments. There are no per-project permissions in v1.
 
 ## 5. Data model
@@ -164,7 +164,8 @@ Building this app is expected to hit these; each becomes its own Kiln issue/PR w
 
 1. **Store-target `Live.list`.** Islands consume live data through Silcrow store atoms, but store publishing is documented for scalar `LiveProp`s only. The board island needs live *list* diffs in the store. If unsupported, extend the list-broadcast path to publish diffs to `live:<field>` atoms.
 2. **Per-user live fields on shared pages.** A promoted page's SSE fields are fixed at bake time, so a shared shell can't carry `notifications:user_id=<me>` deps. v1 works around it (bell fetch-on-hydrate + refetch on navigation); the framework fix is user/session-scoped SSE channels.
-3. **(Watch list)** `cache_key` variants don't support live updates (documented); auth-varying pages avoid `cache_key` in this design, but if we ever want per-user cached pages, this gap is next.
+3. **Actions cannot touch the response.** `buildActionHandler` invokes actions as `actions[name](req)` — no `res`, so an action can't set cookies or headers. This forces auth form endpoints (login/logout) off the actions system onto raw Elysia routes. Framework fix: pass a response handle (or a returnable headers bag) to actions.
+4. **(Watch list)** `cache_key` variants don't support live updates (documented); auth-varying pages avoid `cache_key` in this design, but if we ever want per-user cached pages, this gap is next.
 
 ## 10. Error handling and permissions
 
