@@ -103,3 +103,44 @@ All found by a systematic read of every package (not by tests failing). One-line
 
 ## 4. Playwright E2E Skips
 *   The Playwright testing suite inside `examples/address-book` has an intentional desktop browser skip configured in its test suite that needs monitoring.
+
+## Jag's List findings (Plan 1 execution, 2026-07-14)
+
+### Redis cache keys are not namespaced per app/deployment
+`RedisCache` keys are `kiln:html:<route>`, `kiln:layout:html:<pattern>`, etc.
+— no app/deployment prefix. Two Kiln apps sharing one Redis logical DB
+collide on shared route strings (e.g. `/`). Observed live: a fresh
+`apps/jags-list` served `test-app`'s cached "Welcome to Kiln.js! DEPLOY V3"
+page for `/` because both used `redis://localhost:6379` db 0.
+Workaround: give each app its own Redis db index (jags-list uses `/3`).
+Framework fix candidate: derive a key prefix from a config `cache.namespace`
+(or app name) so multi-app single-Redis setups don't collide.
+
+### Absent `promote_after` is NOT pure SSR — inherits global default (2)
+boot.ts:135 `const promoteAfter = options.promoteAfter ?? kilnConfig?.fsr?.promoteAfterHits ?? 2;`
+A page that omits `promote_after` falls through to the global
+`fsr.promoteAfterHits` (2), so it is promoted+cached after 2 hits — NOT pure
+SSR. This contradicts features.md ("absent/false → Pure SSR, never cached")
+AND ADR-003 ("absent → SSG"); the three disagree with each other and with the
+code. Impact: silently breaks per-user auth pages — observed a per-user home
+served stale/cross-user after promotion. Correct app-side fix: every
+auth-varying / per-request page MUST `export const promote_after = false`
+(nullish-coalescing preserves `false`, giving true pure SSR). Framework fix
+candidates: (a) make absent === pure SSR so opt-IN to caching is required, or
+(b) at minimum reconcile the docs to the code and add a startup warning when a
+page with a session-reading load() has no explicit promote_after.
+Also: React 19 SSR splits adjacent literal+expression text with `<!-- -->`
+markers (`@{handle}` → `@<!-- -->handle`); interpolate as one node
+(`{`@${handle}`}`) when exact text matters.
+
+### better-auth admin plugin role vocabulary vs app domain
+The admin plugin types `auth.api.createUser({ body: { role } })` as
+`'admin' | 'user'`. Jag's List domain role is `'admin' | 'member'`. At runtime
+better-auth stores the string verbatim (integration tests confirm `member`
+persists and resolves), so this is a compile-time-only mismatch — localized in
+`lib/auth.ts` `createAppUser()` with a single documented cast.
+
+### bun SQL binds JS arrays as malformed Postgres array literals in ANY()
+`sql\`... WHERE email = ANY(${jsArray})\`` throws "malformed array literal"
+(unlike node-postgres, which adapts JS arrays). Use per-element queries or
+`sql\`IN ${sql(arr)}\`` helpers. Hit in test cleanup only.

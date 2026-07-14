@@ -15,3 +15,5 @@ graphify-out/
 .kiln-cache/
 .aider*
 test-results/
+data/
+.remember/

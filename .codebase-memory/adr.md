@@ -1,13 +1,13 @@
-# Architecture Decision Record — FSR.js
+# Architecture Decision Record — Kiln
 
 ## Project Overview
 
-FSR.js is a TypeScript monorepo implementing **Field-Selective Rendering** for the JavaScript/Bun ecosystem. It is the JS port of Kiln's FSR paradigm — no other framework offers field-level rendering granularity at the HTML baking layer.
+Kiln is a TypeScript monorepo implementing **Field-Selective Rendering (FSR)** for the JavaScript/Bun ecosystem — a file-based React framework with field-level rendering granularity at the HTML baking layer. (Formerly named FSR.js; renamed to Kiln.)
 
-**Runtime:** Bun + Elysia  
-**Language:** TypeScript (57 files)  
-**Package manager:** pnpm workspaces  
-**Graph:** 394 nodes, 2641 edges, 11 communities, 41 data flows
+**Runtime:** Bun + Elysia
+**Language:** TypeScript (138 files) + JS/YAML/SQL/Bash/CSS/TOML
+**Package manager:** pnpm workspaces
+**Graph:** 1844 nodes, 3835 edges (via codebase-memory-mcp, current as of commit `52f6efe0`)
 
 ---
 
@@ -15,150 +15,88 @@ FSR.js is a TypeScript monorepo implementing **Field-Selective Rendering** for t
 
 ```
 packages/
-  core/           — Config (defineConfig, loadConfigFromEnv), errors (Result<T>), types, LiveProp primitives
-  engine/         — FsrStore, RedisCache, watcher, baking, hub (SSE), db-notify, schema
-  adapter-elysia/ — ElysiaAdapter, HTTP handlers (action, fsr-hub, fsr-snapshot, live-hub, page), middleware
-  routekit/       — Route discovery, manifest, layout-chain, Vite plugin, live-client-script
-  react/          — useSubmit, useLive hooks, client submission
-  client/         — silcrow.js (auto-injected SSE hub + DOM patcher)
+  core/           — Config (defineConfig, loadConfigFromEnv), errors (Result<T>), types, LiveProp/list/i18n/seed-codec primitives
+  engine/         — KilnCache, FsrStore, watcher, baking, hub (SSE), db-notify, schema, list-store/list-watcher/list-broadcast
+  adapter-elysia/ — ServerAdapter impl (registerPage/registerAction/registerSSE/registerAsset/applyMiddleware/listen)
+  routekit/       — Route discovery, manifest, layout-chain, page-options, Vite plugin, live-client-script, typed-routes, image-handler
+  react/          — useLive, useSubmit hooks, island() wrapper
+  client/         — silcrow.js (auto-injected SSE hub + DOM patcher + islands bootstrap)
+  live/           — Live patch contract: html.ts/json.ts/patch.ts/scalar.ts/list.ts (shared patch format between engine and client)
   cli/            — Dev server bootstrap
-  create-fsr/     — Project scaffolding CLI
+  create-kiln/    — Project scaffolding CLI (formerly create-fsr)
 ```
 
 **Layer model:**
-- `core` → pure primitives, no deps
-- `engine` → stateful (Redis + DB), no HTTP
+- `core` → pure primitives, no deps (high fan-in: 17 in, 0 out)
+- `engine` → stateful (Redis/SQLite/filesystem cache + Postgres), no HTTP (high fan-in: 25 in, 16 out)
+- `live` → shared patch contract, high fan-in, 0 out
 - `adapter-elysia` → HTTP surface, depends on engine + routekit
-- `routekit` → build-time route graph, drives adapter-elysia
+- `routekit` → build-time route graph, drives adapter-elysia (fan-in=4, fan-out=27 — highest fan-out in the graph)
 - `react` / `client` → frontend consumers
 
-**Cross-package call boundaries (by frequency):**
-- `routekit → adapter-elysia` (12 calls) — routes drive handler registration
-- `adapter-elysia → api` (9 calls) — handler delegates to route API layer
-- `engine ↔ cli` (4 calls each direction) — engine bootstrapped by CLI
+**Cross-package call boundaries (by frequency):** `routekit → engine` (14), `routekit → core` (13), `engine → live` (12), `cli → engine` (4), `cli → routekit` (4), `address-book(example) → engine` (4), `address-book → core` (4), `engine → cli` (4).
 
 ---
 
-## ADR-001: Redis is Required Infrastructure
+## ADR-001: Redis is Required for FSR/Live Features Only
 
-**Status:** LOCKED  
-**Decision:** Redis is not optional. No fallback-only mode. Kiln fails to start without a valid `REDIS_URL`.
+**Status:** REVISED 2026-07-08 (original wording was incorrect)
+**Decision:** `CacheConfig.provider` accepts `'memory' | 'filesystem' | 'sqlite' | 'redis'`. Redis is **not** a blanket boot requirement — it's required only when FSR/LiveProp SSE features are active (promoted routes, `Live.value()`, `Live.list()`). A pure SSG/SSR/ISR Kiln app runs fine on SQLite or in-memory cache.
+**Rationale:** Multi-instance deployments with live fields need Redis as a shared cache + pub/sub bus. Single-instance or cache-only deployments don't. `startKiln()` accepts `redis: null` and falls through to disk/SQLite gracefully — the original "Redis is a hard requirement" ADR predated what the code actually enforces.
 
-**Rationale:** Multi-instance deployments require a shared cache layer. Redis provides:
-- Atomic field-level updates (HASH + RedisJSON)
-- Built-in pub/sub replacing all watcher polling
-- Cache persistence surviving restarts (no thundering-herd cold starts)
-- Single shared state across pods — no stale cross-instance reads
-
-**Key class:** `packages/engine/src/cache.ts` → `RedisCache` (hotspot: `disconnect` fan-in=4)
-
-**Redis key schema:**
-```
-kiln:html:<route>   STRING  full baked HTML
-kiln:json:<route>   STRING  baked JSON (if FSR_JSON opted in)
-kiln:slot:<route>   HASH    { slot_name: current_value }
-kiln:meta:<route>   HASH    { version, baked_at, checksum, promoted }
-```
-
-**Pub/sub channels:**
-```
-kiln:invalidate  → watcher receives { route, slots, deps }
-kiln:patch       → SSE hub receives { route, slot, value }
-kiln:promote     → all instances receive { route, promoted: true }
-```
+**Key class:** `packages/engine/src/cache.ts` → `KilnCache`
 
 ---
 
 ## ADR-002: Three-Layer Storage Model
 
-**Status:** LOCKED  
-**Decision:** Redis (serve + bus) → Postgres (truth) → Disk (recovery, optional).
-
-- **Redis:** hot path, source of truth for baked HTML/JSON on promoted routes
-- **Postgres:** `kiln_fsr` metadata, real application data, durable record of what should be cached; managed via Drizzle (`packages/engine/src/schema.ts`)
-- **Disk:** async write-behind from Redis, only used on cold start — never on hot path
+**Status:** LOCKED (disk-tier wording revised 2026-07-07 to match implementation)
+**Decision:** Redis (hot serve + bus) → Postgres (durable source of truth) → Disk (recovery backup). Disk writes are synchronous (part of `setHtml`/`setJson`, not fire-and-forget). Disk reads are the fallback on *any* Redis miss — key absent OR Redis unreachable — not restricted to cold-start boot; the same path covers a mid-process Redis outage.
 
 **DB schema (single table):**
 ```sql
 kiln_fsr (
-  route           TEXT,
-  slot            TEXT,          -- '' = route-level, 'field_name' = slot-level
-  query           TEXT,          -- SQL to re-execute when stale
-  query_params    JSONB,
-  depends_on      TEXT[],
-  stale           BOOLEAN,
-  version         INT,
-  hit_count       INT,
-  promoted        BOOLEAN,
-  promote_after   INT,           -- NULL treated as 0 (SSG)
-  debounce_secs   INT,
-  html_path       TEXT,
-  json_path       TEXT,          -- NULL if JSON not opted in
-  checksum        TEXT,
-  last_hit        TIMESTAMPTZ,
-  purge_after     INT,
+  route, slot,                    -- '' slot = route-level, else field-level
+  query, query_params,            -- SQL to re-execute when stale
+  depends_on TEXT[],
+  stale BOOLEAN, version INT, hit_count INT,
+  promoted BOOLEAN, promote_after INT, debounce_secs INT,
+  html_path TEXT, json_path TEXT, checksum TEXT,
+  last_hit TIMESTAMPTZ, purge_after INT,
   PRIMARY KEY (route, slot)
 )
 ```
 
-**Key store methods (hotspots):** `FsrStore.invalidateDepKey`, `FsrStore.upsertSlot`, `FsrStore.ensureRouteRow` — all fan-in=4 (`packages/engine/src/store.ts`)
+**Redis keys:** `kiln:html:<route>`, `kiln:json:<route>`, `kiln:slot:<route>` (HASH), `kiln:meta:<route>` (HASH), plus pattern-scoped `kiln:layout:html:<pattern>` / `kiln:layout:json:<pattern>` (see ADR-011).
 
 ---
 
 ## ADR-003: Unified Rendering Lifecycle via promote_after
 
-**Status:** LOCKED  
-**Decision:** One integer unifies SSG / ISR / FSR / SSR into a single continuum.
-
+**Status:** LOCKED
+**Decision:** One integer unifies SSG/ISR/FSR/SSR:
 ```
 promote_after absent or 0  → SSG (bake at startup)
 promote_after = 1          → ISR (bake after first request)
 promote_after = N          → FSR (bake after N hits)
-No live file               → pure SSR (existing behaviour, untouched)
+No live descriptors        → pure SSR
 ```
-
-All promoted modes receive surgical field-level patches on dependency change. The only difference is when the first bake occurs.
-
-**Promotion mechanics:** declared per field via `promoteAfter(N)` option, with framework default in config `[fsr].promote_after_hits`. Debounce also declared per field via `patchDebounce(N)`, default in `[fsr].patch_debounce_secs`.
 
 ---
 
 ## ADR-004: Field-Level Granularity — LiveProp vs Static
 
-**Status:** LOCKED  
-**Decision:** Static fields baked directly into HTML (never stored). Watched fields (`LiveProp<T>`) get:
-1. A shell slot in HTML with `s-live="slot_name"` attribute
-2. A row in `kiln_fsr` (slot-level)
-3. Live SSE updates via `kiln:patch` channel
+**Status:** LOCKED
+**Decision:** Static fields baked directly into HTML. `LiveProp<T>` fields get an `s-live="slot_name"` HTML slot and are updated via data-only JSON patches pushed over SSE — never a full re-bake.
 
-**Key primitive:** `packages/core/src/live-prop.ts` → `LiveProp`, `depToString`
-
-**No value column in DB** — source of truth stays in real application tables. `query` + `query_params` stored for re-execution when `stale = TRUE`.
-
-**JSON opt-in:** route-level `FSR_JSON = true` → only `LiveProp` fields baked into JSON; static fields never appear.
+**Key primitive:** `packages/core/src/live-prop.ts`
 
 ---
 
 ## ADR-005: Event-Driven Watcher (No Polling)
 
-**Status:** LOCKED  
-**Decision:** Watcher subscribes to `kiln:invalidate` Redis pub/sub. No polling loop in normal operation.
-
-**Flow on dep change:**
-```
-invalidate(dep) 
-  → UPDATE kiln_fsr SET stale=TRUE WHERE depends_on @> ARRAY[dep]
-  → PUBLISH kiln:invalidate { route, slots, deps }
-  → Watcher receives instantly
-  → Re-executes stored query
-  → Patches Redis slot HASH + re-renders HTML
-  → PUBLISH kiln:patch { route, slot, value }
-  → SSE hub fans out to connected clients
-  → silcrow.js patches DOM via querySelectorAll('[s-live="..."]')
-  → Async disk write (fire and forget)
-```
-
-Polling fallback only if Redis pub/sub connection drops.
+**Status:** LOCKED
+**Decision:** Watchers subscribe to the `kiln:invalidate` Redis channel. Postgres `LISTEN/NOTIFY` triggers watcher reconciliation instantly — no polling loop in normal operation.
 
 **Key files:** `packages/engine/src/watcher.ts`, `packages/engine/src/hub.ts`, `packages/engine/src/db-notify.ts`
 
@@ -166,70 +104,86 @@ Polling fallback only if Redis pub/sub connection drops.
 
 ## ADR-006: s-live HTML Attribute Convention
 
-**Status:** LOCKED  
-**Decision:** `s-live="slot_name"` — consistent with Silcrow's `s-` prefix convention.
-
-Same name end-to-end: field name in code = `s-live` attr = `kiln_fsr` slot = SSE payload key = Redis HASH field.
-
-**List row naming:** `list_field__row_id__field_name` e.g. `ticket_list__42__status`. Same patcher handles it — no special case needed.
+**Status:** LOCKED
+**Decision:** `s-live="slot_name"` — same name end-to-end (code field = attr = DB slot = SSE payload key = Redis HASH field). List rows: `list_name__row_id__field_name` (e.g. `contacts__42__favorite`).
 
 ---
 
 ## ADR-007: HTTP Adapter — Elysia (Bun)
 
-**Status:** LOCKED  
-**Decision:** `adapter-elysia` is the HTTP adapter. `ElysiaAdapter` is the central hotspot (fan-in=3 for `listen`, `applyMiddleware`, `registerAction`).
-
-**Handler surface:**
-- `handlePage` — SSR/FSR page rendering
-- `handleFsrHub` — SSE connection for live updates
-- `handleFsrSnapshot` — snapshot endpoint for cold clients
-- `handleLiveHub` — live hub management
-- `handleAction` — form action handler
-
-**Routes registered:**
-```
-/__kiln/fsr           → FSR hub SSE stream
-/__kiln/fsr/snapshot  → slot snapshot
-/_silcrow/silcrow.js     → auto-injected client script
-/_kiln/live.js        → live client script
-```
-
-**Middleware:** `bodyLimit`, `csrf`, `layoutIntercept`, `timeout`
+**Status:** LOCKED (wording revised 2026-07-10)
+**Decision:** `adapter-elysia` implements the framework-agnostic `ServerAdapter` interface: `registerPage` / `registerAction` / `registerSSE` / `registerAsset` / `applyMiddleware` / `applyServerHooks` / `listen`. Route handlers are closures built by `startKiln()`. Internal endpoints: `/__kiln/fsr` (SSE), `/__kiln/fsr/snapshot` (JSON).
+**Revision note:** earlier standalone `handlePage`/`handleFsrHub`/`handleFsrSnapshot`/`handleAction` functions were unwired placeholder stubs, deleted in the 2026-07-10 audit — don't look for them.
 
 ---
 
 ## ADR-008: Route Discovery — Routekit + Vite Plugin
 
-**Status:** LOCKED  
-**Decision:** `routekit` handles build-time route graph construction via file-system discovery + Vite plugin integration.
+**Status:** LOCKED
+**Decision:** `routekit` compiles the route manifest at build time from the `pages/` directory and constructs layout inheritance chains.
 
-**Key files:** `discover.ts` (FS scan), `manifest.ts` (route manifest), `layout-chain.ts` (layout inheritance), `vite-plugin.ts` (Vite integration), `boot.ts` (runtime bootstrap)
-
-`routekit → adapter-elysia` is the highest-frequency cross-package boundary (12 calls).
+**Key files:** `discover.ts`, `manifest.ts`, `layout-chain.ts`, `vite-plugin.ts`, `boot.ts`, `page-options.ts`, `typed-routes.ts`, `image-handler.ts`
 
 ---
 
 ## ADR-009: React Integration Surface
 
-**Status:** ACTIVE  
-**Decision:** React package provides hooks only — no React-specific rendering engine.
+**Status:** ACTIVE
+**Decision:** React wrapper libraries strictly supply hooks (`useLive`, `useSubmit`) plus the `island()` wrapper (see ADR-014). No custom React server-rendering engine.
 
-- `useSubmit` — form/action submission
-- `useLive` — subscribe to LiveProp updates via SSE
-
-Lives in `packages/react/src/hooks.ts`. Thin layer over the SSE client.
+**Lives in:** `packages/react/src/hooks.ts`, `packages/react/src/island.tsx`
 
 ---
 
-## ADR-010: Dependency Key Model
+## ADR-010: Explicit Dependency Key Model
 
-**Status:** LOCKED  
-**Decision:** Typed dependency keys, not raw strings. `depToString(dep)` serialises to `"table:column=value"` e.g. `"tickets:id=123"`.
+**Status:** LOCKED
+**Decision:** Typed, explicit dependency keys — `dependsOn` arrays map to table structures (e.g. `contacts:id=123`), no magic ORM wrapping. Query dedup: identical SQL + params across multiple `LiveProp` fields executes once.
 
-Developer declares `dependsOn` explicitly on each `LiveProp` field. Framework does not wrap the ORM — Drizzle is used directly. No magic dep tracking.
+---
 
-**Query deduplication:** same SQL + same params across multiple `LiveProp` fields → executes once, all fields populated from single result.
+## ADR-011: Layout-Level (Pattern-Scoped) Caching
+
+**Status:** ACTIVE (scoped to `test-app` only; `examples/address-book` intentionally not migrated)
+**Decision:** Layouts (`_layout.tsx`) cache once per URL *pattern* (`kiln:layout:html:<pattern>`), shared across every route nested under it, instead of being baked into each route's own cache entry. `cache.deleteLayout(pattern)` invalidates the shared layout in one write.
+**Rule:** A layout's `load()` may only read `req.params` for segments its own pattern owns — never `req.query`, never a descendant page's params. Time-varying-but-universal data (e.g. a header counter) must use `LiveProp`/`Live.list`, not plain `load()`. Enforced by convention, not a runtime check.
+**Consistency mechanism:** promoted pages embed a `layoutSignature` (hash fingerprint of the layout cache entries used to assemble them, via `computeLayoutSignature()` in `boot.ts`). A mismatch on cache-hit forces full re-bake — this is what makes `deleteLayout()` alone sufficient to propagate a layout change to every route beneath it, including already-promoted ones.
+**Not migrated:** `examples/address-book`'s `ContactsLayout` reads `req.query.q`/`req.params.id`, violating the rule — intentionally left on the old per-route full-page bake path.
+
+---
+
+## ADR-012: json_first Page Export for JSON-Default Routes
+
+**Status:** ACTIVE (shipped 2026-07-08, commit `7276441`)
+**Decision:** Any page may export `json_first = true` to unconditionally return `load()` data as JSON regardless of `Accept` header, layered on top of existing content negotiation.
+**Rationale:** Replaces the never-wired `apiDir` config — pages in `pages/api/` with `json_first = true` get full routing, typed deps, actions, and FSR support without a separate API directory.
+**Implementation:** `PageDefinition.json_first` (`core/src/types.ts`), `PageOptions.jsonFirst` (`routekit/src/page-options.ts`), guard widened to `wantsJson(req) || options.jsonFirst` (`routekit/src/boot.ts`).
+
+---
+
+## ADR-013: Streaming SSR is Not Needed
+
+**Status:** DECISION (2026-07-08)
+**Decision:** No Streaming SSR, no React Suspense boundaries.
+**Rationale:** Streaming SSR solves "slow `load()` → blank screen." Kiln already solves this at a higher level: promoted routes serve pre-baked HTML instantly; un-promoted routes keep `load()` fast and return a shell + `LiveProp` placeholders that SSE fills after render — handling both initial load and ongoing updates, which streaming alone doesn't.
+
+---
+
+## ADR-014: React Islands over Baked HTML (Store-Bridge Hydration)
+
+**Status:** ACCEPTED 2026-07-10 · Implementation spec: `docs/design/adr-014-react-islands.md`
+**Decision:** Client-side React only through **islands**. Baked HTML stays canonical; interactive components live in `islands/` (sibling of `pages/`), wrapped with `island(Component, name, { hydrate })` from `@kiln/react`, SSR'd into the baked shell inside a `data-kiln-island` marker, hydrated individually by a React-free bootstrap (`/_silcrow/islands.js`). Full-page hydration is prohibited.
+**Invariants (each has a test):**
+1. JS disabled → page still renders fully from baked HTML.
+2. `hydrateRoot` only ever called on island markers, never `document`/`body`/layouts.
+3. Silcrow's DOM patchers never touch inside `[data-kiln-island]`.
+4. Live data inside an island uses `target: 'store'` + `useLiveValue()`; a dom-target `LiveProp` inside an island is a bake-time warning, not auto-tagged.
+5. Hydration props come from the marker (`data-kiln-props`, seed-codec encoded); freshness after that comes only from Silcrow store subscriptions — islands never self-fetch initial data.
+6. Markers embed island *names*, never chunk URLs — bootstrap resolves through a `no-store` manifest (`/_kiln/islands.json`), the deploy-skew defense. A failed chunk gets one guarded reload, then fails static.
+7. Any hydration failure leaves baked HTML intact, emits `kiln:island-error`.
+8. Everything embedded in HTML goes through `encodeSeed`/`decodeSeed` (`@kiln/core/seed-codec`), never bare `JSON.stringify`.
+**Rationale:** Full hydration would hand the DOM to React, overwriting silcrow's surgical patches and re-running the whole tree client-side — rebuilding Next.js on top of FSR while destroying its cost model. Islands keep the store as the single seam between renderers.
+**Consequences:** `BAKED_RENDER_VERSION` bumped to 2 when markers shipped (forced clean re-bake of all cached routes); nested islands, client routers, and Server Components are explicitly out of scope.
 
 ---
 
@@ -237,8 +191,8 @@ Developer declares `dependsOn` explicitly on each `LiveProp` field. Framework do
 
 - Wrapping Drizzle/ORM — developer uses it directly, declares deps explicitly
 - Value storage in `kiln_fsr` — source of truth stays in real DB tables
-- Per-route config files — all config co-located on field declaration
-- Optional Redis mode — Redis is required
+- Streaming SSR / Suspense boundaries (ADR-013)
+- Full-page React hydration (ADR-014)
 - Shared DTOs between frontend and backend — independent type definitions
 
 ---
@@ -252,8 +206,12 @@ Developer declares `dependsOn` explicitly on each `LiveProp` field. Framework do
 | HTTP adapter | `packages/adapter-elysia/src/adapter.ts` |
 | Route discovery | `packages/routekit/src/discover.ts` |
 | LiveProp primitive | `packages/core/src/live-prop.ts` |
-| Redis cache | `packages/engine/src/cache.ts` |
+| Cache (Redis/SQLite/filesystem/memory) | `packages/engine/src/cache.ts` |
 | FSR store | `packages/engine/src/store.ts` |
 | SSE hub | `packages/engine/src/hub.ts` |
-| React hooks | `packages/react/src/hooks.ts` |
+| React hooks + islands | `packages/react/src/hooks.ts`, `packages/react/src/island.tsx` |
+| Live patch contract | `packages/live/src/{html,json,patch,scalar,list}.ts` |
 | Dev CLI | `packages/cli/src/cli.ts` |
+| Scaffolding CLI | `packages/create-kiln/src/cli.ts` |
+
+For the fuller day-to-day source of truth, see `.memory/decisions.md`, `.memory/architecture.md`, and `.memory/features.md` in the repo root — this file is the codebase-memory-mcp-scoped summary of the same decisions.
