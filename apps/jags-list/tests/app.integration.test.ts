@@ -14,7 +14,7 @@ describe.skipIf(!run)('app auth gate', () => {
   beforeAll(async () => {
     await sql`DELETE FROM "user" WHERE email = ${EMAIL}`;
     await createAppUser({
-      email: EMAIL, password: PASSWORD, name: 'Gate Test', role: 'member', handle: 'gatetest',
+      email: EMAIL, password: PASSWORD, name: 'Gate Test', role: 'user', handle: 'gatetest',
     });
     proc = Bun.spawn(['bun', 'src/main.ts'], {
       cwd: fileURLToPath(new URL('..', import.meta.url)),

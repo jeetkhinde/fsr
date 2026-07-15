@@ -2,7 +2,8 @@ import React from 'react';
 import { AppError, type KilnRequest } from '@kiln/core';
 import { sql } from '../db/client.js';
 import { createInvite } from '../db/invites.js';
-import { requireAdmin, requireUser } from '../lib/session.js';
+import type { AppRole } from '../lib/auth.js';
+import { isAtLeastAdmin, requireAdmin, requireUser } from '../lib/session.js';
 import { validEmail } from '../db/validation.js';
 
 // Pure SSR — shows all members and (for admins) an invite form; not shared-cacheable.
@@ -33,7 +34,8 @@ export const actions = {
     const me = await requireAdmin(req);
     const form = await req.formData();
     const email = String(form.get('email') ?? '').trim().toLowerCase();
-    const role = form.get('role') === 'admin' ? 'admin' : 'member';
+    // Invites may grant 'admin' or 'user' only — never 'superadmin'.
+    const role = form.get('role') === 'admin' ? 'admin' : 'user';
     if (!validEmail(email)) throw AppError.redirect('/team?error=email');
     const invite = await createInvite(email, role, me.id);
     throw AppError.redirect(`/team?invited=${invite.token}`);
@@ -46,7 +48,7 @@ export default function TeamPage({
   invited,
   error,
 }: {
-  me: { role: string };
+  me: { role: AppRole };
   members: Member[];
   invited: string | null;
   error: string | null;
@@ -64,11 +66,11 @@ export default function TeamPage({
         {members.map((m) => (
           <li key={m.id}>
             <strong>{m.name}</strong> <span className="handle">{`@${m.handle}`}</span> · {m.email} ·{' '}
-            {m.role ?? 'member'}
+            {m.role === 'superadmin' ? 'superadmin 👑' : m.role ?? 'user'}
           </li>
         ))}
       </ul>
-      {me.role === 'admin' && (
+      {isAtLeastAdmin(me.role) && (
         <form method="post" action="?/createInvite" className="invite-form">
           <h2>Invite someone</h2>
           <label>
@@ -78,7 +80,7 @@ export default function TeamPage({
           <label>
             Role
             <select name="role">
-              <option value="member">Member</option>
+              <option value="user">User</option>
               <option value="admin">Admin</option>
             </select>
           </label>

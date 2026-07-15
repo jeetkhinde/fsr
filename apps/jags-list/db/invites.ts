@@ -5,7 +5,7 @@ export interface Invite {
   id: number;
   token: string;
   email: string;
-  role: 'admin' | 'member';
+  role: 'admin' | 'user';
   expires_at: Date;
   used_at: Date | null;
   created_by: string;
@@ -15,7 +15,7 @@ const INVITE_TTL_DAYS = 7;
 
 export async function createInvite(
   email: string,
-  role: 'admin' | 'member',
+  role: 'admin' | 'user',
   createdBy: string,
 ): Promise<Invite> {
   const token = randomBytes(24).toString('base64url');
