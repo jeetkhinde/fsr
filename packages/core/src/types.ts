@@ -15,6 +15,10 @@ export interface KilnRequest {
   layoutsPresent: string[]; // parsed from X-PS-Present
   raw?: any; // escape hatch for adapter-specific request object
   prebakeNext(path: string): void;
+  /** Per-request scratch space populated by the app's `handle` hook (auth
+   * user/session, request id, etc.) and read by load()/actions. SvelteKit's
+   * `event.locals`. Always an object — the adapter initializes it to `{}`. */
+  locals: Record<string, unknown>;
 }
 
 export interface SSEEvent {
@@ -38,6 +42,23 @@ export interface KilnResponse {
   /** Send raw binary data (images, files). Content-type must be set via headers. */
   binary?(data: Buffer | ArrayBuffer): void;
 }
+
+// ── App request hook ──
+
+/**
+ * The app's per-request hook (`handle` export in hooks.ts), run by the adapter
+ * after it builds the KilnRequest and before the route's load()/action — for
+ * every Kiln-registered route (pages, actions, SSE), including framework-internal
+ * ones. This is the single place to do authentication: attach data by mutating
+ * `req.locals` (e.g. `req.locals.user = ...`), and short-circuit the request by
+ * writing to `res` (`res.redirect('/login')`, or `res.json()` + `res.status`).
+ * If `res.bodyType` is set when it returns, the adapter sends that response and
+ * skips the route handler. Return without touching `res` to continue.
+ *
+ * Adapter-agnostic by design: it receives the generic KilnRequest/KilnResponse,
+ * never an Elysia context, so the contract holds across adapters.
+ */
+export type KilnHandle = (req: KilnRequest, res: KilnResponse) => void | Promise<void>;
 
 // ── Middleware Configuration ──
 
@@ -75,8 +96,10 @@ export interface ServerAdapter {
   /** Apply all middleware */
   applyMiddleware(config: MiddlewareConfig): void;
 
-  /** Load and apply the project's server hooks file (hooks.ts at appRoot:
-   * onRequest/onError/onStart/onStop), when the adapter supports it. */
+  /** Load and apply the project's server hooks file (hooks.ts at appRoot):
+   * the per-request `handle` hook plus lifecycle `onError`/`onStart`/`onStop`,
+   * when the adapter supports it. `handle` runs inside the request path (see
+   * KilnHandle); the rest wire into the adapter's server lifecycle. */
   applyServerHooks?(appRoot: string): Promise<void>;
 
   /** Start the server. `host` binds a specific interface (default adapter-chosen). */

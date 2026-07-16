@@ -13,6 +13,7 @@ describe('types', () => {
       json: async () => ({}),
       isEnhanced: false,
       layoutsPresent: [],
+      locals: {},
       prebakeNext: (_path: string) => {},
     } satisfies KilnRequest;
     expect(req.prebakeNext).toBeDefined();

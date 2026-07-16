@@ -85,6 +85,13 @@ This file documents the major architecture decisions and developer experience (D
 *   **Division of labor**: Kiln owns rendering, caching, transport, data, navigation, and the store. React owns interactivity inside declared islands, always reading through the store. App-scoped React libraries (TanStack Query, Redux) integrate by hydrating from the seed and subscribing to `live:*` store publishes — never by owning fetching.
 *   **Consequences**: `BAKED_RENDER_VERSION` bumps to 2 when markers ship (forces clean re-bake of all cached routes); `applyLivePropMarkers` stops tagging store-target fields; a new `islands/` app directory convention; nested islands, client routers, and Server Components are explicitly out of scope (see spec non-goals).
 
+### ADR-015: App request hook (`handle`) + `req.locals`
+*   **Status**: ACCEPTED 2026-07-16 · **Agent guide**: `docs/agents/auth.md`
+*   **Decision**: Apps express per-request policy (auth, request-id, logging) through a single `handle(req: KilnRequest, res: KilnResponse)` export in `hooks.ts` (the `KilnHandle` type in `@kiln/core`), and carry per-request data forward via a required `locals: Record<string, unknown>` field on `KilnRequest`. The adapter runs `handle` after it builds the `KilnRequest` and before every Kiln-registered route's `load()`/action (pages, actions, SSE, including framework-internal routes); `handle` mutates `req.locals` to attach data and writes to `res` (redirect/json) to short-circuit — if `res.bodyType` is set on return, the adapter sends it and skips the route handler. This is SvelteKit's `handle` + `event.locals`.
+*   **Replaces**: the earlier Elysia-coupled `KilnHooks.onRequest(ctx)` (raw Elysia context, ran outside the Kiln request path, couldn't populate a `KilnRequest`). `onError`/`onStart`/`onStop` remain adapter-lifecycle hooks.
+*   **Rationale**: the auth gate and the `load()` that needs the user sat on opposite sides of `wrapRequest`, forcing every protected page to re-resolve the session. `handle` resolves it once into `req.locals`; `requireUser(req)` becomes a sync read. Chokepoint is the **adapter** (not `buildPageHandler`) so one allowlist gates framework-internal routes too — no regression exposing `/__kiln/inspect` or the FSR SSE stream. Contract lives in core (`KilnRequest`/`KilnResponse`), never an Elysia macro, so it holds across adapters.
+*   **Consequences**: `KilnRequest` gains a required `locals` field — every synthetic request literal must set it (`{}`). Layout loads and startup prebakes set `locals: {}` **deliberately empty** (cache-safety: a baked layout must not embed one user's data). Auth-dependent pages must be `promote_after = false`.
+
 ---
 
 ## Critical DX Rules & Conventions

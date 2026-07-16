@@ -16,6 +16,7 @@ You are writing application code with the Kiln framework. The full, source-verif
    - POST/mutations, forms, `useSilcrowForm` → `docs/agents/actions-and-forms.md`
    - Real-time fields + React interactivity → `docs/agents/live-and-islands.md`
    - SSG/ISR/FSR/SSR, caching, Redis → `docs/agents/rendering-and-caching.md`
+   - Auth: `handle` hook, `req.locals`, mounting an auth library → `docs/agents/auth.md`
    - **Always skim** `docs/agents/gotchas.md` before assuming a feature exists.
 
 ## Five things to get right

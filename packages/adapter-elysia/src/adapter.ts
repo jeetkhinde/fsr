@@ -1,5 +1,5 @@
 import { Elysia, sse, file } from 'elysia';
-import type { ServerAdapter, KilnRequest, KilnResponse, MiddlewareConfig, SSEEvent } from '@kiln/core';
+import type { ServerAdapter, KilnRequest, KilnResponse, KilnHandle, MiddlewareConfig, SSEEvent } from '@kiln/core';
 import { wrapRequest, ElysiaResponseImpl, handleElysiaResponse } from './context.js';
 import { csrf, timeout, withTimeout, compression, tracing, loadHooks, serverHooks } from './middleware/index.js';
 export class ElysiaAdapter implements ServerAdapter {
@@ -8,6 +8,18 @@ export class ElysiaAdapter implements ServerAdapter {
   // streams are exempt — they're long-lived by design). An app-level
   // derive() cannot cancel a running handler, so the deadline lives here.
   private timeoutMs = 30000;
+  // The app's per-request handle hook (from hooks.ts), run after wrapRequest
+  // and before every route's handler so it can populate req.locals and gate.
+  private appHandle?: KilnHandle;
+
+  /** Run the app handle hook (if set). Returns true when it wrote a response
+   * (res.bodyType set) — i.e. it short-circuited and the route handler must be
+   * skipped; the caller sends `res` via handleElysiaResponse. */
+  private async runHandle(req: KilnRequest, res: ElysiaResponseImpl): Promise<boolean> {
+    if (!this.appHandle) return false;
+    await this.appHandle(req, res);
+    return res.bodyType !== undefined;
+  }
 
   constructor(options?: { elysia?: Elysia; bodyLimitBytes?: number }) {
     const limitBytes = options?.bodyLimitBytes ?? 2 * 1024 * 1024;
@@ -22,6 +34,7 @@ export class ElysiaAdapter implements ServerAdapter {
     this.app.get(pattern, async (ctx) => {
       const req = wrapRequest(ctx);
       const res = new ElysiaResponseImpl(ctx);
+      if (await this.runHandle(req, res)) return handleElysiaResponse(res, ctx);
       await withTimeout(handler(req, res), this.timeoutMs);
       return handleElysiaResponse(res, ctx);
     });
@@ -34,6 +47,7 @@ export class ElysiaAdapter implements ServerAdapter {
     this.app.post(pattern, async (ctx) => {
       const req = wrapRequest(ctx);
       const res = new ElysiaResponseImpl(ctx);
+      if (await this.runHandle(req, res)) return handleElysiaResponse(res, ctx);
       await withTimeout(handler(req, res), this.timeoutMs);
       return handleElysiaResponse(res, ctx);
     });
@@ -43,9 +57,19 @@ export class ElysiaAdapter implements ServerAdapter {
     pattern: string,
     handler: (req: KilnRequest, res: KilnResponse) => Promise<void>
   ): void {
+    const self = this;
     this.app.get(pattern, async function* (ctx: any) {
       const req = wrapRequest(ctx);
       const res = new ElysiaResponseImpl(ctx);
+      // Gate the stream through the app handle hook. On short-circuit (e.g.
+      // an unauthenticated EventSource → redirect), emit status/headers and
+      // yield nothing rather than opening a stream. res.redirect/json already
+      // set ctx.set.status + location; mirror status defensively.
+      if (await self.runHandle(req, res)) {
+        if (res.status) ctx.set.status = res.status;
+        for (const [k, v] of Object.entries(res.headers)) ctx.set.headers[k] = v;
+        return;
+      }
       await handler(req, res);
 
       if (res.status && res.status !== 200) ctx.set.status = res.status;
@@ -87,11 +111,13 @@ export class ElysiaAdapter implements ServerAdapter {
     }
   }
 
-  /** Load hooks.ts from the app root (if present) and wire its
-   * onRequest/onError/onStart/onStop into the Elysia lifecycle. Must be
-   * called before routes are registered for onRequest to cover them. */
+  /** Load hooks.ts from the app root (if present): store its per-request
+   * `handle` hook (invoked by registerPage/registerAction/registerSSE) and
+   * wire onError/onStart/onStop into the Elysia lifecycle. Must be called
+   * before routes are registered so `handle` covers them. */
   async applyServerHooks(appRoot: string): Promise<void> {
     const hooks = await loadHooks(appRoot);
+    this.appHandle = hooks.handle;
     this.app.use(serverHooks(hooks));
   }
 

@@ -16,6 +16,7 @@ function makeReq(overrides: Partial<KilnRequest> = {}): KilnRequest {
     json: async () => ({}),
     isEnhanced: false,
     layoutsPresent: [],
+    locals: {},
     prebakeNext: () => {},
     ...overrides
   };

@@ -559,6 +559,10 @@ function makeLoaderRequest(req: KilnRequest): KilnRequest {
     json: async () => ({}),
     isEnhanced: false,
     layoutsPresent: [],
+    // Intentionally empty, like the stripped headers above: a layout load can
+    // be baked into a shared cache entry, so per-user locals (e.g. the auth
+    // user) must not flow in here or one visitor's data leaks to everyone.
+    locals: {},
     prebakeNext: () => {},
   };
 }
@@ -888,8 +892,9 @@ export async function startKiln(
     options.store.withGlobalDebounce(config.fsr.patchDebounceSecs);
   }
 
-  // 3. Apply middleware, then the project's hooks.ts (onRequest/onError/
-  // onStart/onStop) so both cover every route registered below.
+  // 3. Apply middleware, then the project's hooks.ts (the per-request `handle`
+  // hook plus onError/onStart/onStop) so both cover every route registered
+  // below — handle runs inside each route via the adapter's request path.
   adapter.applyMiddleware({
     csrf: true,
     timeoutMs: config.web?.requestTimeoutMs ?? 30000,
@@ -1106,6 +1111,7 @@ function makePrebakeRequest(concretePath: string, params: Record<string, string>
     json: async () => ({}),
     isEnhanced: false,
     layoutsPresent: [],
+    locals: {},
     prebakeNext: () => {},
   };
 }
