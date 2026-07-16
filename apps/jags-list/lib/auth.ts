@@ -40,7 +40,7 @@ export type AppRole = 'superadmin' | 'admin' | 'user';
  * ('admin' | 'user'), which doesn't include the app's 'superadmin'/'user'
  * vocabulary; the role column is TEXT and better-auth stores the string
  * verbatim at runtime, so the cast only reconciles compile-time types.
- * See .memory/bugs.md.
+ * See .memory/bugs-active.md.
  */
 export function createAppUser(input: {
   email: string;

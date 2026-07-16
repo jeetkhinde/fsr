@@ -1,8 +1,8 @@
-# Known Bugs, Blockers, & Type Errors
+# Resolved Bugs & Blockers (Archive)
 
-This file tracks compiler blockers, runtime issues, and type mismatches currently present in the codebase.
+Historical record of fixed framework bugs, kept out of the active file to keep session reads cheap. Active/open issues live in [bugs-active.md](bugs-active.md).
 
-> **Last verified**: 2026-07-12 (Gemini-audit verification + fix pass, branch `fix/gemini-audit-round2`, 2 commits). `tsc --noEmit` clean across every package (`core`, `live`, `engine`, `routekit`, `adapter-elysia`, `react`, `cli`, `create-kiln`, `client`). Unit suite: **149 pass, 0 fail**. Also re-verified `store.test.ts`, `hub.test.ts`, `db-notify.test.ts`, `watcher.test.ts` directly against a real Postgres in this environment (all pass) — these are excluded from `test:unit` but exercise files this pass touched.
+> **Last full verification**: 2026-07-12 (Gemini-audit round 2). `tsc --noEmit` clean across every package; unit suite 149 pass / 0 fail.
 
 ## 0. Fixed in the 2026-07-12 audit (branch `fix/gemini-audit-round2`)
 
@@ -92,39 +92,7 @@ All found by a systematic read of every package (not by tests failing). One-line
 
 ---
 
-## 3. Infrastructure & Integration Test Issues
-
-*   **Database Invalidation Integration Failures**:
-    *   **File**: `packages/engine/src/list-store.test.ts`
-    *   **Description**: Integration database tests require a live PostgreSQL connection. If `DATABASE_URL` is not provided in the environment (or missing from `.env` in `test-app/`), tests crash.
-    *   **Impact**: `bun run test:integration` crashes if the local database environment is not pre-configured.
-
----
-
-## 4. Playwright E2E Skips
-*   The Playwright testing suite inside `examples/address-book` has an intentional desktop browser skip configured in its test suite that needs monitoring.
-
-## 5. Open: absent `promote_after` is not pure SSR (surfaced 2026-07-14)
-
-**Status: OPEN** — real framework defect (the code contradicts its own docs);
-no framework fix yet, deferred pending a design decision. Surfaced while
-building `apps/jags-list`.
-
-`boot.ts`: `const promoteAfter = options.promoteAfter ?? kilnConfig?.fsr?.promoteAfterHits ?? 2;`
-A page that omits `promote_after` falls through to the global
-`fsr.promoteAfterHits` (2), so it is promoted + cached after 2 hits — NOT pure
-SSR. This contradicts the framework's own docs: `features.md` says
-"absent/false → Pure SSR, never cached" and ADR-003 says "absent → SSG" — the
-two docs and the code all disagree. Impact: silently breaks per-user auth
-pages (observed a per-user home served stale/cross-user after promotion).
-
-App-side workaround (in use): every auth-varying / per-request page must
-`export const promote_after = false` (nullish coalescing preserves `false`,
-giving true pure SSR). ADR-015 documents this as a requirement.
-
-Framework fix candidates (not yet chosen): (a) make absent === pure SSR so
-caching is opt-IN; or (b) reconcile the docs to the code and add a startup
-warning when a session-reading `load()` has no explicit `promote_after`.
+## Note on removed non-bugs (trimmed 2026-07-16)
 
 <!-- Trimmed 2026-07-16: three other "Jag's List findings" were removed from
 this file because they were never framework *bugs*. For the record —
@@ -135,4 +103,3 @@ cross-library integration friction in apps/jags-list, not a framework defect;
 localized in the app's `lib/auth.ts`.
 (3) bun's `SQL` binding JS arrays in `ANY()` differently from node-postgres:
 a Bun runtime quirk, not Kiln's concern; noted in the app's test code. -->
-

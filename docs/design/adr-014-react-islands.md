@@ -490,7 +490,7 @@ through the public `Silcrow.publish`).
 
 Execute phases in order; each ends with `tsc --noEmit` clean in all packages,
 `bun run test:unit` green, and `bun run build` succeeding. Rebuild `dist/`
-before testing cross-package behavior (see `.memory/bugs.md` — stale `dist/`
+before testing cross-package behavior (see `.memory/bugs-resolved.md` — stale `dist/`
 has silently invalidated test runs before).
 
 ### Phase 0 — seed codec

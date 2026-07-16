@@ -4,7 +4,7 @@ import { requireUser } from '../lib/session.js';
 
 // Pure SSR — never promote. Per-user content must not be baked into a shared
 // cache. NOTE: omitting this export does NOT yield SSR; it inherits the global
-// fsr.promoteAfterHits (2). See .memory/bugs.md "absent promote_after".
+// fsr.promoteAfterHits (2). See .memory/bugs-active.md "absent promote_after".
 export const promote_after = false;
 
 export async function load(req: KilnRequest) {
