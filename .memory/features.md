@@ -201,13 +201,18 @@ All built-in, applied automatically by `startKiln()` via `adapter.applyMiddlewar
 
 ### Server hooks (`hooks.ts` at project root)
 ```ts
-export const onRequest = async (ctx) => { /* auth, rate limiting */ }
-export const onError   = async (ctx) => { }
-export const onStart   = async () => { }
-export const onStop    = async () => { }
+// Per-request hook (KilnHandle). Runs after wrapRequest, before every Kiln route's
+// load()/action (pages, actions, SSE, incl. framework-internal). Attach data via
+// req.locals; short-circuit via res (redirect/json). This is where app auth lives.
+export const handle  = async (req: KilnRequest, res: KilnResponse) => { /* auth */ }
+export const onError = async (ctx) => { }
+export const onStart = async () => { }
+export const onStop  = async () => { }
 ```
 Loaded by `startKiln()` via `adapter.applyServerHooks(process.cwd())` before routes are
-registered. This is Kiln's middleware / lifecycle hook layer.
+registered. `handle` is the per-request policy layer (auth, request-id) and populates
+`req.locals`; `onError`/`onStart`/`onStop` are server-lifecycle hooks. See ADR-015 and
+`docs/agents/auth.md`. (Replaced the earlier Elysia-coupled `onRequest(ctx)`.)
 
 ---
 

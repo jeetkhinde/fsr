@@ -8,7 +8,7 @@ import { requireUser } from '../lib/session.js';
 export const promote_after = false;
 
 export async function load(req: KilnRequest) {
-  const user = await requireUser(req);
+  const user = requireUser(req);
   return { user };
 }
 

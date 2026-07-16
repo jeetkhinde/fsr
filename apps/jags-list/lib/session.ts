@@ -31,22 +31,28 @@ export async function getSessionUser(headers: Headers): Promise<SessionUser | nu
   };
 }
 
-export async function requireUser(req: KilnRequest): Promise<SessionUser> {
-  const user = await getSessionUser(req.headers);
+/**
+ * Reads the authenticated user off `req.locals.user`, which the `handle` hook
+ * (hooks.ts) already resolved for this request — no second session lookup.
+ * Synchronous: gated pages/actions only run after handle has populated it, so
+ * a missing user here means a genuinely unauthenticated request.
+ */
+export function requireUser(req: KilnRequest): SessionUser {
+  const user = req.locals.user as SessionUser | undefined;
   if (!user) throw AppError.unauthorized('Sign in required');
   return user;
 }
 
 /** Admins and superadmins. Use for team-management actions (invites, etc.). */
-export async function requireAdmin(req: KilnRequest): Promise<SessionUser> {
-  const user = await requireUser(req);
+export function requireAdmin(req: KilnRequest): SessionUser {
+  const user = requireUser(req);
   if (!isAtLeastAdmin(user.role)) throw AppError.unauthorized('Admin access required');
   return user;
 }
 
 /** Superadmin only. Use for actions that touch admins or the superadmin. */
-export async function requireSuperadmin(req: KilnRequest): Promise<SessionUser> {
-  const user = await requireUser(req);
+export function requireSuperadmin(req: KilnRequest): SessionUser {
+  const user = requireUser(req);
   if (user.role !== 'superadmin') throw AppError.unauthorized('Superadmin access required');
   return user;
 }

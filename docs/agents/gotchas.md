@@ -13,6 +13,7 @@ Kiln has several surfaces that are **typed, scaffolded, or discovered but not ac
 | Full-page React hydration | **Prohibited** (ADR-014) | Islands only ([live-and-islands.md](live-and-islands.md)) |
 | `dom`-target `LiveProp` inside an island | Bake-time warning; silcrow won't patch inside the React root | `target: 'store'` + `useLiveValue` |
 | `fsr.watcher: 'external'` | Typed, implementation only partial | Use `'embedded'` |
+| Setting a cookie from an `action` | Actions receive only `req` (no `res`) — **can't set `Set-Cookie`** | Mount a raw adapter route (`adapter.app.post(...)`) for login/logout ([auth.md](auth.md)) |
 
 ## Naming / API traps
 

@@ -17,8 +17,7 @@ Kiln is a file-based React web framework. You write pages under `pages/`. Each p
 3. **Rendering mode is one export.** `export const promote_after = 0 | 1 | N | (absent)`. See [`rendering-and-caching.md`](rendering-and-caching.md).
 4. **Mutations are collocated `actions`.** `export const actions = { create(req) {…} }` registers a POST handler on the same route. See [`actions-and-forms.md`](actions-and-forms.md).
 5. **Live data + interactivity have exact rules.** `LiveProp` for real-time fields, `island()` for React interactivity, and islands read live data from the store, never the DOM. See [`live-and-islands.md`](live-and-islands.md).
-
-Before you assume a feature is missing, check [`gotchas.md`](gotchas.md) — several things are typed-but-unwired or deliberately absent.
+6. **Auth is app policy, not framework.** Kiln ships no auth; bring a library and gate requests in `hooks.ts` → `handle(req, res)`, stashing the user on `req.locals` for `load()` to read. See [`auth.md`](auth.md).
 
 ---
 
@@ -111,6 +110,7 @@ export const actions = {
 | [`data-loading.md`](data-loading.md) | writing `load()`, serving JSON, content negotiation, `json_first` |
 | [`actions-and-forms.md`](actions-and-forms.md) | handling POST/mutations, forms, `useSilcrowForm`/`useSilcrowAction` |
 | [`live-and-islands.md`](live-and-islands.md) | real-time fields (`LiveProp`/`Live.list`) or React interactivity (`island()`) |
+| [`auth.md`](auth.md) | authentication/authorization: the `handle` hook, `req.locals`, mounting an auth library |
 | [`rendering-and-caching.md`](rendering-and-caching.md) | choosing SSG/ISR/FSR/SSR, cache invalidation, when Redis is required |
 | [`gotchas.md`](gotchas.md) | **always skim before assuming a feature exists** — typed-but-unwired traps |
 

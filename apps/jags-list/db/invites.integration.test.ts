@@ -57,6 +57,7 @@ describe.skipIf(!process.env.DATABASE_URL)('invites', () => {
       json: async () => ({}),
       isEnhanced: false,
       layoutsPresent: [],
+      locals: {},
       prebakeNext: () => {},
     });
 
@@ -91,6 +92,7 @@ describe.skipIf(!process.env.DATABASE_URL)('invites', () => {
       json: async () => ({}),
       isEnhanced: false,
       layoutsPresent: [],
+      locals: {},
       prebakeNext: () => {},
     });
 
@@ -129,6 +131,7 @@ describe.skipIf(!process.env.DATABASE_URL)('invites', () => {
       json: async () => ({}),
       isEnhanced: false,
       layoutsPresent: [],
+      locals: {},
       prebakeNext: () => {},
     });
 

@@ -14,6 +14,7 @@ const request = (query: Record<string, string> = {}) => ({
   json: async () => ({}),
   isEnhanced: false,
   layoutsPresent: [],
+  locals: {},
   prebakeNext: () => {},
 });
 

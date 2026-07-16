@@ -13,14 +13,14 @@ import { auth } from '../lib/auth.js';
 
 async function main() {
   const adapter = new ElysiaAdapter();
-  // better-auth endpoints (sign-in/out, session). NOTE: these are public via
-  // the hooks.ts allowlist — Elysia onRequest intercepts every route
-  // regardless of registration order (verified 2026-07-14).
+  // better-auth endpoints (sign-in/out, session). Raw Elysia routes, NOT Kiln
+  // routes, so the hooks.ts `handle` hook never runs for them — public by
+  // construction (no session needed to sign in).
   adapter.app.all('/api/auth/*', (ctx: any) => auth.handler(ctx.request));
 
-  // Form-post login/logout. These are raw Elysia routes, NOT Kiln actions,
-  // because actions receive only `req` and cannot set Set-Cookie headers
-  // (spec §9 gap 3). Public via the hooks.ts allowlist.
+  // Form-post login/logout. Raw Elysia routes, NOT Kiln actions, because
+  // actions receive only `req` and cannot set Set-Cookie headers (spec §9
+  // gap 3). Being raw routes, `handle` does not run for them (public).
   adapter.app.post('/auth/login', async (ctx: any) => {
     const form = await ctx.request.formData();
     const email = String(form.get('email') ?? '');

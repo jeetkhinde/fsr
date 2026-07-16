@@ -1,10 +1,13 @@
 import { Elysia } from 'elysia';
+import type { KilnHandle } from '@kiln/core';
 import { pathToFileURL } from 'url';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 
 export interface KilnHooks {
-  onRequest?: (ctx: any) => void | Promise<void>;
+  /** Per-request hook run inside the Kiln request path (see KilnHandle):
+   * populate req.locals and/or short-circuit via res. This is where auth lives. */
+  handle?: KilnHandle;
   onError?: (ctx: any) => void | Promise<void>;
   onStart?: () => void | Promise<void>;
   onStop?: () => void | Promise<void>;
@@ -29,9 +32,12 @@ export async function loadHooks(appRoot: string): Promise<KilnHooks> {
   }
 }
 
+// Wires the server-lifecycle hooks into Elysia. The per-request `handle` hook
+// is NOT wired here — the adapter invokes it inside the request path (after it
+// builds the KilnRequest) so it can populate req.locals and short-circuit; see
+// ElysiaAdapter.applyServerHooks.
 export const serverHooks = (hooks: KilnHooks) => (app: Elysia) => {
   let plugin = new Elysia({ name: 'kiln-server-hooks' });
-  if (hooks.onRequest) plugin = plugin.onRequest(hooks.onRequest);
   if (hooks.onError) plugin = plugin.onError(hooks.onError);
   if (hooks.onStart) plugin = plugin.onStart(hooks.onStart);
   if (hooks.onStop) plugin = plugin.onStop(hooks.onStop);

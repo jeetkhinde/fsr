@@ -18,7 +18,7 @@ interface Member {
 }
 
 export async function load(req: KilnRequest) {
-  const me = await requireUser(req);
+  const me = requireUser(req);
   const members = (await sql`
     SELECT id, name, email, handle, role FROM "user" ORDER BY "createdAt" ASC`) as Member[];
   return {
@@ -31,7 +31,7 @@ export async function load(req: KilnRequest) {
 
 export const actions = {
   async createInvite(req: KilnRequest) {
-    const me = await requireAdmin(req);
+    const me = requireAdmin(req);
     const form = await req.formData();
     const email = String(form.get('email') ?? '').trim().toLowerCase();
     // Invites may grant 'admin' or 'user' only — never 'superadmin'.

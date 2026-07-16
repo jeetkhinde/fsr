@@ -40,6 +40,7 @@ export function wrapRequest(ctx: any): KilnRequest {
     },
     isEnhanced,
     layoutsPresent,
+    locals: {},
     raw: ctx,
     prebakeNext(path: string): void {
       ctx.set.headers['x-prebake-next'] = path;
