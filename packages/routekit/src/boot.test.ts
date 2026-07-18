@@ -38,24 +38,14 @@ function makeRes(): any {
 }
 
 describe('buildPageHandler', () => {
-  it('promotes on the second successful render and serves later requests without loaders or React', async () => {
+  it('bakes on the first successful pure render and serves later requests without loaders or React', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
     const { createElement } = await import('react');
     let loads = 0;
     let renders = 0;
-    let hit = 0;
-    const promoted = new Set<string>();
     const store = {
       ensureRouteRow: async () => {},
-      incrementHit: async () => {
-        hit += 1;
-        if (hit === 2) {
-          promoted.add('/lifecycle');
-          return 'JustPromoted';
-        }
-        return 'Normal';
-      },
-      isPromoted: async (route: string) => promoted.has(route),
+      isTombstoned: async () => false,
       setBakedPaths: async () => {},
       touchRoute: async () => {},
     };
@@ -77,17 +67,63 @@ describe('buildPageHandler', () => {
 
     const first = makeRes();
     await handler(makeReq({ path: '/lifecycle' }) as any, first);
-    expect(await Bun.file(path.join(tmpDir, 'lifecycle', 'index.html')).exists()).toBe(false);
+    expect(await Bun.file(path.join(tmpDir, 'lifecycle', 'index.html')).exists()).toBe(true);
 
     const second = makeRes();
     await handler(makeReq({ path: '/lifecycle' }) as any, second);
-    expect(await Bun.file(path.join(tmpDir, 'lifecycle', 'index.html')).exists()).toBe(true);
+    expect(second.captured.body).toContain('render-1');
+    expect(loads).toBe(1);
+    expect(renders).toBe(1);
+    await fs.rm(tmpDir, { recursive: true });
+  });
 
-    const third = makeRes();
-    await handler(makeReq({ path: '/lifecycle' }) as any, third);
-    expect(third.captured.body).toContain('render-2');
-    expect(loads).toBe(2);
-    expect(renders).toBe(2);
+  it('never bakes a route whose load() reads req.locals, no matter how many hits', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
+    const { createElement } = await import('react');
+    let loads = 0;
+    const pageModule = {
+      load: async (req: any) => {
+        loads += 1;
+        return { who: (req.locals as any).user ?? 'anon' };
+      },
+      default: ({ who }: any) => createElement('div', null, `hello ${who}`),
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/private', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+    );
+    for (let i = 0; i < 4; i++) {
+      const res = makeRes();
+      await handler(makeReq({ path: '/private', locals: { user: `u${i}` } }) as any, res);
+      expect(res.captured.body).toContain(`hello u${i}`);
+    }
+    expect(loads).toBe(4); // every hit re-rendered; nothing served from cache
+    expect(await Bun.file(path.join(tmpDir, 'private', 'index.html')).exists()).toBe(false);
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it('bake=false never writes artifacts even for a pure load()', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
+    const { createElement } = await import('react');
+    let loads = 0;
+    const pageModule = {
+      bake: false,
+      load: async () => ({ n: ++loads }),
+      default: ({ n }: any) => createElement('div', null, `count-${n}`),
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/ssr-only', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+    );
+    await handler(makeReq({ path: '/ssr-only' }) as any, makeRes());
+    const second = makeRes();
+    await handler(makeReq({ path: '/ssr-only' }) as any, second);
+    expect(second.captured.body).toContain('count-2'); // re-rendered, not cached
+    expect(await Bun.file(path.join(tmpDir, 'ssr-only', 'index.html')).exists()).toBe(false);
     await fs.rm(tmpDir, { recursive: true });
   });
 
@@ -106,8 +142,7 @@ describe('buildPageHandler', () => {
       undefined,
       {
         ensureRouteRow: async () => {},
-        incrementHit: async () => 'Normal',
-        isPromoted: async () => true,
+        isTombstoned: async () => false,
         touchRoute: async () => {},
       } as any,
     );
@@ -552,7 +587,7 @@ describe('buildPageHandler', () => {
     const store = {
       executeLiveListQuery: async (query: any) => query({ sql: 'shared-sql' }),
       ensureRouteRow: async () => {},
-      incrementHit: async () => 'JustPromoted',
+      isTombstoned: async () => false,
       setBakedPaths: async () => {}
     };
     const makeWatcher = () => {
@@ -565,7 +600,6 @@ describe('buildPageHandler', () => {
       };
     };
     const pageModule = {
-      promoteAfter: 0,
       load: async () => ({
         todos: Live.list<{ id: number; title: string }>({
           key: (todo) => todo.id,
@@ -753,23 +787,15 @@ describe('buildPageHandler', () => {
   it('serves different cached HTML per cacheKey variant with no cross-contamination', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-variant-'));
     const { createElement } = await import('react');
-    let hit = 0;
-    const promoted = new Set<string>();
     const store = {
       ensureRouteRow: async () => {},
-      incrementHit: async () => {
-        hit += 1;
-        if (hit === 2) { promoted.add('/dashboard'); return 'JustPromoted'; }
-        return 'Normal';
-      },
-      isPromoted: async (route: string) => promoted.has(route),
+      isTombstoned: async () => false,
       setBakedPaths: async () => {},
       touchRoute: async () => {},
     };
 
     const module = {
       cacheKey: (req: any) => req.headers.get('x-user-id') ?? 'anon',
-      promote_after: 2,
       load: async (req: any) => ({ user: req.headers.get('x-user-id') ?? 'anon' }),
       default: ({ user }: { user: string }) => createElement('div', null, `Hello ${user}`),
     };
@@ -786,15 +812,15 @@ describe('buildPageHandler', () => {
     const makeVariantReq = (userId: string) =>
       makeReq({ path: '/dashboard', headers: new Headers({ accept: 'text/html', 'x-user-id': userId }) });
 
-    // Alice: two hits to reach promotion
-    await handler(makeVariantReq('alice') as any, makeRes());
+    // Alice: first hit bakes her variant (cache_key pages bake per variant;
+    // reading the keyed header is expected, not an impurity demotion)
     const aliceRes = makeRes();
-    await handler(makeVariantReq('alice') as any, aliceRes); // hit 2 — JustPromoted, bakes alice variant
+    await handler(makeVariantReq('alice') as any, aliceRes);
     expect(aliceRes.captured?.body).toContain('Hello alice');
 
-    // Bob: isPromoted returns true (route promoted), cache miss for bob variant → re-bakes bob
+    // Bob: cache miss for bob's variant → SSR + bake bob variant
     const bobRes1 = makeRes();
-    await handler(makeVariantReq('bob') as any, bobRes1); // cache miss → SSR + bake bob variant
+    await handler(makeVariantReq('bob') as any, bobRes1);
     expect(bobRes1.captured?.body).toContain('Hello bob');
 
     // Bob: second request now hits bob's variant cache
