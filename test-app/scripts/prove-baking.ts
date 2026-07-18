@@ -45,38 +45,37 @@ async function main() {
     port: PORT,
     pagesDir: './pages',
     fsr: {
-      promoteAfterHits: 2,
       // No postgresUrl / redisUrl set -> startKiln runs FSR with no store or
-      // watcher, i.e. local per-route hit counting + disk-only cache.
+      // watcher: disk-only cache, first pure render bakes (ADR-016).
     },
   });
 
   const adapter = new ElysiaAdapter();
   // No options passed -> mirrors a real deployment with no DATABASE_URL/REDIS_URL
-  // configured: FSR still runs, using local per-route hit counting and a
-  // disk-only cache instead of the Postgres/Redis-backed store.
+  // configured: FSR still runs with a disk-only cache instead of the
+  // Postgres/Redis-backed store; the first pure render bakes the shell.
   await startKiln(adapter, config, './pages');
   await new Promise<void>((resolve) => {
     adapter.listen(PORT, (addr) => {
-      console.log(`Kiln server booted at ${addr} (no Postgres/Redis — local hit-count + disk cache mode)`);
+      console.log(`Kiln server booted at ${addr} (no Postgres/Redis — disk cache mode)`);
       resolve();
     });
   });
 
   // -------------------------------------------------------------------
-  section('1. HTML baking: full page, then promoted/cached');
+  section('1. HTML baking: first pure render bakes, then cached');
   // -------------------------------------------------------------------
   const first = await get('/dashboard/reports/summary');
   check('first request returns 200 HTML', first.status === 200 && first.body.includes('<html'));
-  check('contains root layout chrome (header/footer)', first.body.includes('root layout chrome'));
+  check('contains root layout chrome (header/footer)', first.body.includes('root layout footer'));
   check('contains dashboard sidebar', first.body.includes('Dashboard') && first.body.includes('sidebar (child layout)'));
   check('contains reports tab bar', first.body.includes('tab bar (grandchild layout)'));
   check('contains page content', first.body.includes('Reports — Summary'));
   console.log(`  first response: ${bytes(first.body)} bytes`);
 
-  const second = await get('/dashboard/reports/summary'); // 2nd hit -> promotes
+  const second = await get('/dashboard/reports/summary'); // already baked by hit 1
   check('second request also 200', second.status === 200);
-  const third = await get('/dashboard/reports/summary'); // served from the baked cache now
+  const third = await get('/dashboard/reports/summary'); // served from the baked cache
   check('third request served from baked HTML cache', third.status === 200 && third.body.includes('Reports — Summary'));
   console.log(`  third (cached) response: ${bytes(third.body)} bytes`);
 

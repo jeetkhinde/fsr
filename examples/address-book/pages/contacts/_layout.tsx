@@ -3,7 +3,6 @@ import type { KilnRequest } from "@kiln/core";
 import { AppShell } from "../../components/AppShell.js";
 import { contactsLiveList } from "../../features/contacts/live.js";
 
-export const promote_after = 2;
 export const revalidate = 300;
 export const debounce = 5;
 export const purge_after = 2_592_000;

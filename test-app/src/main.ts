@@ -17,7 +17,6 @@ async function main() {
     await store.initialize();
     const watcher = new FsrWatcher(store, null, {
       pollIntervalMs: 1000,
-      promoteAfterHits: config.fsr.promoteAfterHits,
       patchDebounceSecs: config.fsr.patchDebounceSecs,
       purgeAfterSeconds: config.fsr.purgeAfterSeconds,
       purgeSweepSeconds: config.fsr.purgeSweepSeconds,

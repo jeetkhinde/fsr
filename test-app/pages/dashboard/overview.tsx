@@ -1,6 +1,6 @@
 import React from 'react';
 
-export const promote_after = 2;
+export const bake = 'shared';
 
 export async function load() {
   return { bakedAt: new Date().toISOString() };
