@@ -99,7 +99,7 @@ interface Todo {
   completed: boolean;
 }
 
-export const promote_after = 2;
+export const bake = 'shared'; // optional — omit and the classifier decides (ADR-016)
 
 export async function load() {
   return {
