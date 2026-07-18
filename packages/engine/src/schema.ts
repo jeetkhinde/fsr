@@ -6,17 +6,12 @@ export const KILN_FSR_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS kiln_fsr (
   depends_on TEXT[] NOT NULL DEFAULT '{}',
   stale BOOLEAN NOT NULL DEFAULT false,
   version INTEGER NOT NULL DEFAULT 0,
-  hit_count INTEGER NOT NULL DEFAULT 0,
-  promoted BOOLEAN NOT NULL DEFAULT false,
   tombstoned BOOLEAN NOT NULL DEFAULT false,
-  promote_after INTEGER,
   debounce_secs INTEGER,
   html_path TEXT,
   json_path TEXT,
   column_name TEXT,
-  last_hit TIMESTAMP,
   last_requested_at TIMESTAMP,
-  promoted_at TIMESTAMP,
   revalidate_secs INTEGER,
   purge_after_secs INTEGER,
   refresh_claimed_until TIMESTAMP,
@@ -79,7 +74,6 @@ CREATE TABLE IF NOT EXISTS kiln_fsr_lists (
 );
 
 ALTER TABLE kiln_fsr ADD COLUMN IF NOT EXISTS last_requested_at TIMESTAMP;
-ALTER TABLE kiln_fsr ADD COLUMN IF NOT EXISTS promoted_at TIMESTAMP;
 ALTER TABLE kiln_fsr ADD COLUMN IF NOT EXISTS revalidate_secs INTEGER;
 ALTER TABLE kiln_fsr ADD COLUMN IF NOT EXISTS purge_after_secs INTEGER;
 ALTER TABLE kiln_fsr ADD COLUMN IF NOT EXISTS refresh_claimed_until TIMESTAMP;
@@ -98,5 +92,15 @@ CREATE INDEX IF NOT EXISTS idx_kiln_fsr_needs_last_requested_backfill
   WHERE last_requested_at IS NULL;
 
 UPDATE kiln_fsr
-SET last_requested_at = COALESCE(last_requested_at, last_hit, NOW())
-WHERE last_requested_at IS NULL`;
+SET last_requested_at = COALESCE(last_requested_at, NOW())
+WHERE last_requested_at IS NULL;
+
+-- ADR-016 (bake classes): hit-count promotion removed. Promoted-ness is now
+-- artifact presence (html_path IS NOT NULL); these columns are dead on any
+-- database created before the change. incrementHit always wrote last_hit and
+-- last_requested_at together, so dropping last_hit loses no recency signal.
+ALTER TABLE kiln_fsr DROP COLUMN IF EXISTS hit_count;
+ALTER TABLE kiln_fsr DROP COLUMN IF EXISTS promoted;
+ALTER TABLE kiln_fsr DROP COLUMN IF EXISTS promote_after;
+ALTER TABLE kiln_fsr DROP COLUMN IF EXISTS promoted_at;
+ALTER TABLE kiln_fsr DROP COLUMN IF EXISTS last_hit`;

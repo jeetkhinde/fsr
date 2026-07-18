@@ -33,9 +33,8 @@ async function runTests() {
   try {
     // 1. Setup route and slot
     const route = '/test-watcher-route';
-    await store.ensureRouteRow(route, 1);
-    // Mark it promoted so it bakes files
-    await store.incrementHit(route); 
+    await store.ensureRouteRow(route);
+    // Baked paths ARE promotion now (ADR-016) — setting them makes it bake files
     await store.setBakedPaths(route, tempHtmlPath, tempJsonPath);
 
     await store.upsertSlot(

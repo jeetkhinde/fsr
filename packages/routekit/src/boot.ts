@@ -155,10 +155,8 @@ export function buildPageHandler(
     const bakeEligible = bakeMode !== false && !knownImpure;
 
     if (store && typeof store.ensureRouteRow === 'function' && !ensuredRoutes.has(req.path)) {
-      // NOTE(Task 5): drops the null promoteAfter arg when the store signature changes.
       await store.ensureRouteRow(
         req.path,
-        null,
         revalidate === false ? 0 : revalidate,
         purgeAfter,
         options.patchMode

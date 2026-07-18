@@ -18,7 +18,7 @@ async function runTests() {
   await bunSql.unsafe("INSERT INTO hub_test_dummy (id, val) VALUES (1, 'val_1'), (2, 'val_2') ON CONFLICT (id) DO UPDATE SET val = EXCLUDED.val");
 
   const route = '/test-hub-route';
-  await store.ensureRouteRow(route, 1);
+  await store.ensureRouteRow(route);
   await store.upsertSlot(route, 'slot_1', 'SELECT val FROM hub_test_dummy WHERE id = $1', [1], [], 0, 'val');
   await store.upsertSlot(route, 'slot_2', 'SELECT val FROM hub_test_dummy WHERE id = $1', [2], [], 0, 'val');
 
