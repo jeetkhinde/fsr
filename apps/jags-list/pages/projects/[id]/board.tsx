@@ -7,7 +7,6 @@ import { listTasksByProject, createTask, moveTask, positionForEndOfColumn, taskB
 import { validColumnName, validTaskTitle } from '../../../db/validation.js';
 import { logActivity } from '../../../lib/activity.js';
 
-export const promote_after = false;
 
 export async function load(req: KilnRequest) {
   requireUser(req);

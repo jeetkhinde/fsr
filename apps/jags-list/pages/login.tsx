@@ -1,8 +1,7 @@
 import React from 'react';
 import type { KilnRequest } from '@kiln/core';
 
-// Pure SSR — renders query-dependent state (?error, ?welcome); must not promote.
-export const promote_after = false;
+// load() reads query (?error, ?welcome) — classifier keeps this SSR (ADR-016).
 
 export async function load(req: KilnRequest) {
   return {

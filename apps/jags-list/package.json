@@ -12,6 +12,7 @@
     "test": "bun test tests/smoke.test.ts db/validation.test.ts lib/roles.test.ts db/positions.test.ts",
     "test:db": "bun --env-file=.env test db/schema.integration.test.ts && bun --env-file=.env test lib/auth.integration.test.ts && bun --env-file=.env test db/invites.integration.test.ts && bun --env-file=.env test lib/activity.integration.test.ts && bun --env-file=.env test db/projects.integration.test.ts && bun --env-file=.env test db/tasks.integration.test.ts",
     "test:app": "RUN_APP_TESTS=1 bun --env-file=.env test tests/app.integration.test.ts",
+    "test:purity": "RUN_APP_TESTS=1 bun --env-file=.env test tests/purity.integration.test.ts",
     "test:crud": "RUN_APP_TESTS=1 bun --env-file=.env test tests/crud.integration.test.ts"
   },
   "dependencies": {

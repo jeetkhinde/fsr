@@ -5,8 +5,7 @@ import { createAppUser } from '../../lib/auth.js';
 import { findValidInvite, markInviteUsed } from '../../db/invites.js';
 import { validHandle, validPassword } from '../../db/validation.js';
 
-// Pure SSR — per-invite content and query-dependent error states.
-export const promote_after = false;
+// Per-invite content and query-dependent error states — classifier keeps this SSR.
 
 export async function load(req: KilnRequest) {
   const invite = await findValidInvite(req.params.token ?? '');

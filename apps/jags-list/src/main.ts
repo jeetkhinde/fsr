@@ -68,7 +68,6 @@ async function main() {
   if (redis) await redis.getClient().send('PING', []);
   const watcher = new FsrWatcher(store, redis, {
     pollIntervalMs: fsrConfig.pollIntervalMs,
-    promoteAfterHits: fsrConfig.promoteAfterHits,
     patchDebounceSecs: fsrConfig.patchDebounceSecs,
     purgeAfterSeconds: fsrConfig.purgeAfterSeconds,
     purgeSweepSeconds: fsrConfig.purgeSweepSeconds,

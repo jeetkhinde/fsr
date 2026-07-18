@@ -4,7 +4,6 @@ import { requireUser } from '../../../lib/session.js';
 import { projectById } from '../../../db/projects.js';
 import { sql } from '../../../db/client.js';
 
-export const promote_after = false;
 
 interface ActivityRow {
   id: number;

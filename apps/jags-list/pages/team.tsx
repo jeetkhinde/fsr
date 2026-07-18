@@ -6,8 +6,7 @@ import type { AppRole } from '../lib/auth.js';
 import { isAtLeastAdmin, requireAdmin, requireUser } from '../lib/session.js';
 import { validEmail } from '../db/validation.js';
 
-// Pure SSR — shows all members and (for admins) an invite form; not shared-cacheable.
-export const promote_after = false;
+// Session-dependent (admin sees the invite form) — classifier keeps this SSR.
 
 interface Member {
   id: string;
