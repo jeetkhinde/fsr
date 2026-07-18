@@ -29,6 +29,19 @@ resolve to `packages/*/dist`, which is gitignored.
   arrives in a later milestone). Cannot touch the superadmin.
 - **user** — regular member.
 
+## Projects, columns & tasks
+
+- **/projects** — every member sees all active projects. Any member creates a
+  project (auto-seeded with Backlog / In Progress / Done). Admins archive.
+- **/projects/:id/board** — kanban. Add tasks to a column, move a task via the
+  per-card column picker (JS-free), add/rename columns; admins delete empty
+  columns. Moving a task into a terminal column ("Done") logs completion.
+- **/tasks/:id** — edit title, description, assignee, priority, due date.
+- **/projects/:id/activity** — the project's event feed, newest first.
+
+All pages are server-rendered (`promote_after = false`). FSR promotion + live
+updates and the drag-and-drop board island arrive in Plan 3.
+
 ## Inviting teammates
 
 Sign in as an admin or superadmin → **Team** → create an invite (role: admin or
@@ -40,6 +53,7 @@ invites are the only way in.
     bun run test                                          # unit, no infra
     bun run test:db                                       # needs Postgres
     bun run test:app                                      # spawns the app; needs Postgres + Redis
+    bun run test:crud                                     # spawns the app; projects/board/task/activity
 
 ## Auth architecture (short version)
 
