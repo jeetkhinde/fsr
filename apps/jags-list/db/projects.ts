@@ -12,7 +12,7 @@ export interface Project {
 export async function listActiveProjects(): Promise<Array<Project & { open_task_count: number }>> {
   // Open = task not in a terminal column. LEFT JOIN so empty projects show 0.
   return (await sql`
-    SELECT p.id, p.name, p.description, p.archived_at, p.created_by,
+    SELECT p.id::int, p.name, p.description, p.archived_at, p.created_by,
            COUNT(t.id) FILTER (WHERE c.is_terminal = false)::int AS open_task_count
     FROM projects p
     LEFT JOIN tasks t ON t.project_id = p.id
@@ -24,14 +24,14 @@ export async function listActiveProjects(): Promise<Array<Project & { open_task_
 
 export async function projectById(id: number): Promise<Project | null> {
   const [p] = await sql`
-    SELECT id, name, description, archived_at, created_by FROM projects WHERE id = ${id}`;
+    SELECT id::int, name, description, archived_at, created_by FROM projects WHERE id = ${id}`;
   return (p as Project) ?? null;
 }
 
 export async function createProject(name: string, description: string, createdBy: string): Promise<Project> {
   const [p] = await sql`
     INSERT INTO projects (name, description, created_by) VALUES (${name}, ${description}, ${createdBy})
-    RETURNING id, name, description, archived_at, created_by`;
+    RETURNING id::int, name, description, archived_at, created_by`;
   await seedDefaultColumns(p.id);
   return p as Project;
 }

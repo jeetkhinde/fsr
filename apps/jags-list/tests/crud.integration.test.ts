@@ -78,4 +78,49 @@ describe.skipIf(!run)('crud routes', () => {
     const [p] = await sql`SELECT archived_at FROM projects WHERE id = ${id}`;
     expect(p.archived_at).not.toBeNull();
   });
+
+  it('board shows seeded columns; a member adds a task that lands in Backlog', async () => {
+    const create = await post('/projects?/create', memberCookie, { name: 'Board Proj', description: '' });
+    expect(create.status).toBe(303);
+    const [proj] = await sql`SELECT id FROM projects WHERE name = 'Board Proj' ORDER BY id DESC LIMIT 1`;
+    createdProjectIds.push(proj.id);
+
+    const board = await (await fetch(`${BASE}/projects/${proj.id}/board`, { headers: { cookie: memberCookie } })).text();
+    expect(board).toContain('Backlog');
+    expect(board).toContain('In Progress');
+    expect(board).toContain('Done');
+
+    const [backlog] = await sql`SELECT id FROM columns WHERE project_id = ${proj.id} AND name = 'Backlog'`;
+    const add = await post(`/projects/${proj.id}/board?/createTask`, memberCookie, {
+      column_id: String(backlog.id), title: 'First task',
+    });
+    expect(add.status).toBe(303);
+    const [task] = await sql`SELECT id, column_id FROM tasks WHERE title = 'First task'`;
+    expect(task.column_id).toBe(backlog.id);
+  });
+
+  it('moving a task into the terminal column logs task.completed', async () => {
+    const proj = createdProjectIds[createdProjectIds.length - 1];
+    const [task] = await sql`SELECT id FROM tasks WHERE title = 'First task'`;
+    const [done] = await sql`SELECT id FROM columns WHERE project_id = ${proj} AND name = 'Done'`;
+    const res = await post(`/projects/${proj}/board?/moveTask`, memberCookie, {
+      task_id: String(task.id), column_id: String(done.id),
+    });
+    expect(res.status).toBe(303);
+    const [moved] = await sql`SELECT column_id FROM tasks WHERE id = ${task.id}`;
+    expect(moved.column_id).toBe(done.id);
+    const acts = await sql`SELECT verb FROM activity WHERE project_id = ${proj} AND verb = 'task.completed'`;
+    expect(acts.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('only an admin can delete a column', async () => {
+    const proj = createdProjectIds[createdProjectIds.length - 1];
+    const [col] = await sql`
+      INSERT INTO columns (project_id, name, position) VALUES (${proj}, 'Scratch', 9000) RETURNING id`;
+    const denied = await post(`/projects/${proj}/board?/deleteColumn`, memberCookie, { column_id: String(col.id) });
+    expect(denied.status).toBe(401);
+    const ok = await post(`/projects/${proj}/board?/deleteColumn`, adminCookie, { column_id: String(col.id) });
+    expect(ok.status).toBe(303);
+    expect(await sql`SELECT id FROM columns WHERE id = ${col.id}`).toHaveLength(0);
+  });
 });

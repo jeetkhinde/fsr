@@ -17,7 +17,7 @@ export interface Task {
 
 export async function listTasksByProject(projectId: number): Promise<Task[]> {
   return (await sql`
-    SELECT id, project_id, column_id, title, description, assignee_id, priority,
+    SELECT id::int, project_id::int, column_id::int, title, description, assignee_id, priority,
            to_char(due_date, 'YYYY-MM-DD') AS due_date, position, version, created_by
     FROM tasks WHERE project_id = ${projectId}
     ORDER BY column_id ASC, position ASC`) as Task[];
@@ -25,7 +25,7 @@ export async function listTasksByProject(projectId: number): Promise<Task[]> {
 
 export async function taskById(id: number): Promise<Task | null> {
   const [t] = await sql`
-    SELECT id, project_id, column_id, title, description, assignee_id, priority,
+    SELECT id::int, project_id::int, column_id::int, title, description, assignee_id, priority,
            to_char(due_date, 'YYYY-MM-DD') AS due_date, position, version, created_by
     FROM tasks WHERE id = ${id}`;
   return (t as Task) ?? null;
@@ -46,7 +46,7 @@ export async function createTask(input: {
   const [t] = await sql`
     INSERT INTO tasks (project_id, column_id, title, position, created_by)
     VALUES (${input.projectId}, ${input.columnId}, ${input.title}, ${position}, ${input.createdBy})
-    RETURNING id, project_id, column_id, title, description, assignee_id, priority,
+    RETURNING id::int, project_id::int, column_id::int, title, description, assignee_id, priority,
               to_char(due_date, 'YYYY-MM-DD') AS due_date, position, version, created_by`;
   return t as Task;
 }
@@ -75,7 +75,7 @@ export async function updateTaskFields(
       due_date = ${fields.dueDate === undefined ? current.due_date : fields.dueDate},
       version = version + 1
     WHERE id = ${id}
-    RETURNING id, project_id, column_id, title, description, assignee_id, priority,
+    RETURNING id::int, project_id::int, column_id::int, title, description, assignee_id, priority,
               to_char(due_date, 'YYYY-MM-DD') AS due_date, position, version, created_by`;
   return t as Task;
 }
@@ -84,7 +84,7 @@ export async function moveTask(id: number, toColumnId: number, position: number)
   const [t] = await sql`
     UPDATE tasks SET column_id = ${toColumnId}, position = ${position}, version = version + 1
     WHERE id = ${id}
-    RETURNING id, project_id, column_id, title, description, assignee_id, priority,
+    RETURNING id::int, project_id::int, column_id::int, title, description, assignee_id, priority,
               to_char(due_date, 'YYYY-MM-DD') AS due_date, position, version, created_by`;
   return t as Task;
 }

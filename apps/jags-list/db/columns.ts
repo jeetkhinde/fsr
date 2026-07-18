@@ -19,13 +19,13 @@ export async function seedDefaultColumns(projectId: number): Promise<void> {
 
 export async function listColumns(projectId: number): Promise<Column[]> {
   return (await sql`
-    SELECT id, project_id, name, position, is_terminal
+    SELECT id::int, project_id::int, name, position, is_terminal
     FROM columns WHERE project_id = ${projectId} ORDER BY position ASC`) as Column[];
 }
 
 export async function columnById(id: number): Promise<Column | null> {
   const [c] = await sql`
-    SELECT id, project_id, name, position, is_terminal FROM columns WHERE id = ${id}`;
+    SELECT id::int, project_id::int, name, position, is_terminal FROM columns WHERE id = ${id}`;
   return (c as Column) ?? null;
 }
 
@@ -34,7 +34,7 @@ export async function createColumn(projectId: number, name: string): Promise<Col
   const position = positionAtEnd(existing.map((c) => c.position));
   const [c] = await sql`
     INSERT INTO columns (project_id, name, position) VALUES (${projectId}, ${name}, ${position})
-    RETURNING id, project_id, name, position, is_terminal`;
+    RETURNING id::int, project_id::int, name, position, is_terminal`;
   return c as Column;
 }
 
