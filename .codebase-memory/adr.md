@@ -59,10 +59,9 @@ kiln_fsr (
   route, slot,                    -- '' slot = route-level, else field-level
   query, query_params,            -- SQL to re-execute when stale
   depends_on TEXT[],
-  stale BOOLEAN, version INT, hit_count INT,
-  promoted BOOLEAN, promote_after INT, debounce_secs INT,
-  html_path TEXT, json_path TEXT, checksum TEXT,
-  last_hit TIMESTAMPTZ, purge_after INT,
+  stale BOOLEAN, version INT, debounce_secs INT,
+  html_path TEXT, json_path TEXT, checksum TEXT,   -- html_path IS NOT NULL == promoted (ADR-016)
+  last_requested_at TIMESTAMPTZ, purge_after_secs INT,
   PRIMARY KEY (route, slot)
 )
 ```
@@ -73,14 +72,35 @@ kiln_fsr (
 
 ## ADR-003: Unified Rendering Lifecycle via promote_after
 
-**Status:** LOCKED
-**Decision:** One integer unifies SSG/ISR/FSR/SSR:
+**Status:** SUPERSEDED by ADR-016 (2026-07-19)
+**Decision (historical):** One integer unified SSG/ISR/FSR/SSR via hit counting.
+
+---
+
+## ADR-016: Bake Classes Replace Hit-Count Promotion
+
+**Status:** ACCEPTED 2026-07-19
+**Decision:** Rendering mode is observed, not declared. A Proxy purity tracker
+(`packages/routekit/src/purity.ts`) watches each `load()` for access to
+`req.locals`/`headers`/`query`/`raw`/body:
+
 ```
-promote_after absent or 0  → SSG (bake at startup)
-promote_after = 1          → ISR (bake after first request)
-promote_after = N          → FSR (bake after N hits)
-No live descriptors        → pure SSR
+absent (auto)   → first identity-free render bakes; identity access ⇒ pure SSR (latched, artifacts deleted)
+bake = 'static' → prebake entries() at startup, else first-hit bake
+bake = 'shared' → always bake first render (dev warning if identity accessed)
+bake = false    → pure SSR, never cached
 ```
+
+Artifact presence IS promotion — `hit_count`/`promoted`/`promote_after`/
+`promoted_at`/`last_hit` columns dropped; queries derive promoted-ness from
+`html_path IS NOT NULL`. Zero Postgres on the cached read path (throttled
+fire-and-forget `touchRoute`; tombstone checked only at bake time).
+`cache_key` pages are exempt from auto-demotion and bake per variant. Impure
+layouts are never pattern-cached and block their page's bake. Exporting
+`promote_after` fails boot with `StartupError('RemovedOption')`.
+**Migration:** flush Redis + `.kiln-cache` when deploying across this change —
+pre-ADR-016 artifacts are trusted as-is. Supersedes ADR-003; amends ADR-015
+(the `promote_after = false` workaround for auth pages is obsolete).
 
 ---
 

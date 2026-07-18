@@ -118,7 +118,7 @@ adapter.app.post('/auth/login', async (ctx) => { /* signInEmail → Set-Cookie *
   stripped, cache-safe request (empty headers *and* empty `locals`) because a
   layout can be baked into a shared cache entry — per-user data there would leak
   to every visitor. Keep auth-dependent rendering in page `load()`, not layouts.
-- **Per-user pages must not be promoted.** Set `export const promote_after = false`
+- **Per-user pages are never baked automatically** — their `load()` reads `req.locals`, so the classifier keeps them pure SSR (ADR-016); no export needed. `export const bake = false`
   on any page whose `load()` reads `req.locals.user`, or one user's baked HTML is
   served to everyone. See [`rendering-and-caching.md`](rendering-and-caching.md).
 - **Raw auth routes still need CSRF origin headers** on form POSTs — Kiln's csrf

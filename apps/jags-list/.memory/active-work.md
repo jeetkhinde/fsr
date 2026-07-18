@@ -12,8 +12,9 @@ Last updated: 2026-07-17
 
 ## Auth / rendering note (in use)
 
-Every auth-varying / per-request page exports `export const promote_after = false`
-to force pure SSR. This works around the framework's absent-`promote_after` defect
+RESOLVED (ADR-016, 2026-07-19): the bake classifier now keeps session-reading
+pages pure SSR automatically; the per-page `promote_after = false` workaround
+exports were removed. Previously this worked around the absent-`promote_after` defect
 (see root [`../../.memory/bugs-active.md`](../../.memory/bugs-active.md) §1; ADR-015).
 
 ## Next

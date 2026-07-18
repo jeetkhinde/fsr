@@ -1,8 +1,9 @@
 # Kiln Baked-Shell Architecture
 
-Kiln promotes every concrete page and matched layout segment after two
-successful requests by default. `promote_after = 0` promotes on the first
-successful render; `promote_after = false` disables promotion for that target.
+Kiln bakes every concrete page and matched layout segment on its first
+identity-free render (ADR-016). `bake = 'static'` prebakes entries() at
+startup; `bake = false` disables baking for that target; identity-touching
+load() functions are never baked.
 
 Promoted artifacts have two parts:
 
