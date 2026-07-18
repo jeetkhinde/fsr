@@ -23,8 +23,7 @@ export default function HomePage({
         Welcome, {user.name} <span className="handle">{`@${user.handle}`}</span>
       </h1>
       <p>
-        My Tasks lands here in a later milestone. For now:{' '}
-        <a href="/team">manage your team</a>.
+        <a href="/projects">Go to your projects</a>. My Tasks lands here in a later milestone.
       </p>
     </section>
   );
