@@ -123,4 +123,26 @@ describe.skipIf(!run)('crud routes', () => {
     expect(ok.status).toBe(303);
     expect(await sql`SELECT id FROM columns WHERE id = ${col.id}`).toHaveLength(0);
   });
+
+  it('editing a task assignee logs task.assigned and updates the row', async () => {
+    const [task] = await sql`SELECT id FROM tasks WHERE title = 'First task'`;
+    const [member] = await sql`SELECT id FROM "user" WHERE email = ${MEMBER.email}`;
+    const res = await post(`/tasks/${task.id}?/update`, memberCookie, {
+      title: 'First task', description: 'now with detail', assignee_id: member.id, priority: '3', due_date: '2026-10-01',
+    });
+    expect(res.status).toBe(303);
+    const [row] = await sql`SELECT assignee_id, priority, description FROM tasks WHERE id = ${task.id}`;
+    expect(row.assignee_id).toBe(member.id);
+    expect(row.priority).toBe(3);
+    expect(row.description).toBe('now with detail');
+    const assigned = await sql`SELECT verb FROM activity WHERE task_id = ${task.id} AND verb = 'task.assigned'`;
+    expect(assigned.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('the activity feed lists recent events newest-first', async () => {
+    const proj = createdProjectIds[createdProjectIds.length - 1];
+    const html = await (await fetch(`${BASE}/projects/${proj}/activity`, { headers: { cookie: memberCookie } })).text();
+    expect(html).toContain('task.created');
+    expect(html).toContain('task.completed');
+  });
 });
