@@ -1892,5 +1892,5 @@ git commit -m "docs(jags-list): setup and auth architecture README"
 
 ## Post-plan notes for the executor
 
-- **Kiln findings log:** if `createUser`'s `data: { handle }` doesn't persist, if the CSRF middleware blocks the raw `/auth/login` route unexpectedly, or if hooks/`onRequest` behaves differently than documented here, record it in `.memory/bugs.md` and surface it — these feed the framework-improvement backlog (spec §9).
+- **Kiln findings log:** if `createUser`'s `data: { handle }` doesn't persist, if the CSRF middleware blocks the raw `/auth/login` route unexpectedly, or if hooks/`onRequest` behaves differently than documented here, record it in `.memory/bugs-active.md` and surface it — these feed the framework-improvement backlog (spec §9).
 - **Next plan:** Plan 2 (projects/columns/tasks CRUD + Live wiring) gets written after this plan lands, incorporating anything learned here.

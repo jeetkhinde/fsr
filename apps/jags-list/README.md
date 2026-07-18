@@ -48,7 +48,7 @@ invites are the only way in.
 - `hooks.ts onRequest` gates every route not on the public allowlist,
   including promoted pages and the `/__kiln/fsr` SSE endpoint.
 
-## Two Kiln realities this app works around (see repo `.memory/bugs.md`)
+## Two Kiln realities this app works around (see repo `.memory/bugs-active.md`)
 
 - **Redis cache keys are not app-namespaced.** Two Kiln apps sharing one Redis
   logical DB collide on shared routes like `/`. Give each app its own DB index

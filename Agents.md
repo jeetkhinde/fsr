@@ -1,11 +1,22 @@
 # Kiln Workspace Entrypoint & Rules
 
-Please refer to the version-controlled memory documents under the [.memory/](file:///Users/jagjeet/Development/workspaces/Kiln/.memory/) directory for context, rules, and guidelines:
+This is the **Kiln framework** workspace. The memory below describes the framework
+itself and is meant to be universal. **App-specific** context (e.g. `apps/jags-list`)
+lives in that app's own `AGENTS.md` + `.memory/` — do **not** merge the two.
 
-*   **[Rules & Guidelines](file:///Users/jagjeet/Development/workspaces/Kiln/.memory/agent-rules.md)**: Execution styles, MCP config tools, EchoVault protocols, and workspace workflows.
-*   **[Active Work](file:///Users/jagjeet/Development/workspaces/Kiln/.memory/active-work.md)**: Current branch state, validation setup, and active goals.
-*   **[Architecture](file:///Users/jagjeet/Development/workspaces/Kiln/.memory/architecture.md)**: Monorepo package structure, storage models, and schemas.
-*   **[Features](file:///Users/jagjeet/Development/workspaces/Kiln/.memory/features.md)**: Complete source-verified feature inventory — routing, rendering modes, live/FSR, middleware, actions, error handling, cache providers, i18n, image optimisation, service worker, config. Read this before scanning code or answering "does Kiln support X?".
-*   **[Decisions](file:///Users/jagjeet/Development/workspaces/Kiln/.memory/decisions.md)**: Architectural Decision Records (ADRs) and locked DX rules.
-*   **[Bugs & Blockers](file:///Users/jagjeet/Development/workspaces/Kiln/.memory/bugs.md)**: TypeScript type mismatches, compiler errors, and database test issues.
-*   **[Roadmap](file:///Users/jagjeet/Development/workspaces/Kiln/.memory/roadmap.md)**: Milestones, backlogs, and feature branch isolates.
+Version-controlled framework memory under [.memory/](.memory/):
+
+*   **[Rules & Guidelines](.memory/agent-rules.md)**: Execution styles, MCP config tools, EchoVault protocols, and workspace workflows.
+*   **[Active Work](.memory/active-work.md)**: Current branch state, validation setup, and active goals. Completed-session history → **[Work Log](.memory/work-log.md)**.
+*   **[Architecture](.memory/architecture.md)**: Monorepo package structure, storage models, and schemas.
+*   **[Features](.memory/features.md)**: Complete source-verified feature inventory — routing, rendering modes, live/FSR, middleware, actions, error handling, cache providers, i18n, image optimisation, service worker, config. Read this before scanning code or answering "does Kiln support X?".
+*   **[Decisions](.memory/decisions.md)**: Architectural Decision Records (ADRs) and locked DX rules.
+*   **[Active Bugs](.memory/bugs-active.md)**: Open framework issues, blockers, and type errors. Resolved history → **[Resolved Bugs](.memory/bugs-resolved.md)**.
+*   **[Roadmap](.memory/roadmap.md)**: Milestones, backlogs, and feature branch isolates.
+
+## Apps built on Kiln
+
+Applications live under `apps/`, each with its own entrypoint and memory (kept
+separate from the framework's):
+
+*   **[apps/jags-list/AGENTS.md](apps/jags-list/AGENTS.md)** — flagship dogfood app (small-team project management).
