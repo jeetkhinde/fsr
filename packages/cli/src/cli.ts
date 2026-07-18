@@ -49,7 +49,6 @@ async function initFsr(config: KilnConfig): Promise<FsrRuntime> {
 
   const watcher = new FsrWatcher(store, redisCache, {
     pollIntervalMs: config.fsr.pollIntervalMs ?? 1000,
-    promoteAfterHits: config.fsr.promoteAfterHits,
     patchDebounceSecs: config.fsr.patchDebounceSecs,
     purgeAfterSeconds: config.fsr.purgeAfterSeconds,
     purgeSweepSeconds: config.fsr.purgeSweepSeconds,

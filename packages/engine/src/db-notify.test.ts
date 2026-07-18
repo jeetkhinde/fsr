@@ -50,7 +50,6 @@ async function runTests() {
 
   const config: WatcherConfig = {
     pollIntervalMs: 200,
-    promoteAfterHits: 1,
     patchDebounceSecs: 0,
     purgeAfterSeconds: 3600,
     scheduledInvalidations: [],
