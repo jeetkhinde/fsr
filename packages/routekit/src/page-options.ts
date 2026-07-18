@@ -1,8 +1,14 @@
-import { LiveProp } from '@kiln/core';
+import { LiveProp, StartupError } from '@kiln/core';
 import type { KilnRequest, LiveFieldMeta } from '@kiln/core';
 
+export type BakeMode = 'static' | 'shared' | false;
+
 export interface PageOptions {
-  promoteAfter?: number | false;
+  /** undefined = 'auto': bake on the first render whose load() touched no
+   * identity fields; a single identity-touching render demotes the route
+   * for the life of the process. 'shared'/'static' bake unconditionally
+   * (dev-mode warning if identity is accessed). false = pure SSR. */
+  bake?: BakeMode;
   revalidate?: number | false;
   debounce?: number;
   purgeAfter?: number;
@@ -13,12 +19,27 @@ export interface PageOptions {
 }
 
 export function extractPageOptions(module: any): PageOptions {
-  let promoteAfter = module.promote_after;
-  if (promoteAfter === undefined && typeof module.promoteAfter === 'number') {
-    console.warn('[kiln] promoteAfter is deprecated; export promote_after instead');
-    promoteAfter = module.promoteAfter;
+  if (module.promote_after !== undefined || module.promoteAfter !== undefined) {
+    throw new StartupError(
+      'RemovedOption',
+      '[kiln] promote_after has been removed. Delete the export: absent = auto ' +
+        "(bake on first identity-free render). Use `export const bake = 'static' | 'shared' | false` " +
+        'to override. See docs/agents/rendering-and-caching.md.'
+    );
   }
-  
+  let bake: BakeMode | undefined;
+  if (module.bake !== undefined) {
+    if (module.bake === 'static' || module.bake === 'shared' || module.bake === false) {
+      bake = module.bake;
+    } else {
+      throw new StartupError(
+        'RemovedOption',
+        `[kiln] invalid bake value ${JSON.stringify(module.bake)}; expected 'static', 'shared', or false.`
+      );
+    }
+  }
+
+
   let patchMode = module.patch_mode;
   if (patchMode === undefined && module.patchMode) {
     console.warn('[kiln] patchMode is deprecated; export patch_mode instead');
@@ -32,10 +53,7 @@ export function extractPageOptions(module: any): PageOptions {
   }
 
   return {
-    promoteAfter:
-      typeof promoteAfter === 'number' || promoteAfter === false
-        ? promoteAfter
-        : undefined,
+    bake,
     revalidate:
       typeof module.revalidate === 'number' || module.revalidate === false
         ? module.revalidate
