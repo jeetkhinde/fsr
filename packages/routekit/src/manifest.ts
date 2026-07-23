@@ -5,7 +5,7 @@ export interface PageRoute {
   filePath: string;
   relativePath: string;
   layouts: string[];
-  bake?: 'static' | 'shared' | false;
+  bake?: 'static' | 'shared' | 'user' | false;
   pinInRedis?: boolean;
   liveFields: LiveFieldMeta[];
   hasEntries: boolean;    // exports entries(): Promise<Record<string,string>[]>
