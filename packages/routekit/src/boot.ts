@@ -173,6 +173,7 @@ export function buildPageHandler(
       }
     }
     const userKey = uid ?? '';
+    const isUserVariant = bakeMode === 'user' && uid !== null;
     const revalidate = options.revalidate ?? kilnConfig?.fsr?.revalidateSeconds ?? 300;
     const purgeAfter = options.purgeAfter ?? kilnConfig?.fsr?.purgeAfterSeconds ?? 2_592_000;
     const bakeEligible =
@@ -290,10 +291,11 @@ export function buildPageHandler(
       if (loaded === null) return;
 
       const liveFields = extractLiveFields(rawPageProps);
-      if (store && watcher && liveFields.length > 0 && !variant) {
-        const loaderReq = makeLoaderRequest(req);
+      if (store && watcher && liveFields.length > 0 && (!variant || isUserVariant)) {
+        const loaderReq = makeLoaderRequest(req, isUserVariant);
         watcher.registerLoader({
           route: req.path,
+          userKey,
           load: async () => {
             const l = typeof module.load === 'function' ? await module.load(loaderReq) : {};
             return l as Record<string, unknown>;
@@ -515,7 +517,6 @@ export function buildPageHandler(
       // 'user' variants record their baked paths under their user_key row so
       // the watcher can patch them; cache_key variants keep today's behavior
       // (no row — live features are unsupported for them).
-      const isUserVariant = bakeMode === 'user' && uid !== null;
       jsonPath = variant && !isUserVariant ? null : cache.diskJsonPath(req.path, variant);
       htmlPath = variant && !isUserVariant ? null : cache.diskHtmlPath(req.path, variant);
       if (store && (!variant || isUserVariant)) {
@@ -526,11 +527,18 @@ export function buildPageHandler(
     // Live registrations write to the route's BASE cache paths; a cacheKey
     // page's per-variant artifacts would be silently poisoned by them, so
     // live features are not registered for variant requests.
-    if (variant && watcher && (hasLiveLists(rawPageProps) || extractLiveFields(rawPageProps).length > 0)) {
+    if (variant && !isUserVariant && watcher && (hasLiveLists(rawPageProps) || extractLiveFields(rawPageProps).length > 0)) {
       warnOnce(
         `variant-live:${req.path}`,
         `[kiln] route "${req.path}" combines cacheKey with LiveProp/Live.list; ` +
           `live updates are not supported for cacheKey variants yet and were skipped.`,
+      );
+    }
+    if (isUserVariant && watcher && hasLiveLists(rawPageProps)) {
+      warnOnce(
+        `user-live-list:${req.path}`,
+        `[kiln] route "${req.path}" combines bake='user' with Live.list; per-user list ` +
+          `updates are not supported yet (scalar LiveProp fields are) and were skipped.`,
       );
     }
 
@@ -566,7 +574,7 @@ export function buildPageHandler(
 
     // 12. Persist live fields on pageMeta (extracted once at step 7)
     const liveFields = pageLiveFields;
-    if (store && liveFields.length > 0 && !tombstoned && !variant) {
+    if (store && liveFields.length > 0 && !tombstoned && (!variant || isUserVariant)) {
       for (const field of liveFields) {
         await store.upsertSlot(
           req.path,
@@ -575,11 +583,14 @@ export function buildPageHandler(
           [],
           field.dependsOn ? [field.dependsOn] : [],
           field.debounce ?? options.debounce ?? kilnConfig?.fsr?.patchDebounceSecs,
+          null,
+          userKey,
         );
       }
-      const loaderReq = makeLoaderRequest(req);
+      const loaderReq = makeLoaderRequest(req, isUserVariant);
       watcher?.registerLoader?.({
         route: req.path,
+        userKey,
         load: async () => {
           const loaded = typeof module.load === 'function' ? await module.load(loaderReq) : {};
           return loaded as Record<string, unknown>;
@@ -628,7 +639,7 @@ function warnOnce(key: string, message: string): void {
  * kept — the first visitor's headers, cookies, and body must never leak into
  * a cache entry that is served to everyone.
  */
-function makeLoaderRequest(req: KilnRequest): KilnRequest {
+function makeLoaderRequest(req: KilnRequest, includeLocals = false): KilnRequest {
   return {
     path: req.path,
     method: 'GET',
@@ -639,10 +650,12 @@ function makeLoaderRequest(req: KilnRequest): KilnRequest {
     json: async () => ({}),
     isEnhanced: false,
     layoutsPresent: [],
-    // Intentionally empty, like the stripped headers above: a layout load can
-    // be baked into a shared cache entry, so per-user locals (e.g. the auth
-    // user) must not flow in here or one visitor's data leaks to everyone.
-    locals: {},
+    // Shared cache entries must never embed one visitor's identity, so locals
+    // stay empty by default. bake='user' loaders opt in (includeLocals): the
+    // snapshot being refreshed belongs to exactly this user, and the captured
+    // identity is how the watcher re-runs load() as them. Captured at
+    // registration — role changes propagate on the user's next real request.
+    locals: includeLocals ? structuredClone(req.locals) : {},
     prebakeNext: () => {},
   };
 }

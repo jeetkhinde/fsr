@@ -464,9 +464,9 @@ export class FsrStore {
     }));
   }
 
-  async getRoutePatchMode(route: string): Promise<'json' | 'both' | null> {
+  async getRoutePatchMode(route: string, userKey = ''): Promise<'json' | 'both' | null> {
     const rows = await this.sql`
-      SELECT patch_mode as "patchMode" FROM kiln_fsr WHERE route = ${route} AND slot = ''
+      SELECT patch_mode as "patchMode" FROM kiln_fsr WHERE route = ${route} AND slot = '' AND user_key = ${userKey}
     `;
     const row = rows[0] as any;
     return row ? row.patchMode : null;

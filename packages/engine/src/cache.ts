@@ -331,16 +331,18 @@ export class RedisCache {
     return this.client;
   }
 
-  private htmlKey(route: string): string {
-    return `${this.keyPrefix}:html:${route}`;
+  private htmlKey(route: string, variant?: string): string {
+    return variant ? `${this.keyPrefix}:html:${route}:v:${safeVariant(variant)}` : `${this.keyPrefix}:html:${route}`;
   }
 
-  private slotKey(route: string): string {
+  private slotKey(route: string, variant?: string): string {
     return `${this.keyPrefix}:slot:${route}`;
   }
 
-  private jsonKey(route: string): string {
-    return `${this.keyPrefix}:json:${route}`;
+  private jsonKey(route: string, variant?: string): string {
+    return variant
+      ? `${this.keyPrefix}:json:${route}:v:${safeVariant(variant)}`
+      : `${this.keyPrefix}:json:${route}`;
   }
 
   async getHtml(route: string): Promise<string | null> {
@@ -358,8 +360,8 @@ export class RedisCache {
     }
   }
 
-  async patchSlot(route: string, slot: string, value: string): Promise<void> {
-    const key = this.slotKey(route);
+  async patchSlot(route: string, slot: string, value: string, variant?: string): Promise<void> {
+    const key = this.slotKey(route, variant);
     if (this.artifactTtlSecs > 0) {
       // Redis has no single-command atomic "HSET + EXPIRE" (pre-7.4
       // HEXPIRE sets a per-field TTL, not what we want here), so run both
@@ -388,8 +390,8 @@ export class RedisCache {
     return result as Record<string, string>;
   }
 
-  async setJson(route: string, json: any): Promise<void> {
-    const key = this.jsonKey(route);
+  async setJson(route: string, json: any, variant?: string): Promise<void> {
+    const key = this.jsonKey(route, variant);
     const value = typeof json === 'string' ? json : JSON.stringify(json);
     if (this.artifactTtlSecs > 0) {
       await this.client.send('SET', [key, value, 'EX', String(this.artifactTtlSecs)]);
@@ -398,8 +400,8 @@ export class RedisCache {
     }
   }
 
-  async getJson(route: string): Promise<any | null> {
-    const s = await this.client.get(this.jsonKey(route));
+  async getJson(route: string, variant?: string): Promise<any | null> {
+    const s = await this.client.get(this.jsonKey(route, variant));
     if (!s) return null;
     try {
       return JSON.parse(s);
@@ -427,4 +429,4 @@ export class RedisCache {
 
 // Re-export legacy types consumed by hub.ts/watcher.ts until they migrate
 export interface InvalidatePayload { route: string; slots: string[]; deps: string[]; }
-export interface PatchPayload { route: string; slot: string; value: any; }
+export interface PatchPayload { route: string; slot: string; value: any; userKey?: string; }
