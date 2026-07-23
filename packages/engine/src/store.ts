@@ -10,6 +10,7 @@ export type BunSqlClient = {
 export interface StaleSlot {
   route: string;
   slot: string;
+  userKey: string;
   query: string | null;
   queryParams: any;
   dependsOn: string[];
@@ -30,6 +31,7 @@ export interface EvictedRoute {
 export interface InspectRow {
   route: string;
   slot: string;
+  userKey: string;
   dependsOn: string[];
   stale: boolean;
   version: number;
@@ -76,12 +78,13 @@ export class FsrStore {
     revalidateSecs = 300,
     purgeAfterSecs = 2_592_000,
     patchMode: 'json' | 'both' | null = 'json',
+    userKey = '',
   ): Promise<void> {
     await this.sql`
       INSERT INTO kiln_fsr
-        (route, slot, revalidate_secs, purge_after_secs, patch_mode, last_requested_at)
-      VALUES (${route}, '', ${revalidateSecs}, ${purgeAfterSecs}, ${patchMode}, NOW())
-      ON CONFLICT (route, slot) DO UPDATE SET
+        (route, slot, user_key, revalidate_secs, purge_after_secs, patch_mode, last_requested_at)
+      VALUES (${route}, '', ${userKey}, ${revalidateSecs}, ${purgeAfterSecs}, ${patchMode}, NOW())
+      ON CONFLICT (route, user_key, slot) DO UPDATE SET
         revalidate_secs = ${revalidateSecs},
         purge_after_secs = ${purgeAfterSecs},
         patch_mode = ${patchMode}
@@ -95,21 +98,23 @@ export class FsrStore {
     queryParams: any,
     dependsOn: string[],
     debounceSecs?: number,
-    columnName?: string
+    columnName?: string | null,
+    userKey = ''
   ): Promise<void> {
     await this.sql`
       INSERT INTO kiln_fsr
-        (route, slot, query, query_params, depends_on, debounce_secs, column_name)
+        (route, slot, user_key, query, query_params, depends_on, debounce_secs, column_name)
       VALUES (
         ${route}, 
         ${slot}, 
+        ${userKey},
         ${querySql}, 
         ${queryParams}::jsonb,
         ARRAY(SELECT jsonb_array_elements_text(${dependsOn}::jsonb))::text[],
         ${debounceSecs ?? null}, 
         ${columnName ?? null}
       )
-      ON CONFLICT (route, slot) DO UPDATE SET
+      ON CONFLICT (route, user_key, slot) DO UPDATE SET
         query         = EXCLUDED.query,
         query_params  = EXCLUDED.query_params,
         depends_on    = EXCLUDED.depends_on,
@@ -118,10 +123,10 @@ export class FsrStore {
     `;
   }
 
-  async touchRoute(route: string): Promise<void> {
+  async touchRoute(route: string, userKey = ''): Promise<void> {
     await this.sql`
       UPDATE kiln_fsr SET last_requested_at = NOW()
-      WHERE route = ${route} AND slot = '' AND NOT tombstoned
+      WHERE route = ${route} AND slot = '' AND user_key = ${userKey} AND NOT tombstoned
     `;
   }
 
@@ -138,8 +143,8 @@ export class FsrStore {
     }
     await this.lists.deleteRoute(route);
 
-    const routeRow = rows.find((r) => r.slot === '');
-    if (routeRow) {
+    // One route-level row per user_key now — unlink every user's artifacts.
+    for (const routeRow of rows.filter((r) => r.slot === '')) {
       try {
         const fs = await import('fs/promises');
         if (routeRow.htmlPath) {
@@ -156,7 +161,7 @@ export class FsrStore {
 
   async isTombstoned(route: string): Promise<boolean> {
     const rows = await this.sql`
-      SELECT tombstoned FROM kiln_fsr WHERE route = ${route} AND slot = ''
+      SELECT tombstoned FROM kiln_fsr WHERE route = ${route} AND slot = '' AND user_key = ''
     `;
     const row = rows[0] as any;
     return row ? !!row.tombstoned : false;
@@ -241,9 +246,9 @@ export class FsrStore {
   async fetchStaleSlots(): Promise<StaleSlot[]> {
     const rows = await this.sql`
       WITH candidates AS (
-        SELECT s.route, s.slot
+        SELECT s.route, s.slot, s.user_key
         FROM kiln_fsr s
-        JOIN kiln_fsr r ON s.route = r.route AND r.slot = ''
+        JOIN kiln_fsr r ON s.route = r.route AND r.user_key = s.user_key AND r.slot = ''
         WHERE s.slot != ''
         AND (
           s.stale = TRUE
@@ -264,9 +269,9 @@ export class FsrStore {
       UPDATE kiln_fsr s
       SET refresh_claimed_until = NOW() + interval '30 seconds'
       FROM candidates c, kiln_fsr r
-      WHERE s.route = c.route AND s.slot = c.slot
-        AND r.route = s.route AND r.slot = ''
-      RETURNING s.route, s.slot, s.query, s.query_params as "queryParams",
+      WHERE s.route = c.route AND s.slot = c.slot AND s.user_key = c.user_key
+        AND r.route = s.route AND r.user_key = s.user_key AND r.slot = ''
+      RETURNING s.route, s.slot, s.user_key as "userKey", s.query, s.query_params as "queryParams",
                 s.depends_on as "dependsOn", (r.html_path IS NOT NULL) as "promoted",
                 s.debounce_secs as "debounceSecs", r.html_path as "htmlPath",
                 r.json_path as "jsonPath", s.column_name as "columnName", r.patch_mode as "patchMode"
@@ -275,6 +280,7 @@ export class FsrStore {
     return rows.map((r: any) => ({
       route: r.route,
       slot: r.slot,
+      userKey: r.userKey ?? '',
       query: r.query,
       queryParams: r.queryParams,
       dependsOn: r.dependsOn || [],
@@ -287,28 +293,30 @@ export class FsrStore {
     }));
   }
 
-  async getPromotedPaths(route: string): Promise<{ htmlPath: string | null; jsonPath: string | null } | null> {
+  async getPromotedPaths(route: string, userKey = ''): Promise<{ htmlPath: string | null; jsonPath: string | null } | null> {
     const rows = await this.sql`
       SELECT html_path as "htmlPath", json_path as "jsonPath"
       FROM kiln_fsr
-      WHERE route = ${route} AND slot = '' AND html_path IS NOT NULL
+      WHERE route = ${route} AND slot = '' AND user_key = ${userKey} AND html_path IS NOT NULL
     `;
     const row = rows[0] as any;
     return row ? { htmlPath: row.htmlPath, jsonPath: row.jsonPath } : null;
   }
 
-  async setBakedPaths(route: string, htmlPath: string | null, jsonPath: string | null): Promise<void> {
+  async setBakedPaths(route: string, htmlPath: string | null, jsonPath: string | null, userKey = ''): Promise<void> {
+    // Row may not exist yet for a per-user variant — upsert it.
     await this.sql`
-      UPDATE kiln_fsr
-      SET html_path = ${htmlPath}, json_path = ${jsonPath}
-      WHERE route = ${route} AND slot = ''
+      INSERT INTO kiln_fsr (route, slot, user_key, html_path, json_path, last_requested_at)
+      VALUES (${route}, '', ${userKey}, ${htmlPath}, ${jsonPath}, NOW())
+      ON CONFLICT (route, user_key, slot) DO UPDATE SET
+        html_path = ${htmlPath}, json_path = ${jsonPath}
     `;
   }
 
   async purgeInactiveRoutes(globalThresholdSecs: number): Promise<EvictedRoute[]> {
     const rows = await this.sql`
       WITH candidates AS (
-        SELECT route
+        SELECT route, user_key
         FROM kiln_fsr
         WHERE slot = ''
           AND NOT tombstoned
@@ -319,7 +327,7 @@ export class FsrStore {
       deleted AS (
         DELETE FROM kiln_fsr f
         USING candidates c
-        WHERE f.route = c.route
+        WHERE f.route = c.route AND f.user_key = c.user_key
         RETURNING f.route, f.slot, f.html_path as "htmlPath", f.json_path as "jsonPath"
       )
       SELECT route, "htmlPath", "jsonPath"
@@ -337,35 +345,35 @@ export class FsrStore {
     }));
   }
 
-  async markFresh(route: string, slot: string): Promise<void> {
+  async markFresh(route: string, slot: string, userKey = ''): Promise<void> {
     await this.sql`
       UPDATE kiln_fsr
       SET stale = FALSE, version = version + 1, last_patched_at = NOW(),
           refresh_claimed_until = NULL
-      WHERE route = ${route} AND slot = ${slot}
+      WHERE route = ${route} AND slot = ${slot} AND user_key = ${userKey}
     `;
   }
 
-  async fetchSlotsForSnapshot(route: string, slots: string[]): Promise<StaleSlot[]> {
+  async fetchSlotsForSnapshot(route: string, slots: string[], userKey = ''): Promise<StaleSlot[]> {
     let rows: any[];
     if (slots.length === 0) {
       rows = await this.sql`
-        SELECT s.route, s.slot, s.query, s.query_params as "queryParams", s.depends_on as "dependsOn",
+        SELECT s.route, s.slot, s.user_key as "userKey", s.query, s.query_params as "queryParams", s.depends_on as "dependsOn",
                (r.html_path IS NOT NULL) as "promoted", s.debounce_secs as "debounceSecs", r.html_path as "htmlPath",
                r.json_path as "jsonPath", s.column_name as "columnName", r.patch_mode as "patchMode"
         FROM kiln_fsr s
-        JOIN kiln_fsr r ON s.route = r.route AND r.slot = ''
-        WHERE s.route = ${route} AND s.slot != ''
+        JOIN kiln_fsr r ON s.route = r.route AND r.user_key = s.user_key AND r.slot = ''
+        WHERE s.route = ${route} AND s.slot != '' AND s.user_key = ${userKey}
         ORDER BY s.slot
       `;
     } else {
       rows = await this.sql`
-        SELECT s.route, s.slot, s.query, s.query_params as "queryParams", s.depends_on as "dependsOn",
+        SELECT s.route, s.slot, s.user_key as "userKey", s.query, s.query_params as "queryParams", s.depends_on as "dependsOn",
                (r.html_path IS NOT NULL) as "promoted", s.debounce_secs as "debounceSecs", r.html_path as "htmlPath",
                r.json_path as "jsonPath", s.column_name as "columnName", r.patch_mode as "patchMode"
         FROM kiln_fsr s
-        JOIN kiln_fsr r ON s.route = r.route AND r.slot = ''
-        WHERE s.route = ${route} AND s.slot != '' AND s.slot = ANY(ARRAY(SELECT jsonb_array_elements_text(${slots}::jsonb)))
+        JOIN kiln_fsr r ON s.route = r.route AND r.user_key = s.user_key AND r.slot = ''
+        WHERE s.route = ${route} AND s.slot != '' AND s.user_key = ${userKey} AND s.slot = ANY(ARRAY(SELECT jsonb_array_elements_text(${slots}::jsonb)))
         ORDER BY s.slot
       `;
     }
@@ -373,6 +381,7 @@ export class FsrStore {
     return rows.map((r: any) => ({
       route: r.route,
       slot: r.slot,
+      userKey: r.userKey ?? '',
       query: r.query,
       queryParams: r.queryParams,
       dependsOn: r.dependsOn || [],
@@ -387,14 +396,15 @@ export class FsrStore {
 
   async fetchAllForInspect(): Promise<InspectRow[]> {
     const rows = await this.sql`
-      SELECT route, slot, depends_on as "dependsOn", stale, version,
+      SELECT route, slot, user_key as "userKey", depends_on as "dependsOn", stale, version,
              (html_path IS NOT NULL) as "promoted", html_path as "htmlPath", json_path as "jsonPath"
       FROM kiln_fsr
-      ORDER BY route, slot
+      ORDER BY route, user_key, slot
     `;
     return rows.map((r: any) => ({
       route: r.route,
       slot: r.slot,
+      userKey: r.userKey ?? '',
       dependsOn: r.dependsOn || [],
       stale: !!r.stale,
       version: r.version,

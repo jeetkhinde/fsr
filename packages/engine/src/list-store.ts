@@ -55,7 +55,7 @@ export class FsrListStore {
         ${input.jsonPath ?? null},
         NOW()
       )
-      ON CONFLICT (route, name) DO UPDATE SET
+      ON CONFLICT (route, user_key, name) DO UPDATE SET
         depends_on = EXCLUDED.depends_on,
         debounce_secs = EXCLUDED.debounce_secs,
         revalidate_secs = EXCLUDED.revalidate_secs,

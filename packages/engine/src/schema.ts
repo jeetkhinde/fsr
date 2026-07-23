@@ -1,6 +1,7 @@
 export const KILN_FSR_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS kiln_fsr (
   route TEXT NOT NULL,
   slot TEXT NOT NULL DEFAULT '',
+  user_key TEXT NOT NULL DEFAULT '',
   query TEXT,
   query_params JSONB,
   depends_on TEXT[] NOT NULL DEFAULT '{}',
@@ -17,7 +18,7 @@ export const KILN_FSR_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS kiln_fsr (
   refresh_claimed_until TIMESTAMP,
   last_patched_at TIMESTAMP,
   patch_mode VARCHAR(10) DEFAULT 'json',
-  CONSTRAINT kiln_fsr_pkey PRIMARY KEY (route, slot)
+  CONSTRAINT kiln_fsr_pkey PRIMARY KEY (route, user_key, slot)
 );
 
 CREATE TABLE IF NOT EXISTS kiln_fsr_events (
@@ -60,6 +61,7 @@ $$ LANGUAGE plpgsql;
 CREATE TABLE IF NOT EXISTS kiln_fsr_lists (
   route TEXT NOT NULL,
   name TEXT NOT NULL,
+  user_key TEXT NOT NULL DEFAULT '',
   depends_on TEXT[] NOT NULL DEFAULT '{}',
   rows JSONB NOT NULL DEFAULT '[]',
   stale BOOLEAN NOT NULL DEFAULT false,
@@ -70,7 +72,7 @@ CREATE TABLE IF NOT EXISTS kiln_fsr_lists (
   json_path TEXT,
   refresh_claimed_until TIMESTAMP,
   last_patched_at TIMESTAMP,
-  PRIMARY KEY (route, name)
+  PRIMARY KEY (route, user_key, name)
 );
 
 ALTER TABLE kiln_fsr ADD COLUMN IF NOT EXISTS last_requested_at TIMESTAMP;
@@ -103,4 +105,13 @@ ALTER TABLE kiln_fsr DROP COLUMN IF EXISTS hit_count;
 ALTER TABLE kiln_fsr DROP COLUMN IF EXISTS promoted;
 ALTER TABLE kiln_fsr DROP COLUMN IF EXISTS promote_after;
 ALTER TABLE kiln_fsr DROP COLUMN IF EXISTS promoted_at;
-ALTER TABLE kiln_fsr DROP COLUMN IF EXISTS last_hit`;
+ALTER TABLE kiln_fsr DROP COLUMN IF EXISTS last_hit;
+
+-- ADR-017 (per-user artifacts): rows gain a user_key dimension; '' = the
+-- shared/route-level row, anything else scopes the row to one user's cache.
+ALTER TABLE kiln_fsr ADD COLUMN IF NOT EXISTS user_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE kiln_fsr DROP CONSTRAINT IF EXISTS kiln_fsr_pkey;
+ALTER TABLE kiln_fsr ADD CONSTRAINT kiln_fsr_pkey PRIMARY KEY (route, user_key, slot);
+ALTER TABLE kiln_fsr_lists ADD COLUMN IF NOT EXISTS user_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE kiln_fsr_lists DROP CONSTRAINT IF EXISTS kiln_fsr_lists_pkey;
+ALTER TABLE kiln_fsr_lists ADD CONSTRAINT kiln_fsr_lists_pkey PRIMARY KEY (route, user_key, name)`;
