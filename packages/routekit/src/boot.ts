@@ -1112,10 +1112,14 @@ export async function startKiln(
     adapter.registerSSE('/__kiln/fsr', async (req, res) => {
       const route = req.query.route || '';
       const slots = (req.query.slots || '').split(',').filter(Boolean);
+      // Resolved from the request's own session — a client cannot subscribe
+      // to another user's patch stream because there is nothing to spoof.
+      const sseUserKey = identity ? identity(req) ?? '' : '';
       const { fsrHubStream } = await import('@kiln/engine' as any);
       const stream = fsrHubStream({
         route,
         slots,
+        userKey: sseUserKey,
         signal: req.signal,
         config: {
           maxConnections: config.fsr?.maxSseConnections ?? 1000,
@@ -1134,7 +1138,7 @@ export async function startKiln(
       const route = req.query.route || '';
       const slots = (req.query.slots || '').split(',').filter(Boolean);
       const { fsrSnapshotHandler } = await import('@kiln/engine' as any);
-      const snapshot = await fsrSnapshotHandler(route, slots, options.store);
+      const snapshot = await fsrSnapshotHandler(route, slots, options.store, identity ? identity(req) ?? '' : '');
       res.json(snapshot);
     });
   } else {

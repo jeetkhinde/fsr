@@ -124,6 +124,46 @@ async function runTests() {
       data: JSON.stringify({ slot_1: 'new_val_1' })
     });
 
+    // 3b. Per-user patch scoping (ADR-017): a userKey-scoped patch reaches
+    // only the stream whose server-resolved identity matches — never the
+    // shared stream, never another user's.
+    console.log('Testing per-user patch scoping...');
+    const uRoute = '/user-scope-route'; // no DB slots — only manual emits below
+    const sharedGen = fsrHubStream({
+      route: uRoute, slots: [], watcher,
+      config: { maxConnections: 10, connectionTtlSecs: 10, keepaliveSecs: 10 }
+    });
+    const u1Gen = fsrHubStream({
+      route: uRoute, slots: [], watcher, userKey: 'u1',
+      config: { maxConnections: 10, connectionTtlSecs: 10, keepaliveSecs: 10 }
+    });
+    const u2Gen = fsrHubStream({
+      route: uRoute, slots: [], watcher, userKey: 'u2',
+      config: { maxConnections: 10, connectionTtlSecs: 10, keepaliveSecs: 10 }
+    });
+    const sharedItems: any[] = [];
+    const u1Items: any[] = [];
+    const u2Items: any[] = [];
+    const consume = async (g: any, sink: any[]) => {
+      for await (const val of g) {
+        if (val.event === 'ready' || val.event === 'keepalive') continue;
+        sink.push(val);
+      }
+    };
+    const consumers = [consume(sharedGen, sharedItems), consume(u1Gen, u1Items), consume(u2Gen, u2Items)];
+    emitter.emit('patch', { route: uRoute, slot: 'slot_1', value: 'for-u1', userKey: 'u1' });
+    emitter.emit('patch', { route: uRoute, slot: 'slot_1', value: 'for-everyone' });
+    await new Promise(resolve => setTimeout(resolve, 100));
+    await sharedGen.return();
+    await u1Gen.return();
+    await u2Gen.return();
+    await Promise.all(consumers);
+    assert.equal(u1Items.length, 1);
+    assert.deepEqual(u1Items[0], { event: 'fsr', data: JSON.stringify({ slot_1: 'for-u1' }) });
+    assert.equal(sharedItems.length, 1);
+    assert.deepEqual(sharedItems[0], { event: 'fsr', data: JSON.stringify({ slot_1: 'for-everyone' }) });
+    assert.equal(u2Items.length, 0);
+
     // 4. Test Keepalive heartbeat
     console.log('Testing keepalive heartbeat...');
     const genHeartbeat = fsrHubStream({

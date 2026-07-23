@@ -215,8 +215,8 @@ export class KilnCache {
     }
   }
 
-  async patchJsonField(route: string, field: string, value: unknown): Promise<void> {
-    const existing = (await this.getJson(route)) as Record<string, unknown> | null;
+  async patchJsonField(route: string, field: string, value: unknown, variant?: string): Promise<void> {
+    const existing = (await this.getJson(route, variant)) as Record<string, unknown> | null;
     if (!existing) return;
     const target =
       existing.data && typeof existing.data === 'object' && !Array.isArray(existing.data)
@@ -224,7 +224,7 @@ export class KilnCache {
         : existing;
     target[field] = value;
     if ('updatedAt' in existing) existing.updatedAt = new Date().toISOString();
-    await this.setJson(route, existing);
+    await this.setJson(route, existing, variant);
   }
 
   async delete(route: string, variant?: string): Promise<void> {

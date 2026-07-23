@@ -70,14 +70,18 @@ export async function patchBakedFiles(
   cache: KilnCache,
   route: string,
   slot: string,
-  value: unknown
+  value: unknown,
+  variant?: string
 ): Promise<void> {
-  await cache.patchJsonField(route, slot, value);
+  await cache.patchJsonField(route, slot, value, variant);
 }
 
 export interface FsrHubStreamOptions {
   route: string;
   slots: string[];
+  /** Server-resolved user key (identity hook) — NEVER client-supplied. ''
+   * subscribes to the route's shared patches; set = that user's patches. */
+  userKey?: string;
   signal?: AbortSignal;
   watcher?: FsrWatcher;
   config?: FsrHubConfig;
@@ -85,7 +89,7 @@ export interface FsrHubStreamOptions {
 }
 
 export async function* fsrHubStream(options: FsrHubStreamOptions): AsyncGenerator<SSEEvent, void, unknown> {
-  const { route, slots, signal, watcher, config = defaultHubConfig, cache } = options;
+  const { route, slots, signal, watcher, config = defaultHubConfig, cache, userKey = '' } = options;
 
   if (!watcher) {
     yield { event: 'error', data: 'FSR watcher not configured' };
@@ -209,6 +213,10 @@ export async function* fsrHubStream(options: FsrHubStreamOptions): AsyncGenerato
       while (queue.length > 0) {
         const patch = queue.shift()!;
         if (patch.route !== route) continue;
+        // A patch scoped to one user's snapshot must only reach that user's
+        // stream; userKey here came from the server-side identity hook, so
+        // another user cannot subscribe their way into it.
+        if ((((patch as any).userKey as string | undefined) ?? '') !== userKey) continue;
         const patchSlot = getPatchSlot(patch);
         if (slots.length > 0 && patchSlot && !slots.includes(patchSlot)) continue;
 
@@ -217,7 +225,7 @@ export async function* fsrHubStream(options: FsrHubStreamOptions): AsyncGenerato
         if (cache) {
           const scalar = normalizeScalarPatch(patch);
           if (scalar) {
-            patchBakedFiles(cache, route, scalar.field, scalar.value).catch((err: any) => {
+            patchBakedFiles(cache, route, scalar.field, scalar.value, userKey ? `u:${userKey}` : undefined).catch((err: any) => {
               console.warn(`FSR hub: failed to patch baked cache for ${route}/${scalar.field}:`, err?.message ?? err);
             });
           }
@@ -285,12 +293,13 @@ function isListPatch(value: unknown): value is RenderedListPatch {
 export async function fsrSnapshotHandler(
   route: string,
   slots: string[],
-  store: FsrStore | null | undefined
+  store: FsrStore | null | undefined,
+  userKey = ''
 ): Promise<Record<string, any>> {
   if (!store) {
     return {};
   }
-  const matchingSlots = await store.fetchSlotsForSnapshot(route, slots);
+  const matchingSlots = await store.fetchSlotsForSnapshot(route, slots, userKey);
   const result: Record<string, any> = {};
 
   // Prefer the baked JSON snapshot — it's the freshness authority the
@@ -298,7 +307,7 @@ export async function fsrSnapshotHandler(
   // to re-execute), and avoids re-running every slot query per request.
   let snapshotData: Record<string, any> | null = null;
   try {
-    const paths = await store.getPromotedPaths(route);
+    const paths = await store.getPromotedPaths(route, userKey);
     if (paths?.jsonPath) {
       const fs = await import('fs/promises');
       const parsed = JSON.parse(await fs.readFile(paths.jsonPath, 'utf8'));
