@@ -1,5 +1,5 @@
 import { Elysia } from 'elysia';
-import type { KilnHandle } from '@kiln/core';
+import type { KilnHandle, KilnIdentity } from '@kiln/core';
 import { pathToFileURL } from 'url';
 import * as path from 'path';
 import * as fs from 'fs/promises';
@@ -8,6 +8,8 @@ export interface KilnHooks {
   /** Per-request hook run inside the Kiln request path (see KilnHandle):
    * populate req.locals and/or short-circuit via res. This is where auth lives. */
   handle?: KilnHandle;
+  /** Stable user key for per-user caching (bake = 'user'); see KilnIdentity. */
+  identity?: KilnIdentity;
   onError?: (ctx: any) => void | Promise<void>;
   onStart?: () => void | Promise<void>;
   onStop?: () => void | Promise<void>;

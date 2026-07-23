@@ -106,7 +106,7 @@ export interface ServerAdapter {
    * the per-request `handle` hook plus lifecycle `onError`/`onStart`/`onStop`,
    * when the adapter supports it. `handle` runs inside the request path (see
    * KilnHandle); the rest wire into the adapter's server lifecycle. */
-  applyServerHooks?(appRoot: string): Promise<void>;
+  applyServerHooks?(appRoot: string): Promise<{ identity?: KilnIdentity } | void>;
 
   /** Start the server. `host` binds a specific interface (default adapter-chosen). */
   listen(port: number, callback?: (addr: string) => void, host?: string): Promise<void>;

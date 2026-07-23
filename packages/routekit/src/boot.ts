@@ -11,6 +11,7 @@ import type {
   KilnRequest,
   KilnResponse,
   KilnConfig,
+  KilnIdentity,
   ServerAdapter,
 } from '@kiln/core';
 import {
@@ -55,6 +56,9 @@ export interface StartKilnOptions {
   store?: FsrStore;
   watcher?: FsrWatcher;
   redis?: { getClient(): any };
+  /** Stable per-user cache key for bake='user' pages. Overrides the app's
+   * hooks.ts `identity` export when both are present. */
+  identity?: KilnIdentity;
   /** Dev only: upstream URL for the islands manifest (the Vite dev server's
    * /kiln-islands.json). Production reads dist/client/kiln-islands.json. */
   islandsManifestUrl?: string;
@@ -118,7 +122,8 @@ export function buildPageHandler(
   kilnConfig?: KilnConfig,
   store?: FsrStore,
   watcher?: FsrWatcher,
-  errorFiles?: PageErrorFiles
+  errorFiles?: PageErrorFiles,
+  identity?: KilnIdentity
 ) {
   const cache = new KilnCache(cacheOpts);
   // 'auto' routes latch impure for the life of the process the first time a
@@ -921,7 +926,9 @@ export async function startKiln(
     tracing: config.web?.tracing === true,
     trustProxy: config.web?.trustProxy === true
   });
-  await adapter.applyServerHooks?.(process.cwd());
+  const appHooks = await adapter.applyServerHooks?.(process.cwd());
+  const identity: KilnIdentity | undefined =
+    options.identity ?? (appHooks && typeof appHooks === 'object' ? appHooks.identity : undefined);
 
   // 4. Register /_image endpoint if images config is present
   if ((config as any).images?.enabled) {
@@ -947,7 +954,8 @@ export async function startKiln(
       config,
       options.store,
       options.watcher,
-      errorFiles
+      errorFiles,
+      identity
     );
     adapter.registerPage(page.pattern, page.layouts, pageHandler);
 
