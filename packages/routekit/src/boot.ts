@@ -4,7 +4,7 @@ import { KILN_LIVE_CLIENT_SCRIPT } from './live-client-script.js';
 import { applyLiveListMarkers, extractLiveListRowHtml } from './live-list-render.js';
 
 import { discoverRoutes } from './discover.js';
-import { extractPageOptions, extractLiveFields } from './page-options.js';
+import { extractPageOptions, extractLiveFields, type BakeMode } from './page-options.js';
 import { createPurityTracker } from './purity.js';
 import type { PageRoute, LayoutNode } from './manifest.js';
 import type {
@@ -906,7 +906,19 @@ function escapeHtml(value: string): string {
 // Action handler
 // ---------------------------------------------------------------------------
 
-export function buildActionHandler(actions: Record<string, any>) {
+export function buildActionHandler(
+  actions: Record<string, any>,
+  opts?: { cache?: KilnCache; identity?: KilnIdentity; bake?: BakeMode }
+) {
+  // Read-your-own-writes for bake='user' pages: the actor must see their own
+  // write on the redirect GET — racing the watcher's async re-materialization
+  // reads as "my click didn't work". Deleting the actor's artifacts forces a
+  // fresh render for exactly one user; everyone else updates via the watcher.
+  const invalidateActor = async (req: KilnRequest) => {
+    if (opts?.bake !== 'user' || !opts.cache || !opts.identity) return;
+    const uid = opts.identity(req);
+    if (uid) await opts.cache.delete(req.path, `u:${uid}`).catch(() => {});
+  };
   return async (req: KilnRequest, res: KilnResponse) => {
     let actionName = '';
     for (const key of Object.keys(req.query)) {
@@ -924,9 +936,11 @@ export function buildActionHandler(actions: Record<string, any>) {
 
     try {
       const result = await actions[actionName](req);
+      await invalidateActor(req);
       res.json(result || { success: true });
     } catch (err: any) {
       if (err.type === 'Redirect') {
+        await invalidateActor(req);
         res.redirect(err.message, err.status);
         return;
       }
@@ -1029,7 +1043,14 @@ export async function startKiln(
     adapter.registerPage(page.pattern, page.layouts, pageHandler);
 
     if (mod.actions) {
-      adapter.registerAction(page.pattern, buildActionHandler(mod.actions));
+      adapter.registerAction(
+        page.pattern,
+        buildActionHandler(mod.actions, {
+          cache: new KilnCache(cacheOpts),
+          identity,
+          bake: extractPageOptions(mod).bake,
+        })
+      );
     }
 
     // SSG: prebake at startup for pages exporting entries() + bake 'static'.
