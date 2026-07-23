@@ -127,6 +127,161 @@ describe('buildPageHandler', () => {
     await fs.rm(tmpDir, { recursive: true });
   });
 
+  it("bake='user' serves each user their own cached artifact and SSRs anonymous", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-user-'));
+    const { createElement } = await import('react');
+    let loads = 0;
+    const pageModule = {
+      bake: 'user',
+      load: async (req: any) => {
+        loads++;
+        return { who: (req.locals as any).user ?? 'anon' };
+      },
+      default: ({ who }: any) => createElement('div', null, `hello ${who}`),
+    };
+    const identity = (req: any) => (req.locals as any).user ?? null;
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/mine', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      identity as any,
+    );
+    // tom: hit 1 bakes his variant, hit 2 serves it (no load)
+    await handler(makeReq({ path: '/mine', locals: { user: 'tom' } }) as any, makeRes());
+    const tom2 = makeRes();
+    await handler(makeReq({ path: '/mine', locals: { user: 'tom' } }) as any, tom2);
+    expect(tom2.captured.body).toContain('hello tom');
+    expect(loads).toBe(1);
+    // adam: his own variant, never tom's
+    const adam = makeRes();
+    await handler(makeReq({ path: '/mine', locals: { user: 'adam' } }) as any, adam);
+    expect(adam.captured.body).toContain('hello adam');
+    expect(adam.captured.body).not.toContain('tom');
+    expect(loads).toBe(2);
+    // anonymous: pure SSR every hit, no artifacts written
+    await handler(makeReq({ path: '/mine', locals: {} }) as any, makeRes());
+    await handler(makeReq({ path: '/mine', locals: {} }) as any, makeRes());
+    expect(loads).toBe(4);
+    expect(await Bun.file(path.join(tmpDir, 'mine', 'index.html')).exists()).toBe(false); // no base-key artifact
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it('serves cached page-only JSON for a baked route without re-running load()', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-json-'));
+    const { createElement } = await import('react');
+    let loads = 0;
+    const pageModule = {
+      load: async () => {
+        loads++;
+        return { n: 42 };
+      },
+      default: ({ n }: any) => createElement('div', null, `n=${n}`),
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/nums', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+    );
+    await handler(makeReq({ path: '/nums' }) as any, makeRes()); // bakes on hit 1
+    const jsonRes = makeRes();
+    await handler(
+      makeReq({ path: '/nums', headers: new Headers({ accept: 'application/json' }) }) as any,
+      jsonRes,
+    );
+    expect(jsonRes.captured.type).toBe('json');
+    expect(jsonRes.captured.body).toEqual({ n: 42 }); // page-only props, not seed shape
+    expect(loads).toBe(1); // served from the snapshot, load() not re-run
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it('a changed fsr.buildId invalidates baked artifacts on read', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-build-'));
+    const { createElement } = await import('react');
+    let loads = 0;
+    const pageModule = {
+      load: async () => ({ v: ++loads }),
+      default: ({ v }: any) => createElement('div', null, `v=${v}`),
+    };
+    const meta = { pattern: '/deploy', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' };
+    const cacheOpts = { cacheDir: tmpDir, ttlSecs: 0, redis: null };
+    const buildA = buildPageHandler(pageModule, meta, [], cacheOpts, { fsr: { buildId: 'build-A' } } as any);
+    await buildA(makeReq({ path: '/deploy' }) as any, makeRes()); // bakes under build-A
+    const cachedA = makeRes();
+    await buildA(makeReq({ path: '/deploy' }) as any, cachedA);
+    expect(cachedA.captured.body).toContain('v=1'); // cache hit within build-A
+    expect(loads).toBe(1);
+
+    const buildB = buildPageHandler(pageModule, meta, [], cacheOpts, { fsr: { buildId: 'build-B' } } as any);
+    const fresh = makeRes();
+    await buildB(makeReq({ path: '/deploy' }) as any, fresh);
+    expect(fresh.captured.body).toContain('v=2'); // build mismatch forced a re-bake
+    expect(loads).toBe(2);
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it("an action deletes the actor's bake='user' artifacts so the redirect GET is fresh", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-ryw-'));
+    const { createElement } = await import('react');
+    const { buildActionHandler } = await import('./boot.js');
+    let title = 'before';
+    let loads = 0;
+    const pageModule = {
+      bake: 'user',
+      load: async (req: any) => {
+        loads++;
+        return { title: `${title}-${(req.locals as any).user}` };
+      },
+      default: ({ title }: any) => createElement('h1', null, title),
+      actions: {
+        rename: async () => {
+          title = 'after';
+          return { ok: true };
+        },
+      },
+    };
+    const identity = (req: any) => (req.locals as any).user ?? null;
+    const meta = { pattern: '/doc', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' };
+    const cacheOpts = { cacheDir: tmpDir, ttlSecs: 0, redis: null };
+    const pageHandler = buildPageHandler(pageModule, meta, [], cacheOpts, undefined, undefined, undefined, undefined, identity as any);
+    const { KilnCache } = await import('@kiln/engine');
+    const actionHandler = buildActionHandler(pageModule.actions, {
+      cache: new KilnCache(cacheOpts),
+      identity: identity as any,
+      bake: 'user',
+    });
+
+    // bake tom's and adam's variants
+    await pageHandler(makeReq({ path: '/doc', locals: { user: 'tom' } }) as any, makeRes());
+    await pageHandler(makeReq({ path: '/doc', locals: { user: 'adam' } }) as any, makeRes());
+    expect(loads).toBe(2);
+
+    // tom acts
+    const actRes = makeRes();
+    await actionHandler(
+      makeReq({ path: '/doc', method: 'POST', query: { '/rename': '' } as any, locals: { user: 'tom' } }) as any,
+      actRes,
+    );
+
+    // tom's next GET re-renders fresh (his artifact was deleted)
+    const tomAfter = makeRes();
+    await pageHandler(makeReq({ path: '/doc', locals: { user: 'tom' } }) as any, tomAfter);
+    expect(tomAfter.captured.body).toContain('after-tom');
+    expect(loads).toBe(3);
+
+    // adam's cached artifact is untouched — served without a load
+    const adamAfter = makeRes();
+    await pageHandler(makeReq({ path: '/doc', locals: { user: 'adam' } }) as any, adamAfter);
+    expect(adamAfter.captured.body).toContain('before-adam');
+    expect(loads).toBe(3);
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
   it('materializes the latest JSON into an immutable promoted shell', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
     const { KilnCache, createBakedSnapshot } = await import('@kiln/engine');

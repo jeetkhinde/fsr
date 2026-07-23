@@ -40,14 +40,21 @@ export interface SlotPatch {
   route: string;
   slot: string;
   value: any;
+  /** Set for bake='user' snapshots — the patch belongs to one user's artifact. */
+  userKey?: string;
 }
 
 export type LivePatch = ScalarPatch | RenderedListPatch;
 
 interface RegisteredLoaderTarget {
   route: string;
+  /** '' / absent = the shared route; set = one user's bake='user' snapshot. */
+  userKey?: string;
   load(): Promise<Record<string, unknown>>;
 }
+
+const loaderKey = (route: string, userKey?: string) => `${route}\u0000${userKey ?? ''}`;
+const variantOf = (userKey?: string) => (userKey ? `u:${userKey}` : undefined);
 
 export class FsrWatcher {
   private active = false;
@@ -69,7 +76,7 @@ export class FsrWatcher {
   }
 
   registerLoader(target: RegisteredLoaderTarget): void {
-    this.loaderTargets.set(target.route, target);
+    this.loaderTargets.set(loaderKey(target.route, target.userKey), target);
   }
 
   async registerLiveList<T>(
@@ -437,7 +444,7 @@ export class FsrWatcher {
     // Phase 2a: batch patches per JSON file (disk) and per route (Redis).
     // JSON snapshots are authoritative; shells are immutable.
     const jsonPatches = new Map<string, [string, any][]>();
-    const redisJsonPatches = new Map<string, [string, any][]>();
+    const redisJsonPatches = new Map<string, { route: string; variant?: string; patches: [string, any][] }>();
     for (const { slotRow, value, err } of results) {
       if (err) continue;
       if (slotRow.promoted && slotRow.jsonPath) {
@@ -445,8 +452,15 @@ export class FsrWatcher {
         jsonPatches.get(slotRow.jsonPath)!.push([slotRow.slot, value]);
 
         if (this.redis) {
-          if (!redisJsonPatches.has(slotRow.route)) redisJsonPatches.set(slotRow.route, []);
-          redisJsonPatches.get(slotRow.route)!.push([slotRow.slot, value]);
+          const rk = loaderKey(slotRow.route, slotRow.userKey);
+          if (!redisJsonPatches.has(rk)) {
+            redisJsonPatches.set(rk, {
+              route: slotRow.route,
+              variant: variantOf(slotRow.userKey || undefined),
+              patches: [],
+            });
+          }
+          redisJsonPatches.get(rk)!.patches.push([slotRow.slot, value]);
         }
       }
     }
@@ -473,9 +487,9 @@ export class FsrWatcher {
     // and materializeBakedShell only reads `data` — so patches must land
     // inside `data`, exactly like patchJsonFileBatch does for disk.
     if (this.redis) {
-      for (const [route, patches] of redisJsonPatches.entries()) {
+      for (const { route, variant, patches } of redisJsonPatches.values()) {
         try {
-          const existing = (await this.redis.getJson(route)) || {};
+          const existing = (await this.redis.getJson(route, variant)) || {};
           const target =
             existing.data && typeof existing.data === 'object' && !Array.isArray(existing.data)
               ? existing.data
@@ -484,7 +498,7 @@ export class FsrWatcher {
             target[slot] = val;
           }
           if ('updatedAt' in existing) existing.updatedAt = new Date().toISOString();
-          await this.redis.setJson(route, existing);
+          await this.redis.setJson(route, existing, variant);
         } catch (e: any) {
           console.warn(`FSR watcher: Redis setJson failed for ${route}:`, e.message);
         }
@@ -503,22 +517,28 @@ export class FsrWatcher {
         else valStr = String(value);
 
         try {
-          await this.redis.patchSlot(slotRow.route, slotRow.slot, valStr);
+          await this.redis.patchSlot(slotRow.route, slotRow.slot, valStr, variantOf(slotRow.userKey || undefined));
         } catch (e: any) {
           console.warn(`FSR watcher: Redis patchSlot failed for ${slotRow.route}/${slotRow.slot}:`, e.message);
         }
 
         try {
-          await this.redis.publishPatch(toLegacySlotPatch(createWatcherPatch(slotRow, value)));
+          const payload = toLegacySlotPatch(createWatcherPatch(slotRow, value));
+          if (slotRow.userKey) payload.userKey = slotRow.userKey;
+          await this.redis.publishPatch(payload);
         } catch (e: any) {
           console.warn(`FSR watcher: Redis publishPatch failed for ${slotRow.route}/${slotRow.slot}:`, e.message);
         }
       }
 
-      this.emitter.emit('patch', createWatcherPatch(slotRow, value));
+      {
+        const patch = createWatcherPatch(slotRow, value) as any;
+        if (slotRow.userKey) patch.userKey = slotRow.userKey;
+        this.emitter.emit('patch', patch);
+      }
 
       try {
-        await this.store.markFresh(slotRow.route, slotRow.slot);
+        await this.store.markFresh(slotRow.route, slotRow.slot, slotRow.userKey);
       } catch (e: any) {
         console.warn(`FSR watcher: failed to mark slot fresh for ${slotRow.route}/${slotRow.slot}:`, e.message);
       }
@@ -547,19 +567,23 @@ export class FsrWatcher {
   }
 
   private async refreshRegisteredLoaders(rows: StaleSlot[]): Promise<void> {
-    const byRoute = new Map<string, StaleSlot[]>();
+    const byTarget = new Map<string, StaleSlot[]>();
     for (const row of rows) {
-      const existing = byRoute.get(row.route) ?? [];
+      const key = loaderKey(row.route, row.userKey);
+      const existing = byTarget.get(key) ?? [];
       existing.push(row);
-      byRoute.set(row.route, existing);
+      byTarget.set(key, existing);
     }
 
-    for (const [route, routeRows] of byRoute) {
-      const target = this.loaderTargets.get(route);
+    for (const [key, targetRows] of byTarget) {
+      const target = this.loaderTargets.get(key);
       if (!target) continue;
+      const route = targetRows[0].route;
+      const userKey = targetRows[0].userKey || '';
+      const variant = variantOf(userKey || undefined);
       try {
         const loaded = await target.load();
-        const paths = await this.store.getPromotedPaths(route);
+        const paths = await this.store.getPromotedPaths(route, userKey);
         let snapshot: any = null;
         if (paths?.jsonPath) {
           try {
@@ -568,27 +592,29 @@ export class FsrWatcher {
             snapshot = null;
           }
         }
-        if (!snapshot && this.redis) snapshot = await this.redis.getJson(route);
+        if (!snapshot && this.redis) snapshot = await this.redis.getJson(route, variant);
         if (!snapshot) continue;
         const data = snapshot.data && typeof snapshot.data === 'object' ? snapshot.data : snapshot;
 
-        for (const row of routeRows) {
+        for (const row of targetRows) {
           const raw = loaded[row.slot] as any;
           const value = raw instanceof LiveProp ? raw.value : raw;
           data[row.slot] = value;
-          this.emitter.emit('patch', createScalarPatch(route, row.slot, value));
-          await this.store.markFresh(route, row.slot);
+          const patch = createScalarPatch(route, row.slot, value) as any;
+          if (userKey) patch.userKey = userKey;
+          this.emitter.emit('patch', patch);
+          await this.store.markFresh(route, row.slot, userKey);
         }
         if ('updatedAt' in snapshot) snapshot.updatedAt = new Date().toISOString();
         if (paths?.jsonPath) await atomicWrite(paths.jsonPath, JSON.stringify(snapshot));
-        if (this.redis) await this.redis.setJson(route, snapshot);
+        if (this.redis) await this.redis.setJson(route, snapshot, variant);
 
-        const patchMode = await this.store.getRoutePatchMode(route);
+        const patchMode = await this.store.getRoutePatchMode(route, userKey);
         if (patchMode === 'both' && paths?.htmlPath && paths?.jsonPath) {
           await this.materializeHtmlFile(paths.htmlPath, paths.jsonPath);
         }
       } catch (error: any) {
-        console.warn(`FSR watcher: loader refresh failed for ${route}:`, error.message);
+        console.warn(`FSR watcher: loader refresh failed for ${route} (${userKey || 'shared'}):`, error.message);
       }
     }
   }

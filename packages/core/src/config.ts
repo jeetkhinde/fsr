@@ -34,6 +34,10 @@ export interface FsrConfig {
   artifactTtlSecs: number;
   purgeSweepSeconds: number;
   revalidateSeconds: number;
+  /** Deploy fingerprint (e.g. git SHA). When set, baked snapshots record it
+   * and a mismatch on read forces a re-bake — replaces the manual cache
+   * flush across breaking deploys. */
+  buildId?: string;
   /** @deprecated Use purgeSweepSeconds. */
   idleEvictSecs?: number;
   /** @deprecated Use purgeAfterSeconds. */

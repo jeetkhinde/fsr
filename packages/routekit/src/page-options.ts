@@ -1,7 +1,7 @@
 import { LiveProp, StartupError } from '@kiln/core';
 import type { KilnRequest, LiveFieldMeta } from '@kiln/core';
 
-export type BakeMode = 'static' | 'shared' | false;
+export type BakeMode = 'static' | 'shared' | 'user' | false;
 
 export interface PageOptions {
   /** undefined = 'auto': bake on the first render whose load() touched no
@@ -29,12 +29,12 @@ export function extractPageOptions(module: any): PageOptions {
   }
   let bake: BakeMode | undefined;
   if (module.bake !== undefined) {
-    if (module.bake === 'static' || module.bake === 'shared' || module.bake === false) {
+    if (module.bake === 'static' || module.bake === 'shared' || module.bake === 'user' || module.bake === false) {
       bake = module.bake;
     } else {
       throw new StartupError(
         'RemovedOption',
-        `[kiln] invalid bake value ${JSON.stringify(module.bake)}; expected 'static', 'shared', or false.`
+        `[kiln] invalid bake value ${JSON.stringify(module.bake)}; expected 'static', 'shared', 'user', or false.`
       );
     }
   }
@@ -50,6 +50,13 @@ export function extractPageOptions(module: any): PageOptions {
   if (cacheKey === undefined && typeof module.cacheKey === 'function') {
     console.warn('[kiln] cacheKey is deprecated; export cache_key instead');
     cacheKey = module.cacheKey;
+  }
+
+  if (bake === 'user' && typeof cacheKey === 'function') {
+    throw new StartupError(
+      'RemovedOption',
+      "[kiln] bake='user' and cache_key are mutually exclusive — 'user' IS a cache key (the identity hook's user id)."
+    );
   }
 
   return {

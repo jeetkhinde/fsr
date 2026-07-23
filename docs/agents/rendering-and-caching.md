@@ -10,12 +10,15 @@ The rendering mode is **observed, not declared** (ADR-016). Source: `packages/ro
 | `'static'` | Prebaked at startup when `entries()` exists; otherwise bakes on first request. |
 | `'shared'` | Always bakes on first render, even if identity was accessed (dev-mode warning). |
 | `false` | Pure SSR. Never cached. Escape hatch for impurity the tracker can't see (e.g. `load()` reading per-user rows directly). |
+| `'user'` | **Cached per `(route, user id)`** via the app's `identity` hook (hooks.ts, ADR-017). Anonymous requests fall back to SSR. Actions delete the actor's copy (read-your-own-writes); scalar `LiveProp` patches are per-user and SSE-authorized server-side. Requires a query-free `load()` — pages reading `?error`/`?invited`-style banners must stay SSR until query joins the key. `Live.list` not yet supported per-user. |
 
 `promote_after` / `fsr.promoteAfterHits` no longer exist; exporting them fails boot with `StartupError('RemovedOption')`. Promotion is artifact presence — there is no hit counter, and the cached read path performs zero Postgres queries. `cache_key` pages are exempt from auto-demotion (declaring a key states that the varying input `load()` reads is exactly what the key partitions on) and bake per variant on first hit.
 
 Layouts are classified the same way: an identity-touching layout `load()` is never pattern-cached and blocks the page bake too (its HTML embeds in the page shell).
 
-**Upgrading across this change:** artifacts baked by pre-ADR-016 code are trusted as-is by the new runtime — flush the app's Redis namespace and `.kiln-cache` on deploy.
+**Deploy invalidation:** set `fsr.buildId` (e.g. the git SHA) and baked snapshots self-invalidate on the first read after a deploy — no manual flush. Without it, flush the app's Redis namespace and `.kiln-cache` when deploying breaking cache changes (as when upgrading across ADR-016).
+
+**The identity hook** (`hooks.ts`): `export const identity: KilnIdentity = (req) => (req.locals.user as { id: string } | undefined)?.id ?? null;` — a stable user id, never a session token (sessions rotate and multiply per device). It also authorizes per-user SSE: the `/__kiln/fsr` subscription resolves the user server-side, so patch streams cannot be subscribed cross-user.
 
 ### Pre-baking dynamic routes (SSG)
 

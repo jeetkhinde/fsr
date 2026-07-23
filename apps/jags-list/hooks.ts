@@ -1,3 +1,4 @@
+import type { KilnIdentity } from '@kiln/core';
 import type { KilnRequest, KilnResponse } from '@kiln/core';
 import { getSessionUser } from './lib/session.js';
 
@@ -54,3 +55,9 @@ export async function handle(req: KilnRequest, res: KilnResponse): Promise<void>
   }
   res.redirect('/login', 302);
 }
+
+/** Stable per-user cache key for bake='user' pages (ADR-017). User id, never
+ * the session token — sessions rotate and multiply per device. Runs after
+ * `handle`, so req.locals.user is already resolved. */
+export const identity: KilnIdentity = (req) =>
+  (req.locals.user as { id: string } | undefined)?.id ?? null;

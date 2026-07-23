@@ -137,6 +137,19 @@ async function runTests() {
     await new Promise(resolve => setTimeout(resolve, 100));
     assert.ok(receivedPubSub.some(msg => msg.startsWith('kiln:patch:')));
 
+    // 8b. user-scoped rows coexist with the shared row
+    console.log('Testing user_key scoping...');
+    await store.ensureRouteRow('/u-route', 300, 3600, 'json');
+    await store.ensureRouteRow('/u-route', 300, 3600, 'json', 'u1');
+    await store.setBakedPaths('/u-route', '/tmp/u1.html', '/tmp/u1.json', 'u1');
+    assert.equal((await store.getPromotedPaths('/u-route'))?.htmlPath ?? null, null); // shared row unbaked
+    assert.equal((await store.getPromotedPaths('/u-route', 'u1'))?.htmlPath, '/tmp/u1.html');
+    await store.upsertSlot('/u-route', 'tasks', null, [], ['tasks_dep'], 0, null, 'u1');
+    const uSlots = await store.fetchSlotsForSnapshot('/u-route', [], 'u1');
+    assert.equal(uSlots.length, 1);
+    assert.equal(uSlots[0].userKey, 'u1');
+    assert.equal((await store.fetchSlotsForSnapshot('/u-route', [])).length, 0); // shared scope empty
+
     // 9. tombstone & isTombstoned
     console.log('Testing tombstone...');
     assert.equal(await store.isTombstoned('/test-route-1'), false);

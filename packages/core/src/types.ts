@@ -60,6 +60,12 @@ export interface KilnResponse {
  */
 export type KilnHandle = (req: KilnRequest, res: KilnResponse) => void | Promise<void>;
 
+/** Resolves the stable user key for per-user caching (bake = 'user').
+ * Runs after `handle`, so req.locals is populated. Return null for
+ * anonymous requests — 'user' pages then fall back to pure SSR.
+ * MUST return a stable id (user id), never a session token. */
+export type KilnIdentity = (req: KilnRequest) => string | null;
+
 // ── Middleware Configuration ──
 
 export interface MiddlewareConfig {
@@ -100,7 +106,7 @@ export interface ServerAdapter {
    * the per-request `handle` hook plus lifecycle `onError`/`onStart`/`onStop`,
    * when the adapter supports it. `handle` runs inside the request path (see
    * KilnHandle); the rest wire into the adapter's server lifecycle. */
-  applyServerHooks?(appRoot: string): Promise<void>;
+  applyServerHooks?(appRoot: string): Promise<{ identity?: KilnIdentity } | void>;
 
   /** Start the server. `host` binds a specific interface (default adapter-chosen). */
   listen(port: number, callback?: (addr: string) => void, host?: string): Promise<void>;
@@ -115,7 +121,7 @@ export interface ActionHandler {
 }
 
 export interface PageDefinition {
-  bake?: 'static' | 'shared' | false;
+  bake?: 'static' | 'shared' | 'user' | false;
   revalidate?: number | false;
   debounce?: number;
   purge_after?: number;
@@ -126,7 +132,7 @@ export interface PageDefinition {
 }
 
 export interface LayoutDefinition {
-  bake?: 'static' | 'shared' | false;
+  bake?: 'static' | 'shared' | 'user' | false;
   revalidate?: number | false;
   debounce?: number;
   purge_after?: number;

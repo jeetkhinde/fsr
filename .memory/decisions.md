@@ -99,6 +99,12 @@ This file documents the major architecture decisions and developer experience (D
 *   **Supersedes**: ADR-003's promotion semantics. **Amends** ADR-015 (per-page `promote_after = false` workaround obsolete; `bake = false` remains the explicit escape hatch).
 *   **Migration**: artifacts baked by pre-ADR-016 code are trusted as-is — flush the app's Redis namespace and `.kiln-cache` when deploying across this change. Follow-ups: Plan 2 (per-user snapshots, shared shells), Plan 3 (auto-derived deps + `sync-triggers`).
 
+### ADR-017: Per-User Artifacts (bake='user')
+*   **Status**: ACCEPTED · **Plan**: `docs/superpowers/plans/2026-07-23-per-user-artifacts.md`
+*   **Decision**: `bake = 'user'` caches full HTML+JSON per `(route, user)` on the existing variant plumbing (`variant = u:<id>`, Redis `:v:` keys, disk `_v/` dirs). The user key comes from an app-level `identity(req)` hook exported from `hooks.ts` beside ADR-015's `handle` (threaded via `applyServerHooks`'s return value): a STABLE user id, never a session token. Anonymous requests fall back to pure SSR. `kiln_fsr`/`kiln_fsr_lists` gain a `user_key` PK dimension ('' = shared row); watcher loaders register per `(route, user)` with an identity snapshot (`makeLoaderRequest(req, includeLocals)`) so refreshes re-run `load()` as that user; scalar LiveProp patches carry `userKey` and the SSE hub resolves the subscriber's key from their own session server-side — cross-user subscription is impossible by construction. Actions delete the acting user's artifacts before responding (read-your-own-writes by deletion; the redirect GET renders fresh). Snapshots gain `pageData` (page-only props served for Accept: application/json straight from cache) and `buildId` (`fsr.buildId`; mismatch on read = re-bake, replacing the manual deploy flush).
+*   **Accepted caveats**: (1) loader identity is captured at registration — role changes propagate on the user's next real request; (2) per-user `Live.list` unsupported (warn), scalars only; (3) **query-reading loads don't fit user-keyed caching** — dogfooding showed jags-list's `?error`/`?invited` banner pattern would freeze into the artifact; such pages stay SSR until query joins the cache key (Plan 3 candidate). Shared-shell dedup (one shell + per-user JSON) deferred to Plan 3: it requires every user-varying field to be live-marked.
+*   **Extends** ADR-016 (purity classifier untouched; 'user' is explicit like 'shared'). Cache_key pages remain live-unsupported and exempt from demotion.
+
 ---
 
 ## Critical DX Rules & Conventions

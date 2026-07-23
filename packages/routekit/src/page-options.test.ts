@@ -37,3 +37,14 @@ describe('extractPageOptions bake parsing', () => {
     expect(() => extractPageOptions({ bake: 'always' })).toThrow(/invalid bake/);
   });
 });
+
+describe('bake user mode', () => {
+  it("accepts bake='user'", () => {
+    expect(extractPageOptions({ bake: 'user' }).bake).toBe('user');
+  });
+
+  it("rejects bake='user' combined with cache_key", () => {
+    expect(() => extractPageOptions({ bake: 'user', cache_key: () => 'x' }))
+      .toThrow(/mutually exclusive/);
+  });
+});

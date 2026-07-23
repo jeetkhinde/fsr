@@ -102,6 +102,21 @@ layouts are never pattern-cached and block their page's bake. Exporting
 pre-ADR-016 artifacts are trusted as-is. Supersedes ADR-003; amends ADR-015
 (the `promote_after = false` workaround for auth pages is obsolete).
 
+## ADR-017: Per-User Artifacts (bake='user')
+
+**Status:** ACCEPTED
+**Decision:** Full per-user HTML+JSON on the variant plumbing (`u:<id>`), keyed
+by the app's hooks.ts `identity(req)` export (stable user id, never session
+token; threaded via applyServerHooks' return). kiln_fsr/_lists gain a user_key
+PK dimension; per-(route,user) watcher loaders capture the user's locals at
+registration; SSE patches carry userKey and subscriptions resolve the key from
+the subscriber's own session (nothing to spoof). Actions delete the actor's
+artifacts (read-your-own-writes). Snapshots add pageData (cached JSON serving)
+and buildId (fsr.buildId deploy invalidation). Caveats: loader identity is
+registration-time (role changes lag one request); per-user Live.list
+unsupported; query-reading loads must stay SSR until query joins the key;
+shared-shell dedup deferred to Plan 3.
+
 ---
 
 ## ADR-004: Field-Level Granularity — LiveProp vs Static

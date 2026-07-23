@@ -4,13 +4,14 @@ import { KILN_LIVE_CLIENT_SCRIPT } from './live-client-script.js';
 import { applyLiveListMarkers, extractLiveListRowHtml } from './live-list-render.js';
 
 import { discoverRoutes } from './discover.js';
-import { extractPageOptions, extractLiveFields } from './page-options.js';
+import { extractPageOptions, extractLiveFields, type BakeMode } from './page-options.js';
 import { createPurityTracker } from './purity.js';
 import type { PageRoute, LayoutNode } from './manifest.js';
 import type {
   KilnRequest,
   KilnResponse,
   KilnConfig,
+  KilnIdentity,
   ServerAdapter,
 } from '@kiln/core';
 import {
@@ -55,6 +56,9 @@ export interface StartKilnOptions {
   store?: FsrStore;
   watcher?: FsrWatcher;
   redis?: { getClient(): any };
+  /** Stable per-user cache key for bake='user' pages. Overrides the app's
+   * hooks.ts `identity` export when both are present. */
+  identity?: KilnIdentity;
   /** Dev only: upstream URL for the islands manifest (the Vite dev server's
    * /kiln-islands.json). Production reads dist/client/kiln-islands.json. */
   islandsManifestUrl?: string;
@@ -118,7 +122,8 @@ export function buildPageHandler(
   kilnConfig?: KilnConfig,
   store?: FsrStore,
   watcher?: FsrWatcher,
-  errorFiles?: PageErrorFiles
+  errorFiles?: PageErrorFiles,
+  identity?: KilnIdentity
 ) {
   const cache = new KilnCache(cacheOpts);
   // 'auto' routes latch impure for the life of the process the first time a
@@ -132,13 +137,14 @@ export function buildPageHandler(
   // and it keeps Postgres entirely off the cached read path.
   const lastTouched = new Map<string, number>();
   const TOUCH_INTERVAL_MS = 60_000;
-  const touchRoute = (route: string) => {
+  const touchRoute = (route: string, userKey = '') => {
     if (!store || typeof store.touchRoute !== 'function') return;
+    const key = `${route}\u0000${userKey}`;
     const now = Date.now();
-    if (now - (lastTouched.get(route) ?? 0) < TOUCH_INTERVAL_MS) return;
+    if (now - (lastTouched.get(key) ?? 0) < TOUCH_INTERVAL_MS) return;
     if (lastTouched.size >= DEDUP_SET_MAX) lastTouched.clear();
-    lastTouched.set(route, now);
-    void store.touchRoute(route).catch(() => {});
+    lastTouched.set(key, now);
+    void store.touchRoute(route, userKey).catch(() => {});
   };
 
   const handle = async (req: KilnRequest, res: KilnResponse) => {
@@ -148,27 +154,48 @@ export function buildPageHandler(
       return node ? node.pattern : '/';
     });
     const options = extractPageOptions(module);
-    const variant = options.cacheKey ? options.cacheKey(req) : undefined;
     const bakeMode = options.bake; // undefined = 'auto'
+    let uid: string | null = null;
+    let variant = options.cacheKey ? options.cacheKey(req) : undefined;
+    if (bakeMode === 'user') {
+      uid = identity ? identity(req) : null;
+      if (uid === null) {
+        // Anonymous (or no identity hook configured): a per-user page has no
+        // cache key for this request — serve pure SSR, write nothing.
+        if (!identity) {
+          warnOnce(
+            `user-no-identity:${pageMeta.pattern}`,
+            `[kiln] route "${pageMeta.pattern}" declares bake='user' but no identity hook is configured; serving pure SSR.`
+          );
+        }
+      } else {
+        variant = `u:${uid}`;
+      }
+    }
+    const userKey = uid ?? '';
+    const isUserVariant = bakeMode === 'user' && uid !== null;
     const revalidate = options.revalidate ?? kilnConfig?.fsr?.revalidateSeconds ?? 300;
     const purgeAfter = options.purgeAfter ?? kilnConfig?.fsr?.purgeAfterSeconds ?? 2_592_000;
-    const bakeEligible = bakeMode !== false && !knownImpure;
+    const bakeEligible =
+      bakeMode !== false && !knownImpure && !(bakeMode === 'user' && uid === null);
 
-    if (store && typeof store.ensureRouteRow === 'function' && !ensuredRoutes.has(req.path)) {
+    const ensureKey = `${req.path}\u0000${userKey}`;
+    if (store && typeof store.ensureRouteRow === 'function' && !ensuredRoutes.has(ensureKey)) {
       await store.ensureRouteRow(
         req.path,
         revalidate === false ? 0 : revalidate,
         purgeAfter,
-        options.patchMode
+        options.patchMode,
+        userKey
       );
-      addBounded(ensuredRoutes, req.path);
+      addBounded(ensuredRoutes, ensureKey);
     }
     // Every request path — cached AND rendered — must refresh recency, or an
     // actively-served pure-SSR route would look idle and get purged after
     // purge_after_secs (ensureRouteRow's ON CONFLICT deliberately does not
     // update last_requested_at, and it only runs once per process anyway).
     // The 60s throttle keeps this to at most one UPDATE per route per minute.
-    touchRoute(req.path);
+    touchRoute(req.path, userKey);
 
     let pageProps: any = {};
     let rawPageProps: any = {};
@@ -195,8 +222,23 @@ export function buildPageHandler(
       }
     };
 
-    // 2. Content negotiation — JSON shortcut (explicit header OR page declared json_first)
+    // 2. Content negotiation — JSON shortcut (explicit header OR page declared
+    // json_first). Baked routes serve the snapshot's page-only props straight
+    // from cache — one read, no load(): the "button click just picks the
+    // JSON" path. Any doubt about validity (no pageData, build mismatch)
+    // falls through to a fresh load().
     if (wantsJson(req) || options.jsonFirst) {
+      if (bakeEligible) {
+        const snap = (await cache.getJson(req.path, variant)) as
+          | { pageData?: Record<string, unknown>; buildId?: string }
+          | null;
+        const buildOk = !kilnConfig?.fsr?.buildId || snap?.buildId === kilnConfig.fsr.buildId;
+        if (snap?.pageData && buildOk) {
+          touchRoute(req.path, userKey);
+          res.json(snap.pageData);
+          return;
+        }
+      }
       const data = await loadPageProps();
       if (data === null) return;
       res.json(data);
@@ -221,6 +263,15 @@ export function buildPageHandler(
         materialized = null;
       }
     }
+    // Deploy fingerprint: an artifact baked by a different build is stale by
+    // definition (component code may have changed) — same treatment as a
+    // layout-signature mismatch. Only enforced when the app sets fsr.buildId.
+    if (materialized && kilnConfig?.fsr?.buildId) {
+      const cachedBuild = (cachedSnapshot as { buildId?: string } | null)?.buildId;
+      if (cachedBuild !== kilnConfig.fsr.buildId) {
+        materialized = null;
+      }
+    }
 
     if (cachedHtml && !materialized) {
       // Corrupt or layout-stale artifact: drop it and fall through to a
@@ -240,10 +291,11 @@ export function buildPageHandler(
       if (loaded === null) return;
 
       const liveFields = extractLiveFields(rawPageProps);
-      if (store && watcher && liveFields.length > 0 && !variant) {
-        const loaderReq = makeLoaderRequest(req);
+      if (store && watcher && liveFields.length > 0 && (!variant || isUserVariant)) {
+        const loaderReq = makeLoaderRequest(req, isUserVariant);
         watcher.registerLoader({
           route: req.path,
+          userKey,
           load: async () => {
             const l = typeof module.load === 'function' ? await module.load(loaderReq) : {};
             return l as Record<string, unknown>;
@@ -436,6 +488,7 @@ export function buildPageHandler(
       knownImpure = true;
       await cache.delete(req.path, variant);
     }
+    // bake='user' deliberately reads identity — no demotion, no warning.
     if (!renderPure && (bakeMode === 'shared' || bakeMode === 'static') && process.env.NODE_ENV !== 'production') {
       warnOnce(
         `impure-bake:${req.path}`,
@@ -443,8 +496,7 @@ export function buildPageHandler(
           `fields (locals/headers/query); every caller will receive this cached copy.`
       );
     }
-    const shouldBake =
-      bakeMode !== false && !knownImpure && !anyLayoutImpure && (renderPure || !autoMode);
+    const shouldBake = bakeEligible && !anyLayoutImpure && (renderPure || !autoMode);
     const tombstoned =
       store && typeof store.isTombstoned === 'function' ? await store.isTombstoned(req.path) : false;
 
@@ -453,23 +505,40 @@ export function buildPageHandler(
     if (shouldBake && !tombstoned) {
       const layoutSignature =
         layoutPatterns.length > 0 ? await computeLayoutSignature(layoutPatterns, cache) : undefined;
-      await cache.setJson(req.path, createBakedSnapshot(snapshotProps, undefined, layoutSignature), variant);
+      await cache.setJson(
+        req.path,
+        createBakedSnapshot(snapshotProps, undefined, layoutSignature, {
+          pageData: pageProps,
+          buildId: kilnConfig?.fsr?.buildId,
+        }),
+        variant
+      );
       await cache.setHtml(req.path, finalHtml, pinInRedis, variant);
-      jsonPath = variant ? null : cache.diskJsonPath(req.path);
-      htmlPath = variant ? null : cache.diskHtmlPath(req.path);
-      if (store && !variant) {
-        await store.setBakedPaths(req.path, htmlPath, jsonPath);
+      // 'user' variants record their baked paths under their user_key row so
+      // the watcher can patch them; cache_key variants keep today's behavior
+      // (no row — live features are unsupported for them).
+      jsonPath = variant && !isUserVariant ? null : cache.diskJsonPath(req.path, variant);
+      htmlPath = variant && !isUserVariant ? null : cache.diskHtmlPath(req.path, variant);
+      if (store && (!variant || isUserVariant)) {
+        await store.setBakedPaths(req.path, htmlPath, jsonPath, userKey);
       }
     }
 
     // Live registrations write to the route's BASE cache paths; a cacheKey
     // page's per-variant artifacts would be silently poisoned by them, so
     // live features are not registered for variant requests.
-    if (variant && watcher && (hasLiveLists(rawPageProps) || extractLiveFields(rawPageProps).length > 0)) {
+    if (variant && !isUserVariant && watcher && (hasLiveLists(rawPageProps) || extractLiveFields(rawPageProps).length > 0)) {
       warnOnce(
         `variant-live:${req.path}`,
         `[kiln] route "${req.path}" combines cacheKey with LiveProp/Live.list; ` +
           `live updates are not supported for cacheKey variants yet and were skipped.`,
+      );
+    }
+    if (isUserVariant && watcher && hasLiveLists(rawPageProps)) {
+      warnOnce(
+        `user-live-list:${req.path}`,
+        `[kiln] route "${req.path}" combines bake='user' with Live.list; per-user list ` +
+          `updates are not supported yet (scalar LiveProp fields are) and were skipped.`,
       );
     }
 
@@ -505,7 +574,7 @@ export function buildPageHandler(
 
     // 12. Persist live fields on pageMeta (extracted once at step 7)
     const liveFields = pageLiveFields;
-    if (store && liveFields.length > 0 && !tombstoned && !variant) {
+    if (store && liveFields.length > 0 && !tombstoned && (!variant || isUserVariant)) {
       for (const field of liveFields) {
         await store.upsertSlot(
           req.path,
@@ -514,11 +583,14 @@ export function buildPageHandler(
           [],
           field.dependsOn ? [field.dependsOn] : [],
           field.debounce ?? options.debounce ?? kilnConfig?.fsr?.patchDebounceSecs,
+          null,
+          userKey,
         );
       }
-      const loaderReq = makeLoaderRequest(req);
+      const loaderReq = makeLoaderRequest(req, isUserVariant);
       watcher?.registerLoader?.({
         route: req.path,
+        userKey,
         load: async () => {
           const loaded = typeof module.load === 'function' ? await module.load(loaderReq) : {};
           return loaded as Record<string, unknown>;
@@ -567,7 +639,7 @@ function warnOnce(key: string, message: string): void {
  * kept — the first visitor's headers, cookies, and body must never leak into
  * a cache entry that is served to everyone.
  */
-function makeLoaderRequest(req: KilnRequest): KilnRequest {
+function makeLoaderRequest(req: KilnRequest, includeLocals = false): KilnRequest {
   return {
     path: req.path,
     method: 'GET',
@@ -578,10 +650,12 @@ function makeLoaderRequest(req: KilnRequest): KilnRequest {
     json: async () => ({}),
     isEnhanced: false,
     layoutsPresent: [],
-    // Intentionally empty, like the stripped headers above: a layout load can
-    // be baked into a shared cache entry, so per-user locals (e.g. the auth
-    // user) must not flow in here or one visitor's data leaks to everyone.
-    locals: {},
+    // Shared cache entries must never embed one visitor's identity, so locals
+    // stay empty by default. bake='user' loaders opt in (includeLocals): the
+    // snapshot being refreshed belongs to exactly this user, and the captured
+    // identity is how the watcher re-runs load() as them. Captured at
+    // registration — role changes propagate on the user's next real request.
+    locals: includeLocals ? structuredClone(req.locals) : {},
     prebakeNext: () => {},
   };
 }
@@ -832,7 +906,19 @@ function escapeHtml(value: string): string {
 // Action handler
 // ---------------------------------------------------------------------------
 
-export function buildActionHandler(actions: Record<string, any>) {
+export function buildActionHandler(
+  actions: Record<string, any>,
+  opts?: { cache?: KilnCache; identity?: KilnIdentity; bake?: BakeMode }
+) {
+  // Read-your-own-writes for bake='user' pages: the actor must see their own
+  // write on the redirect GET — racing the watcher's async re-materialization
+  // reads as "my click didn't work". Deleting the actor's artifacts forces a
+  // fresh render for exactly one user; everyone else updates via the watcher.
+  const invalidateActor = async (req: KilnRequest) => {
+    if (opts?.bake !== 'user' || !opts.cache || !opts.identity) return;
+    const uid = opts.identity(req);
+    if (uid) await opts.cache.delete(req.path, `u:${uid}`).catch(() => {});
+  };
   return async (req: KilnRequest, res: KilnResponse) => {
     let actionName = '';
     for (const key of Object.keys(req.query)) {
@@ -850,9 +936,11 @@ export function buildActionHandler(actions: Record<string, any>) {
 
     try {
       const result = await actions[actionName](req);
+      await invalidateActor(req);
       res.json(result || { success: true });
     } catch (err: any) {
       if (err.type === 'Redirect') {
+        await invalidateActor(req);
         res.redirect(err.message, err.status);
         return;
       }
@@ -921,7 +1009,9 @@ export async function startKiln(
     tracing: config.web?.tracing === true,
     trustProxy: config.web?.trustProxy === true
   });
-  await adapter.applyServerHooks?.(process.cwd());
+  const appHooks = await adapter.applyServerHooks?.(process.cwd());
+  const identity: KilnIdentity | undefined =
+    options.identity ?? (appHooks && typeof appHooks === 'object' ? appHooks.identity : undefined);
 
   // 4. Register /_image endpoint if images config is present
   if ((config as any).images?.enabled) {
@@ -947,12 +1037,20 @@ export async function startKiln(
       config,
       options.store,
       options.watcher,
-      errorFiles
+      errorFiles,
+      identity
     );
     adapter.registerPage(page.pattern, page.layouts, pageHandler);
 
     if (mod.actions) {
-      adapter.registerAction(page.pattern, buildActionHandler(mod.actions));
+      adapter.registerAction(
+        page.pattern,
+        buildActionHandler(mod.actions, {
+          cache: new KilnCache(cacheOpts),
+          identity,
+          bake: extractPageOptions(mod).bake,
+        })
+      );
     }
 
     // SSG: prebake at startup for pages exporting entries() + bake 'static'.
@@ -1035,10 +1133,14 @@ export async function startKiln(
     adapter.registerSSE('/__kiln/fsr', async (req, res) => {
       const route = req.query.route || '';
       const slots = (req.query.slots || '').split(',').filter(Boolean);
+      // Resolved from the request's own session — a client cannot subscribe
+      // to another user's patch stream because there is nothing to spoof.
+      const sseUserKey = identity ? identity(req) ?? '' : '';
       const { fsrHubStream } = await import('@kiln/engine' as any);
       const stream = fsrHubStream({
         route,
         slots,
+        userKey: sseUserKey,
         signal: req.signal,
         config: {
           maxConnections: config.fsr?.maxSseConnections ?? 1000,
@@ -1057,7 +1159,7 @@ export async function startKiln(
       const route = req.query.route || '';
       const slots = (req.query.slots || '').split(',').filter(Boolean);
       const { fsrSnapshotHandler } = await import('@kiln/engine' as any);
-      const snapshot = await fsrSnapshotHandler(route, slots, options.store);
+      const snapshot = await fsrSnapshotHandler(route, slots, options.store, identity ? identity(req) ?? '' : '');
       res.json(snapshot);
     });
   } else {

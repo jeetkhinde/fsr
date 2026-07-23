@@ -158,6 +158,35 @@ async function runTests() {
     // (`spawnSupervisedIdleEviction` in watcher.ts) has only ever called
     // `store.purgeInactiveRoutes()`, never `evictIdleRoutes()`. This test now
     // exercises the method that's actually wired into the watcher loop.
+    // 5b. Per-user loader revalidation (bake='user', ADR-017): a user-scoped
+    // slot goes stale, the (route,user) loader re-runs, and the patch lands in
+    // THAT user's artifact with userKey attached — never the shared row's.
+    console.log('Verifying per-user loader revalidation...');
+    const uRoute = '/test-user-route';
+    const uHtmlPath = './temp_user_page.html';
+    const uJsonPath = './temp_user_page.json';
+    await fs.writeFile(uHtmlPath, '<html><body><div s-live="greeting">loading</div></body></html>', 'utf8');
+    await fs.writeFile(uJsonPath, JSON.stringify({ schemaVersion: 1, renderVersion: 3, data: { greeting: 'old' }, updatedAt: new Date().toISOString() }), 'utf8');
+    await store.ensureRouteRow(uRoute, 300, 3600, 'json', 'u1');
+    await store.setBakedPaths(uRoute, uHtmlPath, uJsonPath, 'u1');
+    await store.upsertSlot(uRoute, 'greeting', null, [], ['user_dep_key'], 0, null, 'u1');
+    watcher.registerLoader({ route: uRoute, userKey: 'u1', load: async () => ({ greeting: 'hi-u1' }) });
+    patches.length = 0;
+    await store.invalidateDepKey('user_dep_key');
+    await new Promise(resolve => setTimeout(resolve, 800));
+    const up = patches.find(x => x.kind === 'scalar' && x.route === uRoute && (x as any).field === 'greeting') as any;
+    assert.ok(up, 'expected a per-user scalar patch');
+    assert.equal(up.value, 'hi-u1');
+    assert.equal(up.userKey, 'u1');
+    const uJson = JSON.parse(await fs.readFile(uJsonPath, 'utf8'));
+    assert.equal(uJson.data.greeting, 'hi-u1');
+    const rowsAfterUser = await store.fetchAllForInspect();
+    const uSlotRow = rowsAfterUser.find(r => r.route === uRoute && r.slot === 'greeting');
+    assert.equal(uSlotRow?.stale, false);
+    assert.equal(uSlotRow?.userKey, 'u1');
+    await fs.unlink(uHtmlPath).catch(() => {});
+    await fs.unlink(uJsonPath).catch(() => {});
+
     console.log('Verifying idle eviction (purge)...');
 
     // Stop watcher first to freeze all background ticks/timers

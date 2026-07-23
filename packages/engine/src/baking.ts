@@ -29,12 +29,19 @@ export interface BakedSnapshot {
    * its full-page cache is otherwise never revisited once promoted.
    */
   layoutSignature?: string;
+  /** Page-only props (what an Accept: application/json request returns) —
+   * distinct from `data`, which merges layout props for the __kiln_seed. */
+  pageData?: Record<string, unknown>;
+  /** Deploy fingerprint (fsr.buildId) recorded at bake time. A mismatch on
+   * read invalidates the artifact — deploys stop requiring a manual flush. */
+  buildId?: string;
 }
 
 export function createBakedSnapshot(
   data: Record<string, unknown>,
   lists?: BakedSnapshot['lists'],
   layoutSignature?: string,
+  extras?: { pageData?: Record<string, unknown>; buildId?: string },
 ): BakedSnapshot {
   return {
     schemaVersion: BAKED_SNAPSHOT_VERSION,
@@ -43,6 +50,8 @@ export function createBakedSnapshot(
     lists,
     updatedAt: new Date().toISOString(),
     layoutSignature,
+    pageData: extras?.pageData,
+    buildId: extras?.buildId,
   };
 }
 

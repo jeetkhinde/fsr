@@ -62,8 +62,9 @@ describe.skipIf(!run)('cross-user render isolation', () => {
   });
 
   it("never serves one user's home render to the other, on any hit", async () => {
-    // 4 alternating hits per user — well past the old promote-after-2
-    // threshold where the shared-cache leak used to begin.
+    // 4 alternating hits per user. Since ADR-017 the home page is bake='user':
+    // hit 1 bakes each user's own artifact, hits 2+ serve it from cache — this
+    // loop now proves per-user CACHE isolation, not just SSR isolation.
     for (let hit = 0; hit < 4; hit++) {
       const tomHtml = await (await fetch(BASE + '/', { headers: { cookie: tomCookie } })).text();
       const adamHtml = await (await fetch(BASE + '/', { headers: { cookie: adamCookie } })).text();
@@ -72,5 +73,15 @@ describe.skipIf(!run)('cross-user render isolation', () => {
       expect(adamHtml).toContain('Purity Adam');
       expect(adamHtml).not.toContain('Purity Tom');
     }
+  });
+
+  it("bakes one artifact per user under the variant cache dir, never a shared one", async () => {
+    const { readdir } = await import('node:fs/promises');
+    const variantDir = new URL('../.kiln-cache/index/_v', import.meta.url).pathname;
+    const variants = await readdir(variantDir);
+    expect(variants.length).toBe(2); // exactly tom's and adam's u:<id> variants
+    // the shared (non-variant) artifact must NOT exist — that would be the old leak
+    const sharedHtml = Bun.file(new URL('../.kiln-cache/index/index.html', import.meta.url).pathname);
+    expect(await sharedHtml.exists()).toBe(false);
   });
 });

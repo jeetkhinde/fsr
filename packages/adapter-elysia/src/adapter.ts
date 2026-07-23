@@ -115,10 +115,14 @@ export class ElysiaAdapter implements ServerAdapter {
    * `handle` hook (invoked by registerPage/registerAction/registerSSE) and
    * wire onError/onStart/onStop into the Elysia lifecycle. Must be called
    * before routes are registered so `handle` covers them. */
-  async applyServerHooks(appRoot: string): Promise<void> {
+  async applyServerHooks(appRoot: string): Promise<{ identity?: import('@kiln/core').KilnIdentity }> {
     const hooks = await loadHooks(appRoot);
     this.appHandle = hooks.handle;
     this.app.use(serverHooks(hooks));
+    // Returned so startKiln can thread hooks the FRAMEWORK consumes (identity
+    // for bake='user' cache keys) into its handlers — unlike `handle`, which
+    // the adapter itself invokes per request.
+    return { identity: hooks.identity };
   }
 
   async listen(port: number, callback?: (addr: string) => void, host?: string): Promise<void> {
