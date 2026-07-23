@@ -127,6 +127,50 @@ describe('buildPageHandler', () => {
     await fs.rm(tmpDir, { recursive: true });
   });
 
+  it("bake='user' serves each user their own cached artifact and SSRs anonymous", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-user-'));
+    const { createElement } = await import('react');
+    let loads = 0;
+    const pageModule = {
+      bake: 'user',
+      load: async (req: any) => {
+        loads++;
+        return { who: (req.locals as any).user ?? 'anon' };
+      },
+      default: ({ who }: any) => createElement('div', null, `hello ${who}`),
+    };
+    const identity = (req: any) => (req.locals as any).user ?? null;
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/mine', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      identity as any,
+    );
+    // tom: hit 1 bakes his variant, hit 2 serves it (no load)
+    await handler(makeReq({ path: '/mine', locals: { user: 'tom' } }) as any, makeRes());
+    const tom2 = makeRes();
+    await handler(makeReq({ path: '/mine', locals: { user: 'tom' } }) as any, tom2);
+    expect(tom2.captured.body).toContain('hello tom');
+    expect(loads).toBe(1);
+    // adam: his own variant, never tom's
+    const adam = makeRes();
+    await handler(makeReq({ path: '/mine', locals: { user: 'adam' } }) as any, adam);
+    expect(adam.captured.body).toContain('hello adam');
+    expect(adam.captured.body).not.toContain('tom');
+    expect(loads).toBe(2);
+    // anonymous: pure SSR every hit, no artifacts written
+    await handler(makeReq({ path: '/mine', locals: {} }) as any, makeRes());
+    await handler(makeReq({ path: '/mine', locals: {} }) as any, makeRes());
+    expect(loads).toBe(4);
+    expect(await Bun.file(path.join(tmpDir, 'mine', 'index.html')).exists()).toBe(false); // no base-key artifact
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
   it('materializes the latest JSON into an immutable promoted shell', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
     const { KilnCache, createBakedSnapshot } = await import('@kiln/engine');

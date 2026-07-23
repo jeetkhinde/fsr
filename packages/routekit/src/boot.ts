@@ -137,13 +137,14 @@ export function buildPageHandler(
   // and it keeps Postgres entirely off the cached read path.
   const lastTouched = new Map<string, number>();
   const TOUCH_INTERVAL_MS = 60_000;
-  const touchRoute = (route: string) => {
+  const touchRoute = (route: string, userKey = '') => {
     if (!store || typeof store.touchRoute !== 'function') return;
+    const key = `${route}\u0000${userKey}`;
     const now = Date.now();
-    if (now - (lastTouched.get(route) ?? 0) < TOUCH_INTERVAL_MS) return;
+    if (now - (lastTouched.get(key) ?? 0) < TOUCH_INTERVAL_MS) return;
     if (lastTouched.size >= DEDUP_SET_MAX) lastTouched.clear();
-    lastTouched.set(route, now);
-    void store.touchRoute(route).catch(() => {});
+    lastTouched.set(key, now);
+    void store.touchRoute(route, userKey).catch(() => {});
   };
 
   const handle = async (req: KilnRequest, res: KilnResponse) => {
@@ -153,27 +154,47 @@ export function buildPageHandler(
       return node ? node.pattern : '/';
     });
     const options = extractPageOptions(module);
-    const variant = options.cacheKey ? options.cacheKey(req) : undefined;
     const bakeMode = options.bake; // undefined = 'auto'
+    let uid: string | null = null;
+    let variant = options.cacheKey ? options.cacheKey(req) : undefined;
+    if (bakeMode === 'user') {
+      uid = identity ? identity(req) : null;
+      if (uid === null) {
+        // Anonymous (or no identity hook configured): a per-user page has no
+        // cache key for this request — serve pure SSR, write nothing.
+        if (!identity) {
+          warnOnce(
+            `user-no-identity:${pageMeta.pattern}`,
+            `[kiln] route "${pageMeta.pattern}" declares bake='user' but no identity hook is configured; serving pure SSR.`
+          );
+        }
+      } else {
+        variant = `u:${uid}`;
+      }
+    }
+    const userKey = uid ?? '';
     const revalidate = options.revalidate ?? kilnConfig?.fsr?.revalidateSeconds ?? 300;
     const purgeAfter = options.purgeAfter ?? kilnConfig?.fsr?.purgeAfterSeconds ?? 2_592_000;
-    const bakeEligible = bakeMode !== false && !knownImpure;
+    const bakeEligible =
+      bakeMode !== false && !knownImpure && !(bakeMode === 'user' && uid === null);
 
-    if (store && typeof store.ensureRouteRow === 'function' && !ensuredRoutes.has(req.path)) {
+    const ensureKey = `${req.path}\u0000${userKey}`;
+    if (store && typeof store.ensureRouteRow === 'function' && !ensuredRoutes.has(ensureKey)) {
       await store.ensureRouteRow(
         req.path,
         revalidate === false ? 0 : revalidate,
         purgeAfter,
-        options.patchMode
+        options.patchMode,
+        userKey
       );
-      addBounded(ensuredRoutes, req.path);
+      addBounded(ensuredRoutes, ensureKey);
     }
     // Every request path — cached AND rendered — must refresh recency, or an
     // actively-served pure-SSR route would look idle and get purged after
     // purge_after_secs (ensureRouteRow's ON CONFLICT deliberately does not
     // update last_requested_at, and it only runs once per process anyway).
     // The 60s throttle keeps this to at most one UPDATE per route per minute.
-    touchRoute(req.path);
+    touchRoute(req.path, userKey);
 
     let pageProps: any = {};
     let rawPageProps: any = {};
@@ -441,6 +462,7 @@ export function buildPageHandler(
       knownImpure = true;
       await cache.delete(req.path, variant);
     }
+    // bake='user' deliberately reads identity — no demotion, no warning.
     if (!renderPure && (bakeMode === 'shared' || bakeMode === 'static') && process.env.NODE_ENV !== 'production') {
       warnOnce(
         `impure-bake:${req.path}`,
@@ -448,8 +470,7 @@ export function buildPageHandler(
           `fields (locals/headers/query); every caller will receive this cached copy.`
       );
     }
-    const shouldBake =
-      bakeMode !== false && !knownImpure && !anyLayoutImpure && (renderPure || !autoMode);
+    const shouldBake = bakeEligible && !anyLayoutImpure && (renderPure || !autoMode);
     const tombstoned =
       store && typeof store.isTombstoned === 'function' ? await store.isTombstoned(req.path) : false;
 
@@ -460,10 +481,14 @@ export function buildPageHandler(
         layoutPatterns.length > 0 ? await computeLayoutSignature(layoutPatterns, cache) : undefined;
       await cache.setJson(req.path, createBakedSnapshot(snapshotProps, undefined, layoutSignature), variant);
       await cache.setHtml(req.path, finalHtml, pinInRedis, variant);
-      jsonPath = variant ? null : cache.diskJsonPath(req.path);
-      htmlPath = variant ? null : cache.diskHtmlPath(req.path);
-      if (store && !variant) {
-        await store.setBakedPaths(req.path, htmlPath, jsonPath);
+      // 'user' variants record their baked paths under their user_key row so
+      // the watcher can patch them; cache_key variants keep today's behavior
+      // (no row — live features are unsupported for them).
+      const isUserVariant = bakeMode === 'user' && uid !== null;
+      jsonPath = variant && !isUserVariant ? null : cache.diskJsonPath(req.path, variant);
+      htmlPath = variant && !isUserVariant ? null : cache.diskHtmlPath(req.path, variant);
+      if (store && (!variant || isUserVariant)) {
+        await store.setBakedPaths(req.path, htmlPath, jsonPath, userKey);
       }
     }
 
