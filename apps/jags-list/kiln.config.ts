@@ -13,6 +13,8 @@ export default defineConfig({
     connectionTtlSecs: 3600,
     keepaliveSecs: 30,
     redisUrl: process.env.REDIS_URL ?? 'redis://localhost:6379',
+    // Deploy fingerprint: when set, artifacts from an older build self-invalidate.
+    buildId: process.env.GIT_SHA,
     postgresUrl:
       process.env.DATABASE_URL ?? 'postgresql://localhost:5432/jagslist',
   },
