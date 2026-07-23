@@ -48,7 +48,7 @@ Dependency keys accept either form:
 ```tsx
 import { Live } from '@kiln/core';
 
-export const promote_after = 0;
+export const bake = 'static';
 export async function load() {
   return {
     todos: Live.list<Todo>({

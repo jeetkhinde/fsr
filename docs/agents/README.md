@@ -8,13 +8,13 @@
 
 ## What Kiln is, in one paragraph
 
-Kiln is a file-based React web framework. You write pages under `pages/`. Each page file exports a `load()` (server data), a `default` React component (the UI), and optional `actions` (POST handlers). A single integer export — `promote_after` — decides whether a page is rendered per-request (SSR), baked once (SSG/ISR), or baked after N hits (FSR). Real-time fields come from `LiveProp`/`Live.list` pushed over SSE; client-side interactivity comes from **islands** only (no full-page hydration).
+Kiln is a file-based React web framework. You write pages under `pages/`. Each page file exports a `load()` (server data), a `default` React component (the UI), and optional `actions` (POST handlers). The framework observes each page's `load()`: a render that never touches request identity (`locals`/`headers`/`query`) is baked and cached on its first hit; an identity-touching render stays pure SSR automatically (an optional `bake` export overrides). Real-time fields come from `LiveProp`/`Live.list` pushed over SSE; client-side interactivity comes from **islands** only (no full-page hydration).
 
 ## The mental model (know these five things)
 
 1. **A page is a file.** `pages/posts/[id].tsx` → route `/posts/:id`. `index.tsx` → `/`. See [`routing.md`](routing.md).
 2. **`load()` runs on the server and doubles as your API.** The same `load()` returns HTML to a browser and JSON to an `Accept: application/json` client. See [`data-loading.md`](data-loading.md).
-3. **Rendering mode is one export.** `export const promote_after = 0 | 1 | N | (absent)`. See [`rendering-and-caching.md`](rendering-and-caching.md).
+3. **Rendering mode is observed.** Absent = auto-classified by `load()` purity; `export const bake = 'static' | 'shared' | false` overrides. See [`rendering-and-caching.md`](rendering-and-caching.md).
 4. **Mutations are collocated `actions`.** `export const actions = { create(req) {…} }` registers a POST handler on the same route. See [`actions-and-forms.md`](actions-and-forms.md).
 5. **Live data + interactivity have exact rules.** `LiveProp` for real-time fields, `island()` for React interactivity, and islands read live data from the store, never the DOM. See [`live-and-islands.md`](live-and-islands.md).
 6. **Auth is app policy, not framework.** Kiln ships no auth; bring a library and gate requests in `hooks.ts` → `handle(req, res)`, stashing the user on `req.locals` for `load()` to read. See [`auth.md`](auth.md).
@@ -44,7 +44,6 @@ export default defineConfig({
   port: 3000,
   pagesDir: './pages',
   fsr: {
-    promoteAfterHits: 2,
     patchDebounceSecs: 5,
     revalidateSeconds: 300,
     redisUrl: process.env.REDIS_URL || 'redis://localhost:6379',
@@ -80,7 +79,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 import React from 'react';
 import { Live, AppError } from '@kiln/core';
 
-export const promote_after = 2; // FSR: bake after 2 hits (omit for pure SSR)
+export const bake = 'shared'; // optional — omit and the classifier decides
 
 export async function load(req) {
   const post = await db.posts.find(req.params.id);

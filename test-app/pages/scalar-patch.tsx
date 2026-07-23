@@ -2,7 +2,7 @@ import type { SQL } from 'bun';
 import React from 'react';
 import { Live } from '@kiln/core';
 
-export const promote_after = 0;
+export const bake = 'static';
 export const patch_mode = 'both';
 
 export async function load() {

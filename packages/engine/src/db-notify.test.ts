@@ -42,7 +42,7 @@ async function runTests() {
   `);
 
   const route = '/test-notify-route';
-  await store.ensureRouteRow(route, 1);
+  await store.ensureRouteRow(route);
   // Link slot to collection key (notify_test_dummy)
   await store.upsertSlot(route, 'slot_col', 'SELECT val FROM notify_test_dummy WHERE id = $1', [1], ['notify_test_dummy'], 0, 'val');
   // Link slot to dynamic row key (notify_test_dummy:1)
@@ -50,7 +50,6 @@ async function runTests() {
 
   const config: WatcherConfig = {
     pollIntervalMs: 200,
-    promoteAfterHits: 1,
     patchDebounceSecs: 0,
     purgeAfterSeconds: 3600,
     scheduledInvalidations: [],

@@ -3,7 +3,7 @@ import React from 'react';
 // This is the CHILD layout — it wraps every /dashboard/* route with a sidebar.
 // It is baked and cached independently of the root layout and of whatever
 // grandchild layout/page sits below it.
-export const promote_after = 2;
+export const bake = 'shared';
 
 export async function load() {
   return { sidebarBakedAt: new Date().toISOString() };

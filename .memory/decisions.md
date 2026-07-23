@@ -15,7 +15,7 @@ This file documents the major architecture decisions and developer experience (D
 *   **Revision note**: The original wording ("disk writes are fire-and-forget; disk reads are restricted to cold-start boots") describes a boot-time hydration step that was never implemented (`packages/engine/src/cache.ts` has no cold-start-only gate). Since disk is read as a general per-request fallback whenever Redis has no value, cold start is just the first, most common instance of that fallback — the same path also covers a Redis outage or eviction later in the process's life, which is more resilient than a literal cold-start-only reading would be. Wording updated to match; behavior was not changed for this revision.
 
 ### ADR-003: Unified Rendering Lifecycle via `promote_after`
-*   **Status**: LOCKED
+*   **Status**: SUPERSEDED by ADR-016 (2026-07-19) — `promote_after` removed
 *   **Decision**: A single integer configures the rendering mode:
     *   `promote_after` is absent/0 → SSG (page baked at startup).
     *   `promote_after = 1` → ISR (page baked after first request).
@@ -90,7 +90,14 @@ This file documents the major architecture decisions and developer experience (D
 *   **Decision**: Apps express per-request policy (auth, request-id, logging) through a single `handle(req: KilnRequest, res: KilnResponse)` export in `hooks.ts` (the `KilnHandle` type in `@kiln/core`), and carry per-request data forward via a required `locals: Record<string, unknown>` field on `KilnRequest`. The adapter runs `handle` after it builds the `KilnRequest` and before every Kiln-registered route's `load()`/action (pages, actions, SSE, including framework-internal routes); `handle` mutates `req.locals` to attach data and writes to `res` (redirect/json) to short-circuit — if `res.bodyType` is set on return, the adapter sends it and skips the route handler. This is SvelteKit's `handle` + `event.locals`.
 *   **Replaces**: the earlier Elysia-coupled `KilnHooks.onRequest(ctx)` (raw Elysia context, ran outside the Kiln request path, couldn't populate a `KilnRequest`). `onError`/`onStart`/`onStop` remain adapter-lifecycle hooks.
 *   **Rationale**: the auth gate and the `load()` that needs the user sat on opposite sides of `wrapRequest`, forcing every protected page to re-resolve the session. `handle` resolves it once into `req.locals`; `requireUser(req)` becomes a sync read. Chokepoint is the **adapter** (not `buildPageHandler`) so one allowlist gates framework-internal routes too — no regression exposing `/__kiln/inspect` or the FSR SSE stream. Contract lives in core (`KilnRequest`/`KilnResponse`), never an Elysia macro, so it holds across adapters.
-*   **Consequences**: `KilnRequest` gains a required `locals` field — every synthetic request literal must set it (`{}`). Layout loads and startup prebakes set `locals: {}` **deliberately empty** (cache-safety: a baked layout must not embed one user's data). Auth-dependent pages must be `promote_after = false`.
+*   **Consequences**: `KilnRequest` gains a required `locals` field — every synthetic request literal must set it (`{}`). Layout loads and startup prebakes set `locals: {}` **deliberately empty** (cache-safety: a baked layout must not embed one user's data). Auth-dependent pages needed `promote_after = false` until ADR-016; the bake classifier now keeps identity-touching loads pure SSR automatically.
+
+### ADR-016: Bake Classes Replace Hit-Count Promotion
+*   **Status**: ACCEPTED 2026-07-19 · **Plan**: `docs/superpowers/plans/2026-07-19-bake-classes.md`
+*   **Decision**: Routes are classified by *observing* `load()` (a Proxy purity tracker flags access to `req.locals`/`headers`/`query`/`raw`/body), not by counting hits. Artifact presence **is** promotion: the first pure render bakes HTML+JSON together; an identity-touching render under auto demotes the route for the process lifetime and deletes stale artifacts. Optional `export const bake = 'static' | 'shared' | false` overrides (absent = auto); `promote_after`/`fsr.promoteAfterHits` are hard-removed and fail boot with `StartupError('RemovedOption')`. `kiln_fsr` drops `hit_count`/`promoted`/`promote_after`/`promoted_at`/`last_hit`; watcher/store derive promoted-ness from `html_path IS NOT NULL`. The cached read path performs zero Postgres queries (`touchRoute` is throttled 60s fire-and-forget; tombstones are checked only at bake time). `cache_key` pages are exempt from auto-demotion and bake per variant. Impure layouts are never pattern-cached and block their page's bake (their HTML embeds in the shell). Eviction (`purge_after_secs` on `last_requested_at`), not admission, controls cache population.
+*   **Rationale**: promote-after-N measured popularity when the correct gate is cacheability; it cached per-user pages after N hits (the "absent `promote_after` is not pure SSR" defect), cost an UPDATE per request, and kept a dual-mode route lifecycle where most FSR bugs lived. The render already produces the artifact, so admission is free; safety comes from observed purity.
+*   **Supersedes**: ADR-003's promotion semantics. **Amends** ADR-015 (per-page `promote_after = false` workaround obsolete; `bake = false` remains the explicit escape hatch).
+*   **Migration**: artifacts baked by pre-ADR-016 code are trusted as-is — flush the app's Redis namespace and `.kiln-cache` when deploying across this change. Follow-ups: Plan 2 (per-user snapshots, shared shells), Plan 3 (auto-derived deps + `sync-triggers`).
 
 ---
 
@@ -100,7 +107,6 @@ This file documents the major architecture decisions and developer experience (D
 *   **JSON Authority**: JSON snapshot payloads are the sole authority for freshness updates.
 *   **Layout Preservation**: Internal navigation must not request full-page HTML. Using server layout headers (`X-PS-Present`), only the required layout/page fragments should be downloaded and swapped.
 *   **Postgres Lifecycle Defaults**: Default database properties are locked to:
-    *   `promoteAfterHits: 2` (default promotion threshold).
     *   `patchDebounceSecs: 5` (debounce invalidations).
     *   `revalidateSeconds: 300` (revalidate stale entries).
     *   `purgeAfterSeconds: 2592000` (auto-purge unused routes after 30 days).

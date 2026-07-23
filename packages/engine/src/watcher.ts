@@ -23,7 +23,6 @@ export interface ScheduledInvalidation {
 
 export interface WatcherConfig {
   pollIntervalMs: number;
-  promoteAfterHits: number;
   patchDebounceSecs: number;
   purgeAfterSeconds: number;
   purgeSweepSeconds?: number;

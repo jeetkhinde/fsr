@@ -5,6 +5,7 @@ import { applyLiveListMarkers, extractLiveListRowHtml } from './live-list-render
 
 import { discoverRoutes } from './discover.js';
 import { extractPageOptions, extractLiveFields } from './page-options.js';
+import { createPurityTracker } from './purity.js';
 import type { PageRoute, LayoutNode } from './manifest.js';
 import type {
   KilnRequest,
@@ -120,11 +121,25 @@ export function buildPageHandler(
   errorFiles?: PageErrorFiles
 ) {
   const cache = new KilnCache(cacheOpts);
-  let localHitCount = 0;
-  let locallyPromoted = false;
+  // 'auto' routes latch impure for the life of the process the first time a
+  // render touches identity; explicit bake modes never latch.
+  let knownImpure = false;
+  const impureLayouts = new Set<string>();
   // Page options are static per module, so the route row only needs to be
   // (re-)ensured once per process instead of one extra DB write per request.
   const ensuredRoutes = new Set<string>();
+  // last_requested_at feeds idle purge only — a 60s resolution is plenty,
+  // and it keeps Postgres entirely off the cached read path.
+  const lastTouched = new Map<string, number>();
+  const TOUCH_INTERVAL_MS = 60_000;
+  const touchRoute = (route: string) => {
+    if (!store || typeof store.touchRoute !== 'function') return;
+    const now = Date.now();
+    if (now - (lastTouched.get(route) ?? 0) < TOUCH_INTERVAL_MS) return;
+    if (lastTouched.size >= DEDUP_SET_MAX) lastTouched.clear();
+    lastTouched.set(route, now);
+    void store.touchRoute(route).catch(() => {});
+  };
 
   const handle = async (req: KilnRequest, res: KilnResponse) => {
     // 1. Resolve layout patterns for content negotiation
@@ -134,57 +149,39 @@ export function buildPageHandler(
     });
     const options = extractPageOptions(module);
     const variant = options.cacheKey ? options.cacheKey(req) : undefined;
-    const promoteAfter = options.promoteAfter ?? kilnConfig?.fsr?.promoteAfterHits ?? 2;
+    const bakeMode = options.bake; // undefined = 'auto'
     const revalidate = options.revalidate ?? kilnConfig?.fsr?.revalidateSeconds ?? 300;
     const purgeAfter = options.purgeAfter ?? kilnConfig?.fsr?.purgeAfterSeconds ?? 2_592_000;
-    let hitStatus: 'Tombstoned' | 'JustPromoted' | 'Normal' | 'Missing' = 'Normal';
-    let promoted = false;
+    const bakeEligible = bakeMode !== false && !knownImpure;
 
-    if (store && typeof store.ensureRouteRow === 'function' && typeof store.incrementHit === 'function') {
-      const ensureRow = () =>
-        store.ensureRouteRow(
-          req.path,
-          promoteAfter === false ? null : promoteAfter,
-          revalidate === false ? 0 : revalidate,
-          purgeAfter,
-          options.patchMode
-        );
-      if (!ensuredRoutes.has(req.path)) {
-        await ensureRow();
-        addBounded(ensuredRoutes, req.path);
-      }
-      hitStatus = await store.incrementHit(req.path);
-      if (hitStatus === 'Missing') {
-        // Row was purged (idle eviction) after we ensured it — recreate.
-        await ensureRow();
-        hitStatus = await store.incrementHit(req.path);
-      }
-      promoted = hitStatus === 'JustPromoted' || await store.isPromoted?.(req.path) === true;
-    } else {
-      if (promoteAfter !== false) {
-        localHitCount += 1;
-        if (!locallyPromoted && localHitCount >= promoteAfter) {
-          locallyPromoted = true;
-          hitStatus = 'JustPromoted';
-        }
-        promoted = locallyPromoted;
-      }
+    if (store && typeof store.ensureRouteRow === 'function' && !ensuredRoutes.has(req.path)) {
+      await store.ensureRouteRow(
+        req.path,
+        revalidate === false ? 0 : revalidate,
+        purgeAfter,
+        options.patchMode
+      );
+      addBounded(ensuredRoutes, req.path);
     }
-
-    // A tombstoned route's data was deliberately deleted (e.g. its dependency
-    // row was removed). Serve it fresh, but never re-create cache artifacts
-    // or live registrations for it — that would resurrect the purged entry.
-    const tombstoned = hitStatus === 'Tombstoned';
+    // Every request path — cached AND rendered — must refresh recency, or an
+    // actively-served pure-SSR route would look idle and get purged after
+    // purge_after_secs (ensureRouteRow's ON CONFLICT deliberately does not
+    // update last_requested_at, and it only runs once per process anyway).
+    // The 60s throttle keeps this to at most one UPDATE per route per minute.
+    touchRoute(req.path);
 
     let pageProps: any = {};
     let rawPageProps: any = {};
     let pagePropsLoaded = false;
+    let renderPure = true;
     const loadPageProps = async () => {
       if (pagePropsLoaded) return pageProps;
       pagePropsLoaded = true;
       if (typeof module.load !== 'function') return pageProps;
       try {
-        rawPageProps = await module.load(req);
+        const tracker = createPurityTracker(req);
+        rawPageProps = await module.load(tracker.proxied);
+        if (tracker.identityAccessed()) renderPure = false;
         assertEmbeddedLiveLists(rawPageProps, kilnConfig);
         rawPageProps = await materializeLiveLists(rawPageProps, store);
         pageProps = unwrapLiveProps(rawPageProps);
@@ -206,12 +203,8 @@ export function buildPageHandler(
       return;
     }
 
-    // 3. HTML cache check
-    const cachedHtml = promoted ? await cache.getHtml(req.path, variant) : null;
-    if (promoted && !cachedHtml) {
-      hitStatus = 'JustPromoted';
-      promoted = false;
-    }
+    // 3. HTML cache check — artifact presence IS promotion.
+    const cachedHtml = bakeEligible ? await cache.getHtml(req.path, variant) : null;
     const cachedSnapshot = cachedHtml ? await cache.getJson(req.path, variant) : null;
     let materialized = cachedHtml ? materializeBakedShell(cachedHtml, cachedSnapshot) : null;
 
@@ -230,9 +223,9 @@ export function buildPageHandler(
     }
 
     if (cachedHtml && !materialized) {
+      // Corrupt or layout-stale artifact: drop it and fall through to a
+      // fresh render, which re-bakes in step 11.
       await cache.delete(req.path, variant);
-      hitStatus = 'JustPromoted';
-      promoted = false;
     }
     if (materialized) {
       if (kilnConfig?.fsr?.watcher === 'external') {
@@ -240,7 +233,6 @@ export function buildPageHandler(
         if (loaded === null) return;
       }
       if (!watcher || watcher.hasRegisteredRoute(req.path)) {
-        await store?.touchRoute?.(req.path);
         respondWithNavigationShape(res, req, layoutPatterns, pageMeta.pattern, materialized);
         return;
       }
@@ -260,7 +252,6 @@ export function buildPageHandler(
       }
 
       if (!hasLiveLists(rawPageProps) && liveFields.length === 0) {
-        await store?.touchRoute?.(req.path);
         respondWithNavigationShape(res, req, layoutPatterns, pageMeta.pattern, materialized);
         return;
       }
@@ -288,6 +279,9 @@ export function buildPageHandler(
     const rawLayoutPropsArr: any[] = new Array(layoutEntries.length).fill({});
     const layoutBaked: { html: string }[] = new Array(layoutEntries.length);
     const layoutFromCache: boolean[] = new Array(layoutEntries.length).fill(false);
+    // An impure layout's HTML gets embedded in the page shell, so it must
+    // block the PAGE's bake too, not just its own pattern-cache entry.
+    let anyLayoutImpure = false;
     let aborted = false;
 
     await Promise.all([
@@ -300,7 +294,9 @@ export function buildPageHandler(
       // otherwise load() + bake + populate the cache for next time.
       ...layoutEntries.map(async ({ module: lMod }, idx) => {
         const layoutPattern = layoutPatterns[idx] ?? '/';
-        const cachedHtml = await cache.getLayoutHtml(layoutPattern);
+        const cachedHtml = impureLayouts.has(layoutPattern)
+          ? null
+          : await cache.getLayoutHtml(layoutPattern);
         if (cachedHtml) {
           const cachedJson = await cache.getLayoutJson(layoutPattern);
           layoutBaked[idx] = { html: materializeBakedShell(cachedHtml, cachedJson) ?? cachedHtml };
@@ -315,8 +311,11 @@ export function buildPageHandler(
           return;
         }
         let loaded: any = {};
+        let layoutPure = true;
         if (typeof lMod.load === 'function') {
-          loaded = await lMod.load(req);
+          const tracker = createPurityTracker(req);
+          loaded = await lMod.load(tracker.proxied);
+          layoutPure = !tracker.identityAccessed();
           assertEmbeddedLiveLists(loaded, kilnConfig);
           loaded = await materializeLiveLists(loaded, store);
         }
@@ -331,8 +330,17 @@ export function buildPageHandler(
           loaded,
         );
         layoutBaked[idx] = { html: marked };
-        await cache.setLayoutHtml(layoutPattern, marked);
-        await cache.setLayoutJson(layoutPattern, createBakedSnapshot(layoutPropsArr[idx]));
+        if (layoutPure) {
+          await cache.setLayoutHtml(layoutPattern, marked);
+          await cache.setLayoutJson(layoutPattern, createBakedSnapshot(layoutPropsArr[idx]));
+        } else {
+          anyLayoutImpure = true;
+          if (!impureLayouts.has(layoutPattern)) {
+            impureLayouts.add(layoutPattern);
+            // Self-heal: nuke any artifact a previously-pure version left behind.
+            await cache.deleteLayout(layoutPattern);
+          }
+        }
       })
     ]);
 
@@ -411,32 +419,43 @@ export function buildPageHandler(
 
     const pinInRedis = options.pinInRedis ?? false;
 
-    // 11. Caching & Persistence
+    // 11. Caching & persistence. Only pure renders of bake-eligible routes
+    // produce artifacts — HTML and JSON are written together so shell and
+    // snapshot can never diverge (a full bake just re-ran load(), so its
+    // output is always the current, authoritative data). An impure render
+    // under 'auto' demotes the route for the life of the process and deletes
+    // anything a previously pure render left behind. A tombstoned route's
+    // data was deliberately deleted; it serves fresh but never re-creates
+    // artifacts or live registrations. Tombstone is checked here (write
+    // time, cache misses only) so the read path never queries Postgres.
+    // cache_key pages are excluded from auto-demotion: declaring a key is an
+    // explicit statement that the varying input load() reads is exactly what
+    // the key partitions on, so identity access there is expected, not a leak.
+    const autoMode = bakeMode === undefined && !options.cacheKey;
+    if (!renderPure && autoMode && !knownImpure) {
+      knownImpure = true;
+      await cache.delete(req.path, variant);
+    }
+    if (!renderPure && (bakeMode === 'shared' || bakeMode === 'static') && process.env.NODE_ENV !== 'production') {
+      warnOnce(
+        `impure-bake:${req.path}`,
+        `[kiln] route "${req.path}" declares bake='${bakeMode}' but its load() read identity ` +
+          `fields (locals/headers/query); every caller will receive this cached copy.`
+      );
+    }
+    const shouldBake =
+      bakeMode !== false && !knownImpure && !anyLayoutImpure && (renderPure || !autoMode);
+    const tombstoned =
+      store && typeof store.isTombstoned === 'function' ? await store.isTombstoned(req.path) : false;
+
     let htmlPath: string | null = null;
     let jsonPath: string | null = null;
-
-    // A. Save JSON from this render. A full bake only happens when load()
-    // was just re-executed (see step 5 above), so snapshotProps is always
-    // the current, authoritative data — it must be written every time, not
-    // just the first time. Previously this only wrote JSON when none
-    // existed yet; on any later full re-bake (e.g. a route flagged
-    // `promoted` whose HTML cache was missing, forcing a fresh load()+bake)
-    // the freshly rendered HTML would contain the new value, but the next
-    // request would materialize the shell against the *old* cached JSON via
-    // materializeBakedShell, silently reverting the value it had just baked.
-    if (!tombstoned) {
+    if (shouldBake && !tombstoned) {
       const layoutSignature =
         layoutPatterns.length > 0 ? await computeLayoutSignature(layoutPatterns, cache) : undefined;
       await cache.setJson(req.path, createBakedSnapshot(snapshotProps, undefined, layoutSignature), variant);
-      jsonPath = variant ? null : cache.diskJsonPath(req.path);
-      if (store && !variant) {
-        await store.setBakedPaths(req.path, null, jsonPath);
-      }
-    }
-
-    // B. Save Fully Baked HTML if promoted
-    if (hitStatus === 'JustPromoted') {
       await cache.setHtml(req.path, finalHtml, pinInRedis, variant);
+      jsonPath = variant ? null : cache.diskJsonPath(req.path);
       htmlPath = variant ? null : cache.diskHtmlPath(req.path);
       if (store && !variant) {
         await store.setBakedPaths(req.path, htmlPath, jsonPath);
@@ -507,7 +526,7 @@ export function buildPageHandler(
       });
     }
     pageMeta.liveFields = liveFields;
-    pageMeta.promoteAfter = promoteAfter === false ? undefined : promoteAfter;
+    pageMeta.bake = bakeMode;
 
     // Debug/observability header: which layout patterns were reused from the
     // pattern-level cache this request (vs freshly loaded+baked). Not used by
@@ -936,12 +955,12 @@ export async function startKiln(
       adapter.registerAction(page.pattern, buildActionHandler(mod.actions));
     }
 
-    // SSG: prebake at startup for pages exporting entries() + promote_after 0.
+    // SSG: prebake at startup for pages exporting entries() + bake 'static'.
     // Runs the real page handler against a synthetic request so the entry is
     // fully loaded, baked, and cached — identical to what the first live
     // request would have produced.
     const pageOptions = extractPageOptions(mod);
-    if (page.hasEntries && pageOptions.promoteAfter === 0 && typeof mod.entries === 'function') {
+    if (page.hasEntries && pageOptions.bake === 'static' && typeof mod.entries === 'function') {
       Promise.resolve()
         .then(async () => {
           const entries: Record<string, string>[] = await mod.entries();

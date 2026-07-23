@@ -31,33 +31,21 @@ async function runTests() {
   try {
     // 1. ensureRouteRow and basic checks
     console.log('Testing ensureRouteRow...');
-    await store.ensureRouteRow('/test-route-1', 3);
+    await store.ensureRouteRow('/test-route-1', 300, 3600, 'json');
     const inspectRowsAfterEnsure = await store.fetchAllForInspect();
     assert.equal(inspectRowsAfterEnsure.length, 1);
     assert.equal(inspectRowsAfterEnsure[0].route, '/test-route-1');
     assert.equal(inspectRowsAfterEnsure[0].slot, '');
     assert.equal(inspectRowsAfterEnsure[0].promoted, false);
-    assert.equal(inspectRowsAfterEnsure[0].hitCount, 0);
 
-    // 2. incrementHit (Normal)
-    console.log('Testing incrementHit...');
-    let hitStatus = await store.incrementHit('/test-route-1');
-    assert.equal(hitStatus, 'Normal');
-
-    // Check hit_count is 1
+    // 2. promoted is artifact presence: setBakedPaths flips it, clearing resets it
+    console.log('Testing promoted-as-artifact-presence...');
+    await store.setBakedPaths('/test-route-1', '/tmp/presence.html', '/tmp/presence.json');
     let rows = await store.fetchAllForInspect();
-    assert.equal(rows[0].hitCount, 1);
-    assert.equal(rows[0].promoted, false);
-
-    // 3. incrementHit (JustPromoted when reaching promoteAfter limit)
-    hitStatus = await store.incrementHit('/test-route-1'); // hit = 2
-    assert.equal(hitStatus, 'Normal');
-    hitStatus = await store.incrementHit('/test-route-1'); // hit = 3
-    assert.equal(hitStatus, 'JustPromoted');
-
-    rows = await store.fetchAllForInspect();
-    assert.equal(rows[0].hitCount, 3);
     assert.equal(rows[0].promoted, true);
+    await store.setBakedPaths('/test-route-1', null, null);
+    rows = await store.fetchAllForInspect();
+    assert.equal(rows[0].promoted, false);
 
     // 4. upsertSlot and fetchStaleSlots
     console.log('Testing upsertSlot...');

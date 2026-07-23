@@ -1,6 +1,6 @@
 import React from 'react';
 
-export const promote_after = 2; // Bake/cache after 2 hits
+export const bake = 'shared'; // Cache the baked shell for every visitor
 
 export async function load() {
   return {

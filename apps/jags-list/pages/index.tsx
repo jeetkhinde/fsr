@@ -2,11 +2,8 @@ import React from 'react';
 import type { KilnRequest } from '@kiln/core';
 import { requireUser } from '../lib/session.js';
 
-// Pure SSR — never promote. Per-user content must not be baked into a shared
-// cache. NOTE: omitting this export does NOT yield SSR; it inherits the global
-// fsr.promoteAfterHits (2). See .memory/bugs-active.md "absent promote_after".
-export const promote_after = false;
-
+// Per-user content: load() reads the session, so the bake classifier keeps
+// this pure SSR automatically (ADR-016) — no export needed.
 export async function load(req: KilnRequest) {
   const user = requireUser(req);
   return { user };

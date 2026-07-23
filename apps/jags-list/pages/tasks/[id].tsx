@@ -7,7 +7,6 @@ import { listMembers } from '../../db/members.js';
 import { validTaskTitle, parsePriority, parseDueDate } from '../../db/validation.js';
 import { logActivity } from '../../lib/activity.js';
 
-export const promote_after = false;
 
 export async function load(req: KilnRequest) {
   requireUser(req);

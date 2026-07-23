@@ -2,7 +2,7 @@ import React from 'react';
 
 // This is the GRANDCHILD layout — it wraps /dashboard/reports/* routes with a
 // tab bar. Three layouts now wrap the actual page: root -> dashboard -> reports.
-export const promote_after = 2;
+export const bake = 'shared';
 
 export async function load() {
   return { tabsBakedAt: new Date().toISOString() };

@@ -1,24 +1,26 @@
 # Rendering modes & caching
 
-One integer export controls the rendering mode. Source: `packages/routekit/src/page-options.ts`, `boot.ts`; cache in `packages/engine/src/cache.ts`, `packages/core/src/config.ts`.
+The rendering mode is **observed, not declared** (ADR-016). Source: `packages/routekit/src/page-options.ts`, `purity.ts`, `boot.ts`; cache in `packages/engine/src/cache.ts`, `packages/core/src/config.ts`.
 
-## `promote_after` — the single dial
+## `bake` — one optional export, default auto
 
-```ts
-export const promote_after = 0; // and so on
-```
+| `export const bake` | Behaviour |
+|---|---|
+| *(absent)* | **Auto.** Bakes on the first render whose `load()` never touched `req.locals` / `headers` / `query` / `raw` / body. One identity-touching render demotes the route to pure SSR for the process lifetime and deletes stale artifacts. Session pages need **no** declaration. |
+| `'static'` | Prebaked at startup when `entries()` exists; otherwise bakes on first request. |
+| `'shared'` | Always bakes on first render, even if identity was accessed (dev-mode warning). |
+| `false` | Pure SSR. Never cached. Escape hatch for impurity the tracker can't see (e.g. `load()` reading per-user rows directly). |
 
-| Value | Mode | Behaviour |
-|-------|------|-----------|
-| `0` | **SSG** | Baked at startup via the real handler. Dynamic routes need `entries()` |
-| `1` | **ISR** | Baked on first request, cached thereafter |
-| `N` | **FSR** | Baked after N hits, cached after |
-| absent / `false` | **Pure SSR** | Rendered every request, never cached |
+`promote_after` / `fsr.promoteAfterHits` no longer exist; exporting them fails boot with `StartupError('RemovedOption')`. Promotion is artifact presence — there is no hit counter, and the cached read path performs zero Postgres queries. `cache_key` pages are exempt from auto-demotion (declaring a key states that the varying input `load()` reads is exactly what the key partitions on) and bake per variant on first hit.
+
+Layouts are classified the same way: an identity-touching layout `load()` is never pattern-cached and blocks the page bake too (its HTML embeds in the page shell).
+
+**Upgrading across this change:** artifacts baked by pre-ADR-016 code are trusted as-is by the new runtime — flush the app's Redis namespace and `.kiln-cache` on deploy.
 
 ### Pre-baking dynamic routes (SSG)
 
 ```tsx
-export const promote_after = 0;
+export const bake = 'static';
 export async function entries() {
   return [{ id: '1' }, { id: '2' }]; // params to pre-bake for /posts/[id]
 }
@@ -37,7 +39,7 @@ export async function entries() {
 **Only for FSR and `LiveProp` SSE.** A pure SSG / ISR / SSR app runs on the disk cache alone.
 
 - **Redis** — hot serve tier + pub/sub event bus for live invalidation
-- **Postgres** — durable metadata, dependency links, hit counts; `LISTEN/NOTIFY` drives cache invalidation
+- **Postgres** — durable metadata, dependency links, recency; `LISTEN/NOTIFY` drives cache invalidation
 - **Disk** — always-present cold fallback (`.kiln-cache` by default)
 
 ## Cache invalidation (no polling)

@@ -7,7 +7,6 @@ import { FsrWatcher, type LivePatch, type WatcherConfig } from './watcher.js';
 
 const config: WatcherConfig = {
   pollIntervalMs: 50,
-  promoteAfterHits: 1,
   patchDebounceSecs: 0,
   purgeAfterSeconds: 60,
   scheduledInvalidations: [],
@@ -86,6 +85,10 @@ class FakeStore {
 
   async fetchStaleSlots() {
     return [];
+  }
+
+  async getRoutePatchMode(_route: string): Promise<'json' | 'both' | null> {
+    return 'json';
   }
 
   async invalidateDepKey(depKey: string) {

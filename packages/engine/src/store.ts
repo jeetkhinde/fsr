@@ -7,8 +7,6 @@ export type BunSqlClient = {
   unsafe(query: string, params?: unknown[]): Promise<any[]>;
 };
 
-export type HitStatus = 'Tombstoned' | 'JustPromoted' | 'Normal' | 'Missing';
-
 export interface StaleSlot {
   route: string;
   slot: string;
@@ -35,11 +33,9 @@ export interface InspectRow {
   dependsOn: string[];
   stale: boolean;
   version: number;
-  hitCount: number;
   promoted: boolean;
   htmlPath: string | null;
   jsonPath: string | null;
-  lastHit: string | null;
 }
 
 const REQUERY_TIMEOUT_MS = 10_000;
@@ -77,17 +73,15 @@ export class FsrStore {
 
   async ensureRouteRow(
     route: string,
-    promoteAfter: number | null = 2,
     revalidateSecs = 300,
     purgeAfterSecs = 2_592_000,
     patchMode: 'json' | 'both' | null = 'json',
   ): Promise<void> {
     await this.sql`
       INSERT INTO kiln_fsr
-        (route, slot, promote_after, revalidate_secs, purge_after_secs, patch_mode, last_requested_at)
-      VALUES (${route}, '', ${promoteAfter}, ${revalidateSecs}, ${purgeAfterSecs}, ${patchMode}, NOW())
+        (route, slot, revalidate_secs, purge_after_secs, patch_mode, last_requested_at)
+      VALUES (${route}, '', ${revalidateSecs}, ${purgeAfterSecs}, ${patchMode}, NOW())
       ON CONFLICT (route, slot) DO UPDATE SET
-        promote_after = EXCLUDED.promote_after,
         revalidate_secs = ${revalidateSecs},
         purge_after_secs = ${purgeAfterSecs},
         patch_mode = ${patchMode}
@@ -124,62 +118,6 @@ export class FsrStore {
     `;
   }
 
-  async incrementHit(route: string): Promise<HitStatus> {
-    const rows = await this.sql`
-      UPDATE kiln_fsr
-      SET hit_count  = hit_count + 1,
-          last_hit   = now(),
-          last_requested_at = now(),
-          promoted   = CASE
-                           WHEN NOT promoted
-                                AND promote_after IS NOT NULL
-                                AND (hit_count + 1) >= promote_after
-                           THEN TRUE
-                           ELSE promoted
-                       END,
-          promoted_at = CASE
-                          WHEN NOT promoted
-                               AND promote_after IS NOT NULL
-                               AND (hit_count + 1) >= promote_after
-                          THEN NOW()
-                          ELSE promoted_at
-                        END
-      WHERE route = ${route} AND slot = '' AND NOT tombstoned
-      RETURNING hit_count as "hitCount", promoted, promote_after as "promoteAfter"
-    `;
-
-    const row = rows[0] as any;
-    if (!row) {
-      const checkRows = await this.sql`
-        SELECT tombstoned FROM kiln_fsr WHERE route = ${route} AND slot = '' LIMIT 1
-      `;
-      const checkRow = checkRows[0] as any;
-      if (checkRow && checkRow.tombstoned) {
-        return 'Tombstoned';
-      }
-      // No row at all — it was never ensured, or an idle purge deleted it.
-      // Callers should re-ensure the route row and retry.
-      if (!checkRow) {
-        return 'Missing';
-      }
-      return 'Normal';
-    }
-
-    const justPromoted = row.promoteAfter !== null && 
-      row.promoted && 
-      parseInt(row.hitCount, 10) === parseInt(row.promoteAfter, 10);
-
-    return justPromoted ? 'JustPromoted' : 'Normal';
-  }
-
-  async isPromoted(route: string): Promise<boolean> {
-    const rows = await this.sql`
-      SELECT promoted FROM kiln_fsr
-      WHERE route = ${route} AND slot = '' AND NOT tombstoned
-    `;
-    return Boolean(rows[0]?.promoted);
-  }
-
   async touchRoute(route: string): Promise<void> {
     await this.sql`
       UPDATE kiln_fsr SET last_requested_at = NOW()
@@ -190,7 +128,7 @@ export class FsrStore {
   async tombstone(route: string): Promise<void> {
     const rows = await this.sql`
       UPDATE kiln_fsr
-      SET tombstoned = TRUE, promoted = FALSE, stale = FALSE
+      SET tombstoned = TRUE, stale = FALSE
       WHERE route = ${route}
       RETURNING slot, html_path as "htmlPath", json_path as "jsonPath"
     `;
@@ -259,7 +197,7 @@ export class FsrStore {
   async tombstoneDependentRoutes(depKey: string): Promise<string[]> {
     const rows = await this.sql`
       UPDATE kiln_fsr
-      SET tombstoned = TRUE, promoted = FALSE, stale = FALSE
+      SET tombstoned = TRUE, stale = FALSE
       WHERE ${depKey} = ANY(depends_on)
       RETURNING route, slot, html_path as "htmlPath", json_path as "jsonPath"
     `;
@@ -329,7 +267,7 @@ export class FsrStore {
       WHERE s.route = c.route AND s.slot = c.slot
         AND r.route = s.route AND r.slot = ''
       RETURNING s.route, s.slot, s.query, s.query_params as "queryParams",
-                s.depends_on as "dependsOn", r.promoted,
+                s.depends_on as "dependsOn", (r.html_path IS NOT NULL) as "promoted",
                 s.debounce_secs as "debounceSecs", r.html_path as "htmlPath",
                 r.json_path as "jsonPath", s.column_name as "columnName", r.patch_mode as "patchMode"
     `;
@@ -353,7 +291,7 @@ export class FsrStore {
     const rows = await this.sql`
       SELECT html_path as "htmlPath", json_path as "jsonPath"
       FROM kiln_fsr
-      WHERE route = ${route} AND slot = '' AND promoted = TRUE
+      WHERE route = ${route} AND slot = '' AND html_path IS NOT NULL
     `;
     const row = rows[0] as any;
     return row ? { htmlPath: row.htmlPath, jsonPath: row.jsonPath } : null;
@@ -374,7 +312,7 @@ export class FsrStore {
         FROM kiln_fsr
         WHERE slot = ''
           AND NOT tombstoned
-          AND COALESCE(last_requested_at, last_hit, NOW()) <
+          AND COALESCE(last_requested_at, NOW()) <
               NOW() - (COALESCE(purge_after_secs, ${globalThresholdSecs}) * interval '1 second')
         FOR UPDATE SKIP LOCKED
       ),
@@ -412,8 +350,8 @@ export class FsrStore {
     let rows: any[];
     if (slots.length === 0) {
       rows = await this.sql`
-        SELECT s.route, s.slot, s.query, s.query_params as "queryParams", s.depends_on as "dependsOn", 
-               r.promoted, s.debounce_secs as "debounceSecs", r.html_path as "htmlPath", 
+        SELECT s.route, s.slot, s.query, s.query_params as "queryParams", s.depends_on as "dependsOn",
+               (r.html_path IS NOT NULL) as "promoted", s.debounce_secs as "debounceSecs", r.html_path as "htmlPath",
                r.json_path as "jsonPath", s.column_name as "columnName", r.patch_mode as "patchMode"
         FROM kiln_fsr s
         JOIN kiln_fsr r ON s.route = r.route AND r.slot = ''
@@ -422,8 +360,8 @@ export class FsrStore {
       `;
     } else {
       rows = await this.sql`
-        SELECT s.route, s.slot, s.query, s.query_params as "queryParams", s.depends_on as "dependsOn", 
-               r.promoted, s.debounce_secs as "debounceSecs", r.html_path as "htmlPath", 
+        SELECT s.route, s.slot, s.query, s.query_params as "queryParams", s.depends_on as "dependsOn",
+               (r.html_path IS NOT NULL) as "promoted", s.debounce_secs as "debounceSecs", r.html_path as "htmlPath",
                r.json_path as "jsonPath", s.column_name as "columnName", r.patch_mode as "patchMode"
         FROM kiln_fsr s
         JOIN kiln_fsr r ON s.route = r.route AND r.slot = ''
@@ -449,9 +387,8 @@ export class FsrStore {
 
   async fetchAllForInspect(): Promise<InspectRow[]> {
     const rows = await this.sql`
-      SELECT route, slot, depends_on as "dependsOn", stale, version, hit_count as "hitCount",
-             promoted, html_path as "htmlPath", json_path as "jsonPath",
-             to_char(last_hit AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS UTC') AS "lastHit"
+      SELECT route, slot, depends_on as "dependsOn", stale, version,
+             (html_path IS NOT NULL) as "promoted", html_path as "htmlPath", json_path as "jsonPath"
       FROM kiln_fsr
       ORDER BY route, slot
     `;
@@ -461,11 +398,9 @@ export class FsrStore {
       dependsOn: r.dependsOn || [],
       stale: !!r.stale,
       version: r.version,
-      hitCount: r.hitCount,
       promoted: !!r.promoted,
       htmlPath: r.htmlPath,
-      jsonPath: r.jsonPath,
-      lastHit: r.lastHit
+      jsonPath: r.jsonPath
     }));
   }
 

@@ -39,8 +39,9 @@ resolve to `packages/*/dist`, which is gitignored.
 - **/tasks/:id** — edit title, description, assignee, priority, due date.
 - **/projects/:id/activity** — the project's event feed, newest first.
 
-All pages are server-rendered (`promote_after = false`). FSR promotion + live
-updates and the drag-and-drop board island arrive in Plan 3.
+All pages are server-rendered: their `load()` reads the session, so the bake
+classifier (ADR-016) keeps them pure SSR automatically. Live updates and the
+drag-and-drop board island arrive in Plan 3.
 
 ## Inviting teammates
 
@@ -54,6 +55,7 @@ invites are the only way in.
     bun run test:db                                       # needs Postgres
     bun run test:app                                      # spawns the app; needs Postgres + Redis
     bun run test:crud                                     # spawns the app; projects/board/task/activity
+    bun run test:purity                                   # spawns the app; cross-user render isolation
 
 ## Auth architecture (short version)
 
@@ -67,7 +69,7 @@ invites are the only way in.
 - **Redis cache keys are not app-namespaced.** Two Kiln apps sharing one Redis
   logical DB collide on shared routes like `/`. Give each app its own DB index
   in `REDIS_URL` (this app uses `/3`).
-- **Absent `promote_after` is not pure SSR** — it inherits the global
-  `fsr.promoteAfterHits` (2) and would promote per-user content into a shared
-  cache. Every per-user / per-request page here exports
-  `export const promote_after = false`.
+- ~~**Absent `promote_after` is not pure SSR**~~ — RESOLVED by ADR-016 (bake
+  classes): session-reading pages are classified pure SSR automatically, and
+  the per-page `promote_after = false` workaround exports were removed.
+  Guarded by `tests/purity.integration.test.ts` (`bun run test:purity`).

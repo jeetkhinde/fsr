@@ -49,7 +49,7 @@ export interface HookError {
 
 export class StartupError extends Error {
   constructor(
-    public readonly code: 'ConfigLoad' | 'UnsupportedProvider',
+    public readonly code: 'ConfigLoad' | 'UnsupportedProvider' | 'RemovedOption',
     message: string
   ) {
     super(message);

@@ -3,7 +3,6 @@ import { DEFAULT_CONFIG, defineConfig } from './config.js';
 
 describe('FSR configuration', () => {
   it('uses the canonical baked-shell lifecycle defaults', () => {
-    expect(DEFAULT_CONFIG.fsr.promoteAfterHits).toBe(2);
     expect(DEFAULT_CONFIG.fsr.patchDebounceSecs).toBe(5);
     expect(DEFAULT_CONFIG.fsr.revalidateSeconds).toBe(300);
     expect(DEFAULT_CONFIG.fsr.purgeAfterSeconds).toBe(2_592_000);
@@ -14,7 +13,6 @@ describe('FSR configuration', () => {
     const warning = spyOn(console, 'warn').mockImplementation(() => {});
     const config = defineConfig({
       live: {
-        promoteAfterHits: 7,
         patchDebounceSeconds: 11,
         purgeAfterSeconds: 13,
       },
@@ -24,7 +22,6 @@ describe('FSR configuration', () => {
       },
     });
 
-    expect(config.fsr.promoteAfterHits).toBe(7);
     expect(config.fsr.patchDebounceSecs).toBe(11);
     expect(config.fsr.purgeAfterSeconds).toBe(19);
     expect(config.fsr.purgeSweepSeconds).toBe(17);

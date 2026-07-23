@@ -33,9 +33,8 @@ async function runTests() {
   try {
     // 1. Setup route and slot
     const route = '/test-watcher-route';
-    await store.ensureRouteRow(route, 1);
-    // Mark it promoted so it bakes files
-    await store.incrementHit(route); 
+    await store.ensureRouteRow(route);
+    // Baked paths ARE promotion now (ADR-016) — setting them makes it bake files
     await store.setBakedPaths(route, tempHtmlPath, tempJsonPath);
 
     await store.upsertSlot(
@@ -51,8 +50,7 @@ async function runTests() {
     // 2. Setup watcher
     const config: WatcherConfig = {
       pollIntervalMs: 200,
-      promoteAfterHits: 1,
-      patchDebounceSecs: 0,
+        patchDebounceSecs: 0,
       purgeAfterSeconds: 3600,
       scheduledInvalidations: [
         { depKey: 'scheduled_dep', intervalMs: 200 }
@@ -165,14 +163,13 @@ async function runTests() {
     // Stop watcher first to freeze all background ticks/timers
     await watcher.stop();
 
-    // Update route's last_hit/last_requested_at to be far in the past, and
+    // Update route's last_requested_at to be far in the past, and
     // shorten its purge_after_secs so a 5s threshold check will match it
     // (purgeInactiveRoutes prefers the per-route purge_after_secs column
     // over the threshold argument when the column is set).
     await bunSql.unsafe(
       `UPDATE kiln_fsr
-       SET last_hit = now() - interval '10 seconds',
-           last_requested_at = now() - interval '10 seconds',
+       SET last_requested_at = now() - interval '10 seconds',
            purge_after_secs = 5
        WHERE route = $1 AND slot = ''`,
       [route]

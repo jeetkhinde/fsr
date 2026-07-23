@@ -115,25 +115,21 @@ export interface ActionHandler {
 }
 
 export interface PageDefinition {
-  promote_after?: number | false;
+  bake?: 'static' | 'shared' | false;
   revalidate?: number | false;
   debounce?: number;
   purge_after?: number;
   json_first?: boolean;
-  /** @deprecated Use promote_after. */
-  promoteAfter?: number;
   load?: (req: KilnRequest) => Promise<LoadResult> | LoadResult;
   actions?: Record<string, ActionHandler>;
   default: any; // React Component
 }
 
 export interface LayoutDefinition {
-  promote_after?: number | false;
+  bake?: 'static' | 'shared' | false;
   revalidate?: number | false;
   debounce?: number;
   purge_after?: number;
-  /** @deprecated Use promote_after. */
-  promoteAfter?: number;
   load?: (req: KilnRequest) => Promise<LoadResult> | LoadResult;
   default: any; // React component with children prop
 }

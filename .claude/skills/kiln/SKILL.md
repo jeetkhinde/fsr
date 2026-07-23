@@ -23,7 +23,7 @@ You are writing application code with the Kiln framework. The full, source-verif
 
 1. A page is a file under `pages/`; export `load()` (data), `default` (UI), optional `actions` (POST).
 2. `load()` doubles as a JSON API via content negotiation or `json_first = true`.
-3. Rendering mode is one export: `promote_after = 0 | 1 | N | (absent)`.
+3. Rendering mode is observed from load() purity; `bake = 'static' | 'shared' | false` overrides (absent = auto).
 4. Real-time data is `LiveProp`/`Live.list` (from `@kiln/core`); interactivity is islands only (from `@kiln/react`) — no full-page hydration.
 5. Several features are typed-but-unwired (`apiDir`, `_loading.tsx`, `memory`/`sqlite` cache providers, i18n) — check `gotchas.md`.
 

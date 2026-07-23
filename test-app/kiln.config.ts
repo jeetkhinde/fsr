@@ -4,7 +4,6 @@ export default defineConfig({
   port: 3000,
   pagesDir: './pages',
   fsr: {
-    promoteAfterHits: 2,
     patchDebounceSecs: 5,
     revalidateSeconds: 300,
     purgeAfterSeconds: 2_592_000,

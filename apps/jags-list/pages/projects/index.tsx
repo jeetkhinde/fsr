@@ -5,7 +5,6 @@ import { listActiveProjects, createProject, archiveProject, projectById } from '
 import { validProjectName } from '../../db/validation.js';
 import { logActivity } from '../../lib/activity.js';
 
-export const promote_after = false;
 
 export async function load(req: KilnRequest) {
   const me = requireUser(req);

@@ -16,7 +16,7 @@ Previous baseline: `7276441` (feat: add json_first page export for JSON-default 
 - Nested layouts via `_layout.tsx` inheritance chains, resolved by `getLayoutsForPage()`
 - Typed routes (compile-time type safety via `packages/routekit/src/typed-routes.ts`)
 - Route priority: static > dynamic (`:param`) > wildcard (`*`) — sorted in `discoverRoutes()`
-- `hasEntries` flag: pages exporting `entries()` get pre-baked at startup when `promote_after: 0`
+- `hasEntries` flag: pages exporting `entries()` get pre-baked at startup when `bake: 'static'`
 
 ### Special file conventions (per directory)
 | File | Purpose |
@@ -33,7 +33,7 @@ JSON clients get `{ error, status }`. Non-AppError throws render a 500.
 
 ## Rendering Modes (`packages/routekit/src/page-options.ts`, `boot.ts`)
 
-All modes controlled by a **single integer export** `promote_after` on the page file:
+Modes are auto-classified from `load()` purity (ADR-016); optional `bake` export on the page file overrides:
 
 | Export value | Mode | Behaviour |
 |---|---|---|
@@ -43,7 +43,7 @@ All modes controlled by a **single integer export** `promote_after` on the page 
 | absent / `false` | Pure SSR | Baked on every request, never cached |
 
 Per-page options (all optional exports from the page file):
-- `promote_after` — rendering mode integer
+- `bake` — rendering mode override ('static' | 'shared' | false; absent = auto)
 - `revalidate` — seconds before stale cache is revalidated (or `false` to disable)
 - `debounce` — seconds to debounce invalidation patches
 - `purge_after` / `purge_after` — seconds before unused cache entry is evicted

@@ -2,9 +2,8 @@ import React from 'react';
 import { AppError, type KilnRequest } from '@kiln/core';
 import { projectById } from '../../../db/projects.js';
 
-// Pure SSR chrome for a single project. Reads only its own :id param (ADR-011
-// scoping rule); no per-user data here.
-export const promote_after = false;
+// Chrome for a single project. Reads only its own :id param (ADR-011 scoping
+// rule); no per-user data, so the classifier may pattern-cache it (ADR-016).
 
 export async function load(req: KilnRequest) {
   const project = await projectById(Number(req.params.id));

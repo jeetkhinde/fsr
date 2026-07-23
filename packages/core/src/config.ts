@@ -18,7 +18,6 @@ export interface BackendConfig {
 }
 
 export interface LiveConfig {
-  promoteAfterHits: number;
   patchDebounceSeconds: number;
   purgeAfterSeconds: number;
 }
@@ -26,7 +25,6 @@ export interface LiveConfig {
 export interface FsrConfig {
   watcher: 'embedded' | 'external';
   pollIntervalMs: number;
-  promoteAfterHits: number;
   patchDebounceSecs: number;
   purgeAfterSeconds: number;
   maxSseConnections: number;
@@ -166,14 +164,12 @@ export const DEFAULT_CONFIG: KilnConfig = {
     inlineRuntime: false,
   },
   live: {
-    promoteAfterHits: 2,
     patchDebounceSeconds: 5,
     purgeAfterSeconds: 2_592_000, // 30 days
   },
   fsr: {
     watcher: 'embedded',
     pollIntervalMs: 500,
-    promoteAfterHits: 2,
     patchDebounceSecs: 5,
     purgeAfterSeconds: 2_592_000,
     purgeSweepSeconds: 3_600,
@@ -216,9 +212,6 @@ export function defineConfig(config: DeepPartial<KilnConfig>): KilnConfig {
   // config.live was set — corrupting the shared DEFAULT_CONFIG singleton
   // for every future defineConfig() call in the process.
   merged.fsr = { ...DEFAULT_CONFIG.fsr, ...config.fsr } as any;
-  if (config.live && config.fsr?.promoteAfterHits === undefined) {
-    merged.fsr.promoteAfterHits = merged.live.promoteAfterHits;
-  }
   if (config.live && config.fsr?.patchDebounceSecs === undefined) {
     merged.fsr.patchDebounceSecs = merged.live.patchDebounceSeconds;
   }
