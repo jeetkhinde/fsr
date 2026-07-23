@@ -163,6 +163,12 @@ export function buildPageHandler(
       );
       addBounded(ensuredRoutes, req.path);
     }
+    // Every request path — cached AND rendered — must refresh recency, or an
+    // actively-served pure-SSR route would look idle and get purged after
+    // purge_after_secs (ensureRouteRow's ON CONFLICT deliberately does not
+    // update last_requested_at, and it only runs once per process anyway).
+    // The 60s throttle keeps this to at most one UPDATE per route per minute.
+    touchRoute(req.path);
 
     let pageProps: any = {};
     let rawPageProps: any = {};
@@ -227,7 +233,6 @@ export function buildPageHandler(
         if (loaded === null) return;
       }
       if (!watcher || watcher.hasRegisteredRoute(req.path)) {
-        touchRoute(req.path);
         respondWithNavigationShape(res, req, layoutPatterns, pageMeta.pattern, materialized);
         return;
       }
@@ -247,7 +252,6 @@ export function buildPageHandler(
       }
 
       if (!hasLiveLists(rawPageProps) && liveFields.length === 0) {
-        touchRoute(req.path);
         respondWithNavigationShape(res, req, layoutPatterns, pageMeta.pattern, materialized);
         return;
       }
