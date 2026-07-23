@@ -171,6 +171,60 @@ describe('buildPageHandler', () => {
     await fs.rm(tmpDir, { recursive: true });
   });
 
+  it('serves cached page-only JSON for a baked route without re-running load()', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-json-'));
+    const { createElement } = await import('react');
+    let loads = 0;
+    const pageModule = {
+      load: async () => {
+        loads++;
+        return { n: 42 };
+      },
+      default: ({ n }: any) => createElement('div', null, `n=${n}`),
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/nums', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+    );
+    await handler(makeReq({ path: '/nums' }) as any, makeRes()); // bakes on hit 1
+    const jsonRes = makeRes();
+    await handler(
+      makeReq({ path: '/nums', headers: new Headers({ accept: 'application/json' }) }) as any,
+      jsonRes,
+    );
+    expect(jsonRes.captured.type).toBe('json');
+    expect(jsonRes.captured.body).toEqual({ n: 42 }); // page-only props, not seed shape
+    expect(loads).toBe(1); // served from the snapshot, load() not re-run
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it('a changed fsr.buildId invalidates baked artifacts on read', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-build-'));
+    const { createElement } = await import('react');
+    let loads = 0;
+    const pageModule = {
+      load: async () => ({ v: ++loads }),
+      default: ({ v }: any) => createElement('div', null, `v=${v}`),
+    };
+    const meta = { pattern: '/deploy', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' };
+    const cacheOpts = { cacheDir: tmpDir, ttlSecs: 0, redis: null };
+    const buildA = buildPageHandler(pageModule, meta, [], cacheOpts, { fsr: { buildId: 'build-A' } } as any);
+    await buildA(makeReq({ path: '/deploy' }) as any, makeRes()); // bakes under build-A
+    const cachedA = makeRes();
+    await buildA(makeReq({ path: '/deploy' }) as any, cachedA);
+    expect(cachedA.captured.body).toContain('v=1'); // cache hit within build-A
+    expect(loads).toBe(1);
+
+    const buildB = buildPageHandler(pageModule, meta, [], cacheOpts, { fsr: { buildId: 'build-B' } } as any);
+    const fresh = makeRes();
+    await buildB(makeReq({ path: '/deploy' }) as any, fresh);
+    expect(fresh.captured.body).toContain('v=2'); // build mismatch forced a re-bake
+    expect(loads).toBe(2);
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
   it('materializes the latest JSON into an immutable promoted shell', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
     const { KilnCache, createBakedSnapshot } = await import('@kiln/engine');

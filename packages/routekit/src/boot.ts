@@ -221,8 +221,23 @@ export function buildPageHandler(
       }
     };
 
-    // 2. Content negotiation — JSON shortcut (explicit header OR page declared json_first)
+    // 2. Content negotiation — JSON shortcut (explicit header OR page declared
+    // json_first). Baked routes serve the snapshot's page-only props straight
+    // from cache — one read, no load(): the "button click just picks the
+    // JSON" path. Any doubt about validity (no pageData, build mismatch)
+    // falls through to a fresh load().
     if (wantsJson(req) || options.jsonFirst) {
+      if (bakeEligible) {
+        const snap = (await cache.getJson(req.path, variant)) as
+          | { pageData?: Record<string, unknown>; buildId?: string }
+          | null;
+        const buildOk = !kilnConfig?.fsr?.buildId || snap?.buildId === kilnConfig.fsr.buildId;
+        if (snap?.pageData && buildOk) {
+          touchRoute(req.path, userKey);
+          res.json(snap.pageData);
+          return;
+        }
+      }
       const data = await loadPageProps();
       if (data === null) return;
       res.json(data);
@@ -244,6 +259,15 @@ export function buildPageHandler(
       const currentSignature = await computeLayoutSignature(layoutPatterns, cache);
       const cachedSignature = (cachedSnapshot as { layoutSignature?: string } | null)?.layoutSignature;
       if (currentSignature !== cachedSignature) {
+        materialized = null;
+      }
+    }
+    // Deploy fingerprint: an artifact baked by a different build is stale by
+    // definition (component code may have changed) — same treatment as a
+    // layout-signature mismatch. Only enforced when the app sets fsr.buildId.
+    if (materialized && kilnConfig?.fsr?.buildId) {
+      const cachedBuild = (cachedSnapshot as { buildId?: string } | null)?.buildId;
+      if (cachedBuild !== kilnConfig.fsr.buildId) {
         materialized = null;
       }
     }
@@ -479,7 +503,14 @@ export function buildPageHandler(
     if (shouldBake && !tombstoned) {
       const layoutSignature =
         layoutPatterns.length > 0 ? await computeLayoutSignature(layoutPatterns, cache) : undefined;
-      await cache.setJson(req.path, createBakedSnapshot(snapshotProps, undefined, layoutSignature), variant);
+      await cache.setJson(
+        req.path,
+        createBakedSnapshot(snapshotProps, undefined, layoutSignature, {
+          pageData: pageProps,
+          buildId: kilnConfig?.fsr?.buildId,
+        }),
+        variant
+      );
       await cache.setHtml(req.path, finalHtml, pinInRedis, variant);
       // 'user' variants record their baked paths under their user_key row so
       // the watcher can patch them; cache_key variants keep today's behavior
