@@ -23,20 +23,19 @@ CREATE TABLE IF NOT EXISTS contact_events (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE OR REPLACE FUNCTION address_book_notify_change() RETURNS trigger AS $$
-BEGIN
-  PERFORM pg_notify(
-    'kiln_invalidate',
-    json_build_object('depKey', TG_ARGV[0], 'id', NEW.id)::text
-  );
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
+-- Invalidation trigger: run `kiln sync-triggers` (after this migration) to
+-- install/verify it, per fsr.triggerTables in kiln.config.ts. It uses the
+-- shared kiln_emit_event() function (packages/engine/src/schema.ts,
+-- installed by FsrStore.initialize() at boot) — no hand-written trigger
+-- function needed for a table with a plain `id` primary key.
+--
+-- Drop the old hand-written trigger/function: CREATE OR REPLACE never
+-- removes a function, and a stale trigger sharing kiln sync-triggers'
+-- naming convention (<table>_kiln_invalidate) would block it from ever
+-- installing the real one — sync-triggers only checks whether a trigger by
+-- that name exists, not what function it points to.
 DROP TRIGGER IF EXISTS contact_events_kiln_invalidate ON contact_events;
-CREATE TRIGGER contact_events_kiln_invalidate
-AFTER INSERT ON contact_events
-FOR EACH ROW EXECUTE FUNCTION address_book_notify_change('contact_events');
+DROP FUNCTION IF EXISTS address_book_notify_change();
 
 INSERT INTO contacts (
   first_name,

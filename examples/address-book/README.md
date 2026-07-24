@@ -30,11 +30,16 @@ layout-caching rules — a directory of contacts backed by Postgres.
    | `REDIS_URL` | `redis://localhost:6379` | Optional FSR cache front |
    | `PORT` | `3100` | Dev server port |
 
-3. Run migrations:
+3. Run migrations, then install the invalidation triggers:
 
    ```sh
    bun run db:migrate
+   bun run db:sync-triggers
    ```
+
+   `db:sync-triggers` installs/verifies the `kiln_emit_event` trigger on
+   tables listed in `kiln.config.ts`'s `fsr.triggerTables` — idempotent,
+   safe to re-run after any migration.
 
 4. Start the dev server:
 

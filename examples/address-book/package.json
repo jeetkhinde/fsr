@@ -7,6 +7,7 @@
     "dev": "bun --watch src/main.ts",
     "build": "tsc --noEmit",
     "db:migrate": "bun scripts/migrate.ts",
+    "db:sync-triggers": "bun ../../packages/cli/dist/cli.js sync-triggers",
     "test": "bun test db/validation.test.ts tests/routes.test.ts",
     "test:db": "bun --env-file=.env db/contacts.integration.test.ts",
     "test:e2e": "playwright test"
