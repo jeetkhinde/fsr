@@ -23,7 +23,13 @@ describe.skipIf(!url)('jags-list schema', () => {
     await sql.close();
   });
 
-  it('creates a project/column/task and fires exact dep-key notifications', async () => {
+  // Task 9: the hand-written jags_notify_projects/columns/tasks/... triggers
+  // (row-scoped keys like "projects:all" / "tasks:id=5") were replaced by
+  // `kiln sync-triggers`-managed generic kiln_emit_event triggers, which emit
+  // one table-level depKey per row event (e.g. "projects", "tasks") — see
+  // migrations/0000_init.sql and kiln.config.ts's fsr.triggerTables. This
+  // suite's DB must have run `db:migrate` + `db:sync-triggers` beforehand.
+  it('creates a project/column/task and fires table-level dep-key notifications', async () => {
     const [project] = await sql`
       INSERT INTO projects (name, created_by) VALUES ('itest-project', 'itest-user') RETURNING id`;
     projectId = project.id;
@@ -36,14 +42,12 @@ describe.skipIf(!url)('jags-list schema', () => {
     await Bun.sleep(300); // let LISTEN deliver
 
     const keys = payloads.map((p) => `${p.depKey}|${p.op}`);
-    expect(keys).toContain(`projects:all|UPDATE`);
-    expect(keys).toContain(`projects:id=${projectId}|INSERT`);
-    expect(keys).toContain(`columns:project_id=${projectId}|UPDATE`);
-    expect(keys).toContain(`tasks:project_id=${projectId}|UPDATE`);
-    expect(keys).toContain(`tasks:id=${task.id}|INSERT`);
+    expect(keys).toContain(`projects|INSERT`);
+    expect(keys).toContain(`columns|INSERT`);
+    expect(keys).toContain(`tasks|INSERT`);
   });
 
-  it('bumps updated_at on update and emits DELETE op only for the id key', async () => {
+  it('bumps updated_at on update and fires the table-level key on delete', async () => {
     const [task] = await sql`SELECT id, updated_at FROM tasks WHERE project_id = ${projectId}`;
     await Bun.sleep(50);
     await sql`UPDATE tasks SET title = 'renamed' WHERE id = ${task.id}`;
@@ -54,8 +58,7 @@ describe.skipIf(!url)('jags-list schema', () => {
     await sql`DELETE FROM tasks WHERE id = ${task.id}`;
     await Bun.sleep(300);
     const keys = payloads.map((p) => `${p.depKey}|${p.op}`);
-    expect(keys).toContain(`tasks:project_id=${projectId}|UPDATE`); // list key: change, never tombstone
-    expect(keys).toContain(`tasks:id=${task.id}|DELETE`);           // entity key: tombstone
+    expect(keys).toContain(`tasks|DELETE`);
   });
 
   it('has the tasks search tsvector with GIN index', async () => {
