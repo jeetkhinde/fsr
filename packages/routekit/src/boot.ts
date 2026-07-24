@@ -1053,9 +1053,19 @@ export async function startKiln(
   }
 
   // 5. Register page routes
+  // Populated below with each page's declared bake mode so the /__kiln/fsr
+  // SSE + snapshot handlers can gate identity-scoping on it (Task 8): only
+  // bake='user' routes should ever narrow sseUserKey via identity(req) — a
+  // shared route (bake 'shared'/'static'/false/default 'auto') must always
+  // resolve userKey='' even when an identity hook is configured for other
+  // routes in the app, or its shared (userKey='') patches never reach a
+  // subscriber whose identity narrowed the key.
+  const bakeByPattern = new Map<string, BakeMode | undefined>();
   for (const page of manifest.pages) {
     const absolutePagePath = path.resolve(page.filePath);
     const mod = await import(pathToFileURL(absolutePagePath).href);
+    const pageOptions = extractPageOptions(mod);
+    bakeByPattern.set(page.pattern, pageOptions.bake);
 
     const errorFiles: PageErrorFiles = {
       errorFile: nearestSpecialFile(page.relativePath, manifest.errorPages),
@@ -1081,7 +1091,7 @@ export async function startKiln(
         buildActionHandler(mod.actions, {
           cache: new KilnCache(cacheOpts),
           identity,
-          bake: extractPageOptions(mod).bake,
+          bake: pageOptions.bake,
         })
       );
     }
@@ -1090,7 +1100,6 @@ export async function startKiln(
     // Runs the real page handler against a synthetic request so the entry is
     // fully loaded, baked, and cached — identical to what the first live
     // request would have produced.
-    const pageOptions = extractPageOptions(mod);
     if (page.hasEntries && pageOptions.bake === 'static' && typeof mod.entries === 'function') {
       Promise.resolve()
         .then(async () => {
@@ -1168,7 +1177,12 @@ export async function startKiln(
       const slots = (req.query.slots || '').split(',').filter(Boolean);
       // Resolved from the request's own session — a client cannot subscribe
       // to another user's patch stream because there is nothing to spoof.
-      const sseUserKey = identity ? identity(req) ?? '' : '';
+      // Gated on the SUBSCRIBED route's own bake mode, not merely whether an
+      // identity hook is configured for the app: a shared route must always
+      // get userKey='' (the shared row) even when other routes declare
+      // bake='user', or its shared patches never reach this subscriber.
+      const routeBake = bakeByPattern.get(route);
+      const sseUserKey = routeBake === 'user' && identity ? identity(req) ?? '' : '';
       // A subscriber watching this (route, user) snapshot counts as activity
       // — a page someone has open gets eager patches even though nobody is
       // re-requesting it (which is what would otherwise bump last_active_at).
@@ -1202,8 +1216,12 @@ export async function startKiln(
     adapter.registerPage('/__kiln/fsr/snapshot', [], async (req, res) => {
       const route = req.query.route || '';
       const slots = (req.query.slots || '').split(',').filter(Boolean);
+      // Same bake='user' gate as the SSE handler above — a shared route's
+      // snapshot must not be narrowed to the caller's identity.
+      const routeBake = bakeByPattern.get(route);
+      const snapshotUserKey = routeBake === 'user' && identity ? identity(req) ?? '' : '';
       const { fsrSnapshotHandler } = await import('@kiln/engine' as any);
-      const snapshot = await fsrSnapshotHandler(route, slots, options.store, identity ? identity(req) ?? '' : '');
+      const snapshot = await fsrSnapshotHandler(route, slots, options.store, snapshotUserKey);
       res.json(snapshot);
     });
   } else {

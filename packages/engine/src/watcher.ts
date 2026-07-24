@@ -513,8 +513,15 @@ export class FsrWatcher {
             existing.data && typeof existing.data === 'object' && !Array.isArray(existing.data)
               ? existing.data
               : existing;
+          // Keep the sibling pageData object (read by the JSON fast path)
+          // patched alongside data — see patchJsonFileBatch above.
+          const pageDataTarget =
+            existing.pageData && typeof existing.pageData === 'object' && !Array.isArray(existing.pageData)
+              ? existing.pageData
+              : null;
           for (const [slot, val] of patches) {
             target[slot] = val;
+            if (pageDataTarget) pageDataTarget[slot] = val;
           }
           if ('updatedAt' in existing) existing.updatedAt = new Date().toISOString();
           await this.redis.setJson(route, existing, variant);
@@ -614,11 +621,18 @@ export class FsrWatcher {
         if (!snapshot && this.redis) snapshot = await this.redis.getJson(route, variant);
         if (!snapshot) continue;
         const data = snapshot.data && typeof snapshot.data === 'object' ? snapshot.data : snapshot;
+        // Keep the sibling pageData object (read by the JSON fast path)
+        // patched alongside data — see patchJsonFileBatch above.
+        const pageData =
+          snapshot.pageData && typeof snapshot.pageData === 'object' && !Array.isArray(snapshot.pageData)
+            ? snapshot.pageData
+            : null;
 
         for (const row of targetRows) {
           const raw = loaded[row.slot] as any;
           const value = raw instanceof LiveProp ? raw.value : raw;
           data[row.slot] = value;
+          if (pageData) pageData[row.slot] = value;
           const patch = createScalarPatch(route, row.slot, value) as any;
           if (userKey) patch.userKey = userKey;
           this.emitter.emit('patch', patch);
@@ -770,8 +784,14 @@ export class FsrWatcher {
         obj = {};
       }
       const target = obj.data && typeof obj.data === 'object' ? obj.data : obj;
+      // pageData is the sibling object the JSON fast path (Accept:
+      // application/json on a baked route) actually reads — must stay in
+      // lockstep with `data` or that path serves stale props.
+      const pageDataTarget =
+        obj.pageData && typeof obj.pageData === 'object' && !Array.isArray(obj.pageData) ? obj.pageData : null;
       for (const [slot, value] of patches) {
         target[slot] = value;
+        if (pageDataTarget) pageDataTarget[slot] = value;
       }
       if ('updatedAt' in obj) obj.updatedAt = new Date().toISOString();
       await atomicWrite(jsonPath, JSON.stringify(obj));

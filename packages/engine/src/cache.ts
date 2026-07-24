@@ -223,6 +223,13 @@ export class KilnCache {
         ? existing.data as Record<string, unknown>
         : existing;
     target[field] = value;
+    // The cached-JSON fast path (Accept: application/json on a baked route)
+    // serves `pageData`, not `data` — without also patching this sibling
+    // object, a live patch would go stale there even though `data` (and the
+    // HTML shell) stayed fresh.
+    if (existing.pageData && typeof existing.pageData === 'object' && !Array.isArray(existing.pageData)) {
+      (existing.pageData as Record<string, unknown>)[field] = value;
+    }
     if ('updatedAt' in existing) existing.updatedAt = new Date().toISOString();
     await this.setJson(route, existing, variant);
   }
@@ -336,7 +343,7 @@ export class RedisCache {
   }
 
   private slotKey(route: string, variant?: string): string {
-    return `${this.keyPrefix}:slot:${route}`;
+    return variant ? `${this.keyPrefix}:slot:${route}:v:${safeVariant(variant)}` : `${this.keyPrefix}:slot:${route}`;
   }
 
   private jsonKey(route: string, variant?: string): string {

@@ -200,6 +200,40 @@ describe('buildPageHandler', () => {
     await fs.rm(tmpDir, { recursive: true });
   });
 
+  it('serves live-patched values via the JSON fast path, not the stale bake-time pageData (Task 8)', async () => {
+    // Regression: cache.patchJsonField only patched the snapshot's `data`
+    // object, never the sibling `pageData` the JSON fast path actually
+    // reads — so a client hitting Accept: application/json after a live
+    // patch got stale props even though `data` (and the HTML shell) were
+    // fresh.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-pagedata-fresh-'));
+    const pageModule = {
+      load: async () => ({ count: 1 }),
+      default: ({ count }: any) => null,
+    };
+    const cacheOpts = { cacheDir: tmpDir, ttlSecs: 0, redis: null };
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/counter', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      cacheOpts,
+    );
+    await handler(makeReq({ path: '/counter' }) as any, makeRes()); // bakes: data.count = pageData.count = 1
+
+    // Simulate the live patch a watcher/hub applies on a value change.
+    const { KilnCache } = await import('@kiln/engine');
+    const cache = new KilnCache(cacheOpts);
+    await cache.patchJsonField('/counter', 'count', 99);
+
+    const jsonRes = makeRes();
+    await handler(
+      makeReq({ path: '/counter', headers: new Headers({ accept: 'application/json' }) }) as any,
+      jsonRes,
+    );
+    expect(jsonRes.captured.body).toEqual({ count: 99 }); // fresh, not the baked 1
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
   it('a changed fsr.buildId invalidates baked artifacts on read', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-build-'));
     const { createElement } = await import('react');
@@ -1329,6 +1363,69 @@ describe('__kiln/fsr SSE subscribe', () => {
     await handler!(makeReq({ path: '/__kiln/fsr', query: { route: '/dash', slots: '' } }) as any, res);
 
     expect(markActiveCalls).toEqual([['/dash', '']]);
+    await fs.rm(pagesDir, { recursive: true, force: true });
+  });
+
+  it("scopes sseUserKey to identity only for bake='user' routes; shared routes always get userKey='' (Task 8)", async () => {
+    // Regression: the SSE handler applied identity(req) to compute
+    // sseUserKey for EVERY route regardless of that route's bake mode. With
+    // an identity hook configured, subscribing to a SHARED route incorrectly
+    // narrowed sseUserKey to the caller's identity, so that route's shared
+    // (userKey='') patches never reached the subscriber. bakeByPattern gates
+    // the identity lookup to bake='user' routes only.
+    const pagesDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-pages-'));
+    await fs.writeFile(
+      path.join(pagesDir, 'shared.ts'),
+      "export const bake = 'shared';\nexport default function Page() { return null; }\n",
+    );
+    await fs.writeFile(
+      path.join(pagesDir, 'priv.ts'),
+      "export const bake = 'user';\nexport default function Page() { return null; }\n",
+    );
+
+    const sseRoutes = new Map<string, (req: any, res: any) => Promise<void>>();
+    const markActiveCalls: [string, string][] = [];
+    const fakeStore: any = {
+      markActive: async (route: string, userKey = '') => {
+        markActiveCalls.push([route, userKey]);
+      },
+    };
+    const adapter: any = {
+      registerPage: () => {},
+      registerAction: () => {},
+      registerSSE: (p: string, h: any) => { sseRoutes.set(p, h); },
+      registerAsset: () => {},
+      applyMiddleware: () => {},
+      applyServerHooks: async () => {},
+      listen: async () => {},
+    };
+    const identity = (req: any) => (req.locals as any).user ?? null;
+    await startKiln(
+      adapter,
+      { cache: { provider: 'filesystem' } } as any,
+      pagesDir,
+      { store: fakeStore, identity: identity as any } as any,
+    );
+
+    const handler = sseRoutes.get('/__kiln/fsr');
+    expect(handler).toBeDefined();
+
+    const sharedRes = makeRes();
+    await handler!(
+      makeReq({ path: '/__kiln/fsr', query: { route: '/shared', slots: '' }, locals: { user: 'tom' } }) as any,
+      sharedRes,
+    );
+
+    const userRes = makeRes();
+    await handler!(
+      makeReq({ path: '/__kiln/fsr', query: { route: '/priv', slots: '' }, locals: { user: 'tom' } }) as any,
+      userRes,
+    );
+
+    expect(markActiveCalls).toEqual([
+      ['/shared', ''], // shared route: identity present but bake !== 'user' -> ''
+      ['/priv', 'tom'], // bake='user' route: identity applies
+    ]);
     await fs.rm(pagesDir, { recursive: true, force: true });
   });
 });
