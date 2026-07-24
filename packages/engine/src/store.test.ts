@@ -150,6 +150,22 @@ async function runTests() {
     assert.equal(uSlots[0].userKey, 'u1');
     assert.equal((await store.fetchSlotsForSnapshot('/u-route', [])).length, 0); // shared scope empty
 
+    // owner-scoped invalidation (ADR-018): a depKey change with an owner marks
+    // only that user's per-user row + the shared row stale, not other users'.
+    console.log('Testing owner-scoped invalidation...');
+    await store.ensureRouteRow('/owned', 300, 3600, 'json');            // shared
+    await store.ensureRouteRow('/owned', 300, 3600, 'json', 'u1');
+    await store.ensureRouteRow('/owned', 300, 3600, 'json', 'u2');
+    await store.upsertSlot('/owned', 'feed', null, [], ['posts'], 0, null, '');   // shared slot
+    await store.upsertSlot('/owned', 'feed', null, [], ['posts'], 0, null, 'u1'); // u1 slot
+    await store.upsertSlot('/owned', 'feed', null, [], ['posts'], 0, null, 'u2'); // u2 slot
+    await store.invalidateDepKey('posts', 'u1');
+    const inspect = await store.fetchAllForInspect();
+    const slotOf = (uk: string) => inspect.find(r => r.route === '/owned' && r.slot === 'feed' && r.userKey === uk);
+    assert.equal(slotOf('')?.stale, true);   // shared always invalidated
+    assert.equal(slotOf('u1')?.stale, true);  // owner invalidated
+    assert.equal(slotOf('u2')?.stale, false); // other user untouched
+
     // 9. tombstone & isTombstoned
     console.log('Testing tombstone...');
     assert.equal(await store.isTombstoned('/test-route-1'), false);
@@ -157,7 +173,7 @@ async function runTests() {
     assert.equal(await store.isTombstoned('/test-route-1'), true);
 
     rows = await store.fetchAllForInspect();
-    assert.equal(rows.every(r => r.stale === false), true);
+    assert.equal(rows.filter(r => r.route === '/test-route-1').every(r => r.stale === false), true);
 
     const clearedHtml = await redisCache.getHtml('/test-route-1');
     assert.equal(clearedHtml, null);

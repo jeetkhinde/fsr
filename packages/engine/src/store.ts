@@ -167,15 +167,27 @@ export class FsrStore {
     return row ? !!row.tombstoned : false;
   }
 
-  async invalidateDepKey(depKey: string): Promise<string[]> {
+  async invalidateDepKey(depKey: string, owner?: string): Promise<string[]> {
+    // owner undefined → every user_key (route-wide change, today's behavior).
+    // owner set → the shared row ('') plus that one user's rows only, so a
+    // per-user snapshot fan-out doesn't invalidate on another user's write.
     const [rows, listRoutes] = await Promise.all([
-      this.sql`
-        UPDATE kiln_fsr
-        SET stale = TRUE, version = version + 1
-        WHERE ${depKey} = ANY(depends_on)
-          AND slot != ''
-        RETURNING route
-      `,
+      owner === undefined
+        ? this.sql`
+            UPDATE kiln_fsr
+            SET stale = TRUE, version = version + 1
+            WHERE ${depKey} = ANY(depends_on)
+              AND slot != ''
+            RETURNING route
+          `
+        : this.sql`
+            UPDATE kiln_fsr
+            SET stale = TRUE, version = version + 1
+            WHERE ${depKey} = ANY(depends_on)
+              AND slot != ''
+              AND (user_key = '' OR user_key = ${owner})
+            RETURNING route
+          `,
       this.lists.invalidateDependency(depKey),
     ]);
 

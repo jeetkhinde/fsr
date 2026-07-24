@@ -9,15 +9,15 @@ function wireClient(client: pg.Client, watcher: FsrWatcher): void {
     if (msg.channel === 'kiln_invalidate' && msg.payload) {
       try {
         const payload = JSON.parse(msg.payload);
-        const { depKey, id, op, eventId } = payload;
+        const { depKey, id, op, eventId, owner } = payload;
 
         const work: Promise<void>[] = [];
         if (op === 'DELETE') {
-          if (depKey) work.push(watcher.notifyDelete(depKey));
-          if (depKey && id !== undefined && id !== null) work.push(watcher.notifyDelete(`${depKey}:${id}`));
+          if (depKey) work.push(watcher.notifyDelete(depKey, owner));
+          if (depKey && id !== undefined && id !== null) work.push(watcher.notifyDelete(`${depKey}:${id}`, owner));
         } else {
-          if (depKey) work.push(watcher.notifyChange(depKey));
-          if (depKey && id !== undefined && id !== null) work.push(watcher.notifyChange(`${depKey}:${id}`));
+          if (depKey) work.push(watcher.notifyChange(depKey, owner));
+          if (depKey && id !== undefined && id !== null) work.push(watcher.notifyChange(`${depKey}:${id}`, owner));
         }
 
         // Advance the cursor only after the invalidations are persisted —

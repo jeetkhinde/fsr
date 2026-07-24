@@ -212,8 +212,8 @@ export class FsrWatcher {
   /** Returns a promise so callers (e.g. the DB notification pipeline) can
    * sequence follow-up work — like advancing the event cursor — after the
    * invalidation has actually been persisted. Errors are logged, never thrown. */
-  notifyChange(depKey: string): Promise<void> {
-    return this.store.invalidateDepKey(depKey)
+  notifyChange(depKey: string, owner?: string): Promise<void> {
+    return this.store.invalidateDepKey(depKey, owner)
       .then(async () => {
         if (this.redis) {
           await this.redis.publishInvalidate({
@@ -228,7 +228,11 @@ export class FsrWatcher {
       });
   }
 
-  notifyDelete(depKey: string): Promise<void> {
+  // NOTE: owner is accepted here for call-site symmetry with notifyChange
+  // (db-notify.ts destructures the same payload for both ops), but a DELETE
+  // tombstones the route for every user via tombstoneDependentRoutes, which
+  // isn't owner-scoped — deletes aren't part of this task's scope.
+  notifyDelete(depKey: string, owner?: string): Promise<void> {
     return this.store.tombstoneDependentRoutes(depKey).then(async (routes) => {
       if (this.redis) {
         for (const route of routes) {
@@ -268,6 +272,9 @@ export class FsrWatcher {
 
       for (const event of events) {
         const { depKey, id } = event.payload;
+        // owner-less by design: the events table doesn't yet persist `owner`
+        // in a queryable column, so cursor catch-up conservatively
+        // invalidates route-wide rather than per-owner.
         if (event.eventType === 'DELETE') {
           if (depKey) await this.store.tombstoneDependentRoutes(depKey);
           if (depKey && id !== undefined && id !== null) await this.store.tombstoneDependentRoutes(`${depKey}:${id}`);

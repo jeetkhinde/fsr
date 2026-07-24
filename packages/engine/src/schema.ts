@@ -32,6 +32,7 @@ CREATE OR REPLACE FUNCTION kiln_emit_event() RETURNS trigger AS $$
 DECLARE
   record_id BIGINT;
   event_id BIGINT;
+  owner_val TEXT;
 BEGIN
   IF TG_OP = 'DELETE' THEN
     record_id := OLD.id;
@@ -39,17 +40,35 @@ BEGIN
     record_id := NEW.id;
   END IF;
 
+  IF TG_NARGS > 1 THEN
+    IF TG_OP = 'DELETE' THEN
+      EXECUTE format('SELECT ($1).%I::text', TG_ARGV[1]) INTO owner_val USING OLD;
+    ELSE
+      EXECUTE format('SELECT ($1).%I::text', TG_ARGV[1]) INTO owner_val USING NEW;
+    END IF;
+  END IF;
+
+  -- Only include 'owner' when a trigger actually names an owner column —
+  -- json_build_object keeps NULL-valued keys rather than omitting them, and
+  -- a present-but-null owner would wrongly narrow invalidateDepKey's WHERE
+  -- clause to shared rows only for the (common) case of no owner column.
   INSERT INTO kiln_fsr_events (event_type, payload)
   VALUES (
-    TG_OP, 
-    jsonb_build_object('depKey', TG_ARGV[0], 'id', record_id)
+    TG_OP,
+    CASE WHEN TG_NARGS > 1
+      THEN jsonb_build_object('depKey', TG_ARGV[0], 'id', record_id, 'owner', owner_val)
+      ELSE jsonb_build_object('depKey', TG_ARGV[0], 'id', record_id)
+    END
   ) RETURNING id INTO event_id;
-  
+
   PERFORM pg_notify(
     'kiln_invalidate',
-    json_build_object('depKey', TG_ARGV[0], 'id', record_id, 'op', TG_OP, 'eventId', event_id)::text
+    (CASE WHEN TG_NARGS > 1
+      THEN json_build_object('depKey', TG_ARGV[0], 'id', record_id, 'op', TG_OP, 'eventId', event_id, 'owner', owner_val)
+      ELSE json_build_object('depKey', TG_ARGV[0], 'id', record_id, 'op', TG_OP, 'eventId', event_id)
+    END)::text
   );
-  
+
   IF TG_OP = 'DELETE' THEN
     RETURN OLD;
   ELSE
