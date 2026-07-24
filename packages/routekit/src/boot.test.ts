@@ -1297,3 +1297,38 @@ describe('startKiln islands manifest route', () => {
     await fs.rm(pagesDir, { recursive: true, force: true });
   });
 });
+
+describe('__kiln/fsr SSE subscribe', () => {
+  it('marks the (route, user) snapshot active on subscribe (Task 7)', async () => {
+    // A page someone has open in a browser tab should get eager patches even
+    // though nobody is re-requesting it — the SSE subscribe itself must ping
+    // store.markActive so the watcher's activeWindowSecs gate (Task 6) treats
+    // the route as active.
+    const pagesDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-pages-'));
+    const sseRoutes = new Map<string, (req: any, res: any) => Promise<void>>();
+    const markActiveCalls: [string, string][] = [];
+    const fakeStore: any = {
+      markActive: async (route: string, userKey = '') => {
+        markActiveCalls.push([route, userKey]);
+      },
+    };
+    const adapter: any = {
+      registerPage: () => {},
+      registerAction: () => {},
+      registerSSE: (p: string, h: any) => { sseRoutes.set(p, h); },
+      registerAsset: () => {},
+      applyMiddleware: () => {},
+      applyServerHooks: async () => {},
+      listen: async () => {},
+    };
+    await startKiln(adapter, { cache: { provider: 'filesystem' } } as any, pagesDir, { store: fakeStore } as any);
+
+    const handler = sseRoutes.get('/__kiln/fsr');
+    expect(handler).toBeDefined();
+    const res = makeRes();
+    await handler!(makeReq({ path: '/__kiln/fsr', query: { route: '/dash', slots: '' } }) as any, res);
+
+    expect(markActiveCalls).toEqual([['/dash', '']]);
+    await fs.rm(pagesDir, { recursive: true, force: true });
+  });
+});

@@ -83,6 +83,13 @@ export class FsrWatcher {
     this.loaderTargets.set(loaderKey(target.route, target.userKey), target);
   }
 
+  /** Removes the (route, userKey) loader registration — called when its
+   * snapshot is purged/evicted so `loaderTargets` doesn't grow unbounded as
+   * users/routes churn (Plan-2 review #4). */
+  unregisterLoader(route: string, userKey?: string): void {
+    this.loaderTargets.delete(loaderKey(route, userKey));
+  }
+
   async registerLiveList<T>(
     target: RegisteredLiveListTarget<T>,
     initialSnapshot: UpsertLiveListSnapshot<T>
@@ -321,6 +328,7 @@ export class FsrWatcher {
           const evicted = await this.store.purgeInactiveRoutes(this.purgeAfterSeconds());
           for (const r of evicted) {
             console.log(`FSR: idle eviction for route ${r.route}`);
+            this.unregisterLoader(r.route, r.userKey);
             if (this.redis) {
               await this.redis.deleteRouteKeys(r.route).catch(() => {});
             }

@@ -24,6 +24,7 @@ export interface StaleSlot {
 
 export interface EvictedRoute {
   route: string;
+  userKey: string;
   htmlPath: string | null;
   jsonPath: string | null;
 }
@@ -388,9 +389,9 @@ export class FsrStore {
         DELETE FROM kiln_fsr f
         USING candidates c
         WHERE f.route = c.route AND f.user_key = c.user_key
-        RETURNING f.route, f.slot, f.html_path as "htmlPath", f.json_path as "jsonPath"
+        RETURNING f.route, f.user_key as "userKey", f.slot, f.html_path as "htmlPath", f.json_path as "jsonPath"
       )
-      SELECT route, "htmlPath", "jsonPath"
+      SELECT route, "userKey", "htmlPath", "jsonPath"
       FROM deleted
       WHERE slot = ''
     `;
@@ -400,6 +401,7 @@ export class FsrStore {
     }
     return rows.map((row: any) => ({
       route: String(row.route),
+      userKey: String(row.userKey ?? ''),
       htmlPath: row.htmlPath ?? null,
       jsonPath: row.jsonPath ?? null,
     }));

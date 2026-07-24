@@ -1169,6 +1169,17 @@ export async function startKiln(
       // Resolved from the request's own session — a client cannot subscribe
       // to another user's patch stream because there is nothing to spoof.
       const sseUserKey = identity ? identity(req) ?? '' : '';
+      // A subscriber watching this (route, user) snapshot counts as activity
+      // — a page someone has open gets eager patches even though nobody is
+      // re-requesting it (which is what would otherwise bump last_active_at).
+      // One ping on subscribe is enough to satisfy the tier; connectionTtlSecs
+      // bounds how stale the active flag can get before a client reconnects
+      // and re-pings (fsrHubStream owns the keepalive loop, not this handler).
+      if (options.store) {
+        await options.store.markActive(route, sseUserKey).catch((err: any) => {
+          console.warn(`FSR SSE: markActive failed for ${route}:`, err?.message ?? err);
+        });
+      }
       const { fsrHubStream } = await import('@kiln/engine' as any);
       const stream = fsrHubStream({
         route,

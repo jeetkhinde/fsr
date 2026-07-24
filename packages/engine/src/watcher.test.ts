@@ -187,6 +187,26 @@ async function runTests() {
     await fs.unlink(uHtmlPath).catch(() => {});
     await fs.unlink(uJsonPath).catch(() => {});
 
+    // 5b-2. unregisterLoader (Plan-2 review #4): bounds loaderTargets — a
+    // registration removed via unregisterLoader must not fire on a later
+    // invalidation of its dep key.
+    console.log('Verifying loader unregistration...');
+    const urRoute = '/unreg-route';
+    await store.ensureRouteRow(urRoute, 300, 3600, 'json', 'u9');
+    await store.setBakedPaths(urRoute, './tmp_unreg.html', './tmp_unreg.json', 'u9');
+    await fs.writeFile('./tmp_unreg.html', '<html><body><div s-live="g">x</div></body></html>');
+    await fs.writeFile('./tmp_unreg.json', JSON.stringify({ schemaVersion: 1, renderVersion: 1, data: { g: 'old' }, updatedAt: new Date().toISOString() }));
+    await store.upsertSlot(urRoute, 'g', null, [], ['unreg_dep'], 0, null, 'u9');
+    let fired = 0;
+    watcher.registerLoader({ route: urRoute, userKey: 'u9', load: async () => { fired++; return { g: 'new' }; } });
+    watcher.unregisterLoader(urRoute, 'u9');
+    patches.length = 0;
+    await store.invalidateDepKey('unreg_dep', 'u9');
+    await new Promise((r) => setTimeout(r, 800));
+    assert.equal(fired, 0, 'unregistered loader must not run');
+    await fs.unlink('./tmp_unreg.html').catch(() => {});
+    await fs.unlink('./tmp_unreg.json').catch(() => {});
+
     // 5c. Watcher activeWindowSecs gate (Task 6): the eager tick loop passes
     // { activeWindowSecs } through to store.fetchStaleSlots, so it only
     // eagerly revalidates stale slots on routes pinged via markActive within
