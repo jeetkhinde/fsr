@@ -1176,6 +1176,122 @@ describe('buildPageHandler', () => {
     expect(n).toBe(2);
     await fs.rm(tmpDir, { recursive: true });
   });
+
+  it('rebuilds a dormant stale snapshot on the JSON fast path instead of serving stale pageData (Important #1)', async () => {
+    // Regression: the JSON fast path (Accept: application/json) read
+    // snap.pageData straight from cache with NO dormant-stale check at all.
+    // A route hit only via its JSON endpoint (never SSE-subscribed, so
+    // never "active") would serve known-stale pageData forever once its
+    // dependency changed — the watcher's eager loop skips dormant routes by
+    // design, and only the read path's own dormant check can catch this.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-dormant-json-'));
+    let n = 0;
+    let dormantStale = false;
+    const store = {
+      ensureRouteRow: async () => {},
+      isTombstoned: async () => false,
+      setBakedPaths: async () => {},
+      touchRoute: async () => {},
+      fetchDormantStaleSlot: async (_route: string, _userKey: string) => {
+        if (!dormantStale) return null;
+        dormantStale = false; // one-shot: cleared once observed, like a real stale flag flip
+        return { route: '/dzj', slot: 'n', userKey: '', query: null, queryParams: null, dependsOn: [], promoted: true, debounceSecs: null, htmlPath: null, jsonPath: null, columnName: null, patchMode: null };
+      },
+      __setDormantStale: (_route: string, _userKey: string, val: boolean) => {
+        dormantStale = val;
+      },
+    };
+    const pageModule = {
+      load: async () => ({ n: ++n }),
+      default: ({ n }: any) => null,
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/dzj', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      store as any,
+    );
+    await handler(makeReq({ path: '/dzj' }) as any, makeRes()); // bakes n=1, writes JSON snapshot
+
+    // Sanity: before invalidation, the JSON fast path serves the cached
+    // snapshot without re-running load().
+    const preRes = makeRes();
+    await handler(
+      makeReq({ path: '/dzj', headers: new Headers({ accept: 'application/json' }) }) as any,
+      preRes,
+    );
+    expect(preRes.captured.body).toEqual({ n: 1 });
+    expect(n).toBe(1);
+
+    (store as any).__setDormantStale('/dzj', '', true); // slot goes stale, dormant
+    const jsonRes = makeRes();
+    await handler(
+      makeReq({ path: '/dzj', headers: new Headers({ accept: 'application/json' }) }) as any,
+      jsonRes,
+    );
+    expect(jsonRes.captured.body).toEqual({ n: 2 }); // rebuilt, not served stale pageData
+    expect(n).toBe(2);
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it('skips the dormant-staleness Postgres check for a route this process knows is SSE-active (Important #2)', async () => {
+    // Regression: fetchDormantStaleSlot ran on EVERY validated cache hit,
+    // including hot routes the watcher is already keeping fresh via
+    // pg_notify because an SSE subscriber pinned them active in this
+    // process (FsrWatcher.markLocallyActive). That's a Postgres query on
+    // the "zero-Postgres cached read path for active snapshots" the plan's
+    // Global Constraints require staying zero-Postgres.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-active-noquery-'));
+    let n = 0;
+    let dormantCheckCalls = 0;
+    const store = {
+      ensureRouteRow: async () => {},
+      isTombstoned: async () => false,
+      setBakedPaths: async () => {},
+      touchRoute: async () => {},
+      fetchDormantStaleSlot: async (_route: string, _userKey: string) => {
+        dormantCheckCalls++;
+        // Even though the store WOULD report dormant-stale if asked, the
+        // route is locally active — the check must never fire at all.
+        return { route: '/actv', slot: 'n', userKey: '', query: null, queryParams: null, dependsOn: [], promoted: true, debounceSecs: null, htmlPath: null, jsonPath: null, columnName: null, patchMode: null };
+      },
+    };
+    const watcher = {
+      hasRegisteredRoute: () => true, // materialized cache hits respond immediately
+      isLocallyActive: (_route: string, _userKey: string, _windowSecs: number) => true,
+    };
+    const pageModule = {
+      load: async () => ({ n: ++n }),
+      default: ({ n }: any) => null,
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/actv', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      store as any,
+      watcher as any,
+    );
+    await handler(makeReq({ path: '/actv' }) as any, makeRes()); // bakes n=1
+
+    const r2 = makeRes();
+    await handler(makeReq({ path: '/actv' }) as any, r2); // cache hit, HTML path
+    expect(dormantCheckCalls).toBe(0); // never queried — isLocallyActive gated it out
+    expect(n).toBe(1); // served straight from cache, not rebuilt
+
+    const jsonRes = makeRes();
+    await handler(
+      makeReq({ path: '/actv', headers: new Headers({ accept: 'application/json' }) }) as any,
+      jsonRes,
+    ); // cache hit, JSON fast path
+    expect(dormantCheckCalls).toBe(0); // still never queried
+    expect(jsonRes.captured.body).toEqual({ n: 1 });
+
+    await fs.rm(tmpDir, { recursive: true });
+  });
 });
 
 describe("dynamic bake='user' + live fields warning (Task 8 fix)", () => {
@@ -1465,6 +1581,46 @@ describe('__kiln/fsr SSE subscribe', () => {
     await handler!(makeReq({ path: '/__kiln/fsr', query: { route: '/dash', slots: '' } }) as any, res);
 
     expect(markActiveCalls).toEqual([['/dash', '']]);
+    await fs.rm(pagesDir, { recursive: true, force: true });
+  });
+
+  it('pins the (route, user) snapshot locally active on subscribe, in addition to store.markActive (Important #2)', async () => {
+    // The read path's dormant-staleness check (isDormantStale) consults
+    // FsrWatcher.isLocallyActive to skip its Postgres query for routes this
+    // process already knows are SSE-active — markLocallyActive is what
+    // populates that signal, and it must fire on every subscribe alongside
+    // the existing store.markActive call.
+    const pagesDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-pages-'));
+    const sseRoutes = new Map<string, (req: any, res: any) => Promise<void>>();
+    const markLocallyActiveCalls: [string, string | undefined][] = [];
+    const fakeStore: any = { markActive: async () => {} };
+    const fakeWatcher: any = {
+      markLocallyActive: (route: string, userKey?: string) => {
+        markLocallyActiveCalls.push([route, userKey]);
+      },
+    };
+    const adapter: any = {
+      registerPage: () => {},
+      registerAction: () => {},
+      registerSSE: (p: string, h: any) => { sseRoutes.set(p, h); },
+      registerAsset: () => {},
+      applyMiddleware: () => {},
+      applyServerHooks: async () => {},
+      listen: async () => {},
+    };
+    await startKiln(
+      adapter,
+      { cache: { provider: 'filesystem' } } as any,
+      pagesDir,
+      { store: fakeStore, watcher: fakeWatcher } as any,
+    );
+
+    const handler = sseRoutes.get('/__kiln/fsr');
+    expect(handler).toBeDefined();
+    const res = makeRes();
+    await handler!(makeReq({ path: '/__kiln/fsr', query: { route: '/dash', slots: '' } }) as any, res);
+
+    expect(markLocallyActiveCalls).toEqual([['/dash', '']]);
     await fs.rm(pagesDir, { recursive: true, force: true });
   });
 

@@ -87,6 +87,37 @@ function wantsJson(req: KilnRequest): boolean {
   return accept.includes('application/json');
 }
 
+/**
+ * True when a validated cache hit for (route, userKey) is dormant-stale and
+ * must be rebuilt rather than served. Shared by both cached-read fast paths
+ * (JSON, ~step 2, and HTML, ~step 3) so a route hit only through its JSON
+ * endpoint gets the same never-serve-known-stale guarantee a promoted HTML
+ * route already had (Plan 3 review Important #1).
+ *
+ * Gated on route activity FIRST (Important #2): a route this process just
+ * confirmed active via SSE subscribe (FsrWatcher.markLocallyActive, called
+ * on subscribe) is already being kept fresh by the watcher via pg_notify, so
+ * the Postgres dormant-staleness query is skipped entirely for it — this
+ * restores the "zero-Postgres cached read path for active snapshots"
+ * guarantee. Only a route with no such local signal (genuinely dormant/cold,
+ * or active only in another process) pays the query.
+ */
+async function isDormantStale(
+  store: FsrStore | undefined,
+  watcher: FsrWatcher | undefined,
+  route: string,
+  userKey: string,
+  activeWindowSecs: number
+): Promise<boolean> {
+  if (!store || typeof store.fetchDormantStaleSlot !== 'function') return false;
+  if (watcher && typeof watcher.isLocallyActive === 'function' &&
+      watcher.isLocallyActive(route, userKey, activeWindowSecs)) {
+    return false;
+  }
+  const dormant = await store.fetchDormantStaleSlot(route, userKey);
+  return !!dormant;
+}
+
 // ---------------------------------------------------------------------------
 // Layout signature — lets a promoted page's cached shell detect that one of
 // its layouts has since been invalidated (see BakedSnapshot.layoutSignature
@@ -177,6 +208,10 @@ export function buildPageHandler(
     const isUserVariant = bakeMode === 'user' && uid !== null;
     const revalidate = options.revalidate ?? kilnConfig?.fsr?.revalidateSeconds ?? 300;
     const purgeAfter = options.purgeAfter ?? kilnConfig?.fsr?.purgeAfterSeconds ?? 2_592_000;
+    // Matches the default the CLI wires into FsrWatcherConfig.activeWindowSecs
+    // (packages/cli/src/cli.ts) — keeps the read path's "is this route
+    // locally active" gate consistent with the watcher's own eager-tick window.
+    const activeWindowSecs = kilnConfig?.fsr?.activeWindowSecs ?? 30;
     const bakeEligible =
       bakeMode !== false && !knownImpure && !(bakeMode === 'user' && uid === null);
 
@@ -243,9 +278,17 @@ export function buildPageHandler(
           | null;
         const buildOk = !kilnConfig?.fsr?.buildId || snap?.buildId === kilnConfig.fsr.buildId;
         if (snap?.pageData && buildOk) {
-          touchRoute(req.path, userKey);
-          res.json(snap.pageData);
-          return;
+          // A route hit only via this JSON endpoint never touches the HTML
+          // dormant check below — without this it could serve known-stale
+          // pageData forever once its dependency changes (Important #1).
+          // Mirrors the HTML path's own dormant-stale handling exactly.
+          if (await isDormantStale(store, watcher, req.path, userKey, activeWindowSecs)) {
+            await cache.delete(req.path, variant);
+          } else {
+            touchRoute(req.path, userKey);
+            res.json(snap.pageData);
+            return;
+          }
         }
       }
       const data = await loadPageProps();
@@ -291,13 +334,11 @@ export function buildPageHandler(
     // is dormant (no recent last_active_at), the watcher's eager loop never
     // revalidated it (Task 5's activeWindowSecs gate). Rebuild on this read
     // rather than serve known-stale content — the fresh render below re-bakes
-    // and upsertSlot clears the stale flag.
-    if (materialized && store && typeof store.fetchDormantStaleSlot === 'function') {
-      const dormant = await store.fetchDormantStaleSlot(req.path, userKey);
-      if (dormant) {
-        await cache.delete(req.path, variant);
-        materialized = null;
-      }
+    // and upsertSlot clears the stale flag. isDormantStale gates the
+    // Postgres check itself on local activity (Important #2).
+    if (materialized && await isDormantStale(store, watcher, req.path, userKey, activeWindowSecs)) {
+      await cache.delete(req.path, variant);
+      materialized = null;
     }
     if (materialized) {
       if (kilnConfig?.fsr?.watcher === 'external') {
@@ -1213,6 +1254,11 @@ export async function startKiln(
           console.warn(`FSR SSE: markActive failed for ${route}:`, err?.message ?? err);
         });
       }
+      // Same-process activity signal (Important #2 review fix): lets the
+      // read path's dormant-staleness check (isDormantStale) skip its own
+      // Postgres query for a route this process already knows is
+      // SSE-active, without waiting on a round trip to see last_active_at.
+      options.watcher?.markLocallyActive?.(route, sseUserKey);
       const { fsrHubStream } = await import('@kiln/engine' as any);
       const stream = fsrHubStream({
         route,

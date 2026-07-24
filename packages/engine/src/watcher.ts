@@ -60,6 +60,13 @@ interface RegisteredLoaderTarget {
 const loaderKey = (route: string, userKey?: string) => `${route}\u0000${userKey ?? ''}`;
 const variantOf = (userKey?: string) => (userKey ? `u:${userKey}` : undefined);
 
+// Bounds the same-process activity cache (markLocallyActive/isLocallyActive)
+// so a long-running server with high route/user cardinality can't grow it
+// without bound — mirrors the DEDUP_SET_MAX pattern in routekit/boot.ts.
+// Losing an entry just means the next cache hit for that (route, userKey)
+// falls back to the Postgres dormant-staleness check, never incorrect.
+const LOCAL_ACTIVE_MAX = 10_000;
+
 export class FsrWatcher {
   private active = false;
   private abortController = new AbortController();
@@ -68,6 +75,15 @@ export class FsrWatcher {
   private loaderTargets = new Map<string, RegisteredLoaderTarget>();
   private warnedUnregisteredLists = new Set<string>();
   private notificationQueue: Promise<void> = Promise.resolve();
+  // Same-process record of "this (route, userKey) was confirmed active
+  // recently" (SSE subscribe calls markLocallyActive). Lets routekit's read
+  // path skip its own dormant-staleness Postgres query for snapshots this
+  // process already knows the watcher is keeping fresh via pg_notify —
+  // restoring the zero-Postgres cached read path for active snapshots
+  // (Plan 3 review Important #2). Purely a local optimization: a route this
+  // process hasn't seen SSE traffic for (or another process's subscriber)
+  // just falls back to the Postgres check, which is always correct either way.
+  private locallyActiveAt = new Map<string, number>();
 
   constructor(
     private store: FsrStore,
@@ -87,7 +103,25 @@ export class FsrWatcher {
    * snapshot is purged/evicted so `loaderTargets` doesn't grow unbounded as
    * users/routes churn (Plan-2 review #4). */
   unregisterLoader(route: string, userKey?: string): void {
-    this.loaderTargets.delete(loaderKey(route, userKey));
+    const key = loaderKey(route, userKey);
+    this.loaderTargets.delete(key);
+    this.locallyActiveAt.delete(key);
+  }
+
+  /**
+   * Records that (route, userKey) was just confirmed active in THIS
+   * process — called on SSE subscribe. `isLocallyActive` lets the read path
+   * trust that signal instead of issuing its own Postgres dormant check.
+   */
+  markLocallyActive(route: string, userKey?: string): void {
+    if (this.locallyActiveAt.size >= LOCAL_ACTIVE_MAX) this.locallyActiveAt.clear();
+    this.locallyActiveAt.set(loaderKey(route, userKey), Date.now());
+  }
+
+  /** True if markLocallyActive(route, userKey) was called within windowSecs. */
+  isLocallyActive(route: string, userKey: string | undefined, windowSecs: number): boolean {
+    const at = this.locallyActiveAt.get(loaderKey(route, userKey));
+    return at !== undefined && Date.now() - at < windowSecs * 1000;
   }
 
   async registerLiveList<T>(

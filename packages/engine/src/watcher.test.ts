@@ -207,6 +207,40 @@ async function runTests() {
     await fs.unlink('./tmp_unreg.html').catch(() => {});
     await fs.unlink('./tmp_unreg.json').catch(() => {});
 
+    // 5b-3. markLocallyActive/isLocallyActive (Plan 3 review Important #2):
+    // the same-process activity signal routekit's boot.ts consults so its
+    // read path can skip the Postgres dormant-staleness check for a route
+    // this process just confirmed active via SSE subscribe. Pure in-memory,
+    // no store/DB round trip involved.
+    console.log('Verifying markLocallyActive/isLocallyActive...');
+    assert.equal(
+      watcher.isLocallyActive('/la-route', '', 60),
+      false,
+      'never marked -> not locally active'
+    );
+    watcher.markLocallyActive('/la-route', '');
+    assert.equal(
+      watcher.isLocallyActive('/la-route', '', 60),
+      true,
+      'marked within window -> locally active'
+    );
+    assert.equal(
+      watcher.isLocallyActive('/la-route', '', 0),
+      false,
+      'a zero-second window is never satisfied, even immediately after marking'
+    );
+    assert.equal(
+      watcher.isLocallyActive('/la-route', 'someone-else', 60),
+      false,
+      'marking is scoped per (route, userKey) — another userKey on the same route is unaffected'
+    );
+    watcher.unregisterLoader('/la-route', '');
+    assert.equal(
+      watcher.isLocallyActive('/la-route', '', 60),
+      false,
+      'unregisterLoader clears the local-active record too (purge hygiene)'
+    );
+
     // 5c. Watcher activeWindowSecs gate (Task 6): the eager tick loop passes
     // { activeWindowSecs } through to store.fetchStaleSlots, so it only
     // eagerly revalidates stale slots on routes pinged via markActive within
