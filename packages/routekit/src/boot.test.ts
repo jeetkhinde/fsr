@@ -1178,6 +1178,108 @@ describe('buildPageHandler', () => {
   });
 });
 
+describe("dynamic bake='user' + live fields warning (Task 8 fix)", () => {
+  async function captureWarningsAsync(fn: () => Promise<void>): Promise<string[]> {
+    const original = console.warn;
+    const warnings: string[] = [];
+    console.warn = (msg?: any) => { warnings.push(String(msg)); };
+    try {
+      await fn();
+    } finally {
+      console.warn = original;
+    }
+    return warnings;
+  }
+
+  it("warns when a dynamic-pattern page declares bake='user' with a LiveProp field", async () => {
+    // This is exactly the silently-broken combination: bakeByPattern (built
+    // at registration, keyed by page.pattern) can never match the concrete
+    // request pathname for a dynamic route, so the /__kiln/fsr SSE + snapshot
+    // handlers silently fall back to the shared ('') identity key instead of
+    // scoping to the subscribing user.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-dynuser-warn-'));
+    const { LiveProp } = await import('@kiln/core');
+    const pageModule = {
+      bake: 'user',
+      load: async () => ({ count: new LiveProp(1) }),
+      default: ({ count }: any) => null,
+    };
+    const identity = (req: any) => (req.locals as any).user ?? null;
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/users/:id', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      undefined,
+      {} as any, // watcher: truthy is enough to arm the gate; no live-list methods needed for a scalar field
+      undefined,
+      identity as any,
+    );
+    const warnings = await captureWarningsAsync(async () => {
+      await handler(makeReq({ path: '/users/5', locals: { user: 'tom' } }) as any, makeRes());
+    });
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain('/users/:id');
+    expect(warnings[0]).toContain("bake='user'");
+    expect(warnings[0]).toContain('dynamic path segment');
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it("does not warn for a static bake='user' page with a LiveProp field (this combination works correctly)", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-statuser-nowarn-'));
+    const { LiveProp } = await import('@kiln/core');
+    const pageModule = {
+      bake: 'user',
+      load: async () => ({ count: new LiveProp(1) }),
+      default: ({ count }: any) => null,
+    };
+    const identity = (req: any) => (req.locals as any).user ?? null;
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/profile', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      undefined,
+      {} as any,
+      undefined,
+      identity as any,
+    );
+    const warnings = await captureWarningsAsync(async () => {
+      await handler(makeReq({ path: '/profile', locals: { user: 'tom' } }) as any, makeRes());
+    });
+    expect(warnings).toEqual([]);
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it("does not warn for a dynamic bake='user' page with NO live fields (nothing to break)", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-dynuser-nolive-nowarn-'));
+    const pageModule = {
+      bake: 'user',
+      load: async () => ({ name: 'static value' }),
+      default: ({ name }: any) => null,
+    };
+    const identity = (req: any) => (req.locals as any).user ?? null;
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/users/:id', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      undefined,
+      {} as any,
+      undefined,
+      identity as any,
+    );
+    const warnings = await captureWarningsAsync(async () => {
+      await handler(makeReq({ path: '/users/5', locals: { user: 'tom' } }) as any, makeRes());
+    });
+    expect(warnings).toEqual([]);
+    await fs.rm(tmpDir, { recursive: true });
+  });
+});
+
 describe('applyLivePropMarkers', () => {
   it('wraps a LiveProp value with an s-live span when the rendered text is unambiguous', async () => {
     const { LiveProp } = await import('@kiln/core');
