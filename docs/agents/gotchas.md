@@ -14,6 +14,9 @@ Kiln has several surfaces that are **typed, scaffolded, or discovered but not ac
 | `dom`-target `LiveProp` inside an island | Bake-time warning; silcrow won't patch inside the React root | `target: 'store'` + `useLiveValue` |
 | `fsr.watcher: 'external'` | Typed, implementation only partial | Use `'embedded'` |
 | Setting a cookie from an `action` | Actions receive only `req` (no `res`) — **can't set `Set-Cookie`** | Mount a raw adapter route (`adapter.app.post(...)`) for login/logout ([auth.md](auth.md)) |
+| A plain `new SQL(url)` client for `load()` queries | **Invisible to auto-deps** — `createKilnSql` is what records tables into a live field's `depends_on` | `createKilnSql` from `@kiln/core` ([rendering-and-caching.md](rendering-and-caching.md#auto-derived-dependencies-auto-deps)) |
+| `ownerColumn` scoping a `DELETE` on a `triggerTables` table | **Not owner-scoped** — a delete still tombstones the route for every user, only insert/update are owner-scoped | Be aware when combining `bake = 'user'` with a live field depending on a table whose rows get deleted (see ADR-018) |
+| `bake = 'user'` on a dynamic-segment pattern (e.g. `/users/:id`) with `LiveProp` fields | SSE/snapshot identity scoping matches routes by exact string, never a dynamic pattern — live patches won't scope to the subscribing user (warned once at runtime) | Keep `bake = 'user'` + live fields on static-segment routes until this is resolved |
 
 ## Naming / API traps
 

@@ -117,6 +117,50 @@ registration-time (role changes lag one request); per-user Live.list
 unsupported; query-reading loads must stay SSR until query joins the key;
 shared-shell dedup deferred to Plan 3.
 
+## ADR-018: Auto-Deps, sync-triggers, Owner-Scoped Invalidation, Freshness Tiers
+
+**Status:** ACCEPTED
+**Decision:** Four additive, backward-compatible mechanisms. (1) Auto-deps:
+`createKilnSql` (`packages/core/src/sql.ts`) wraps bun's `SQL` in a Proxy;
+`load()` runs inside `withDepCapture` (`AsyncLocalStorage`); tables a query
+touches (best-effort regex over `FROM`/`JOIN`/`INTO`/`UPDATE`) union into live
+fields' `depends_on` at `upsertSlot` — table-level only, over-capture is the
+safe failure direction. `fsr.autoDeps = false` opts out; plain `new SQL(url)`
+stays invisible to it. (2) `kiln sync-triggers` CLI: `fsr.triggerTables`
+(`table`, `depKey?`, `ownerColumn?`, `events?`) drives an idempotent
+installer — `<table>_kiln_invalidate AFTER <events> ... EXECUTE FUNCTION
+kiln_emit_event('<depKey>'[, '<ownerColumn>'])`, checked by trigger name in
+`pg_trigger` (same name = already-installed, regardless of body — migrating
+off a hand-written same-named trigger needs an explicit `DROP` first).
+`--check` reports missing without writing (CI). Replaces hand-written
+per-app trigger SQL. (3) `owner` on the invalidation payload:
+`kiln_emit_event()` optionally resolves a 2nd trigger arg (owner column) per
+row into the `pg_notify` JSON (omitted, not null, when absent);
+`invalidateDepKey(depKey, owner?)` scopes stale-marking to `user_key = ''
+OR user_key = owner` when set, else unchanged (every `user_key`, today's
+behavior). (4) Active/dormant freshness: `kiln_fsr.last_active_at`, set by
+`markActive` on `/__kiln/fsr` SSE subscribe; `fetchStaleSlots({
+activeWindowSecs })` (default 30s) has the watcher eagerly revalidate only
+active routes; dormant stale slots rebuild lazily on next read
+(`fetchDormantStaleSlot`, `boot.ts`) instead of serving stale — the scaling
+answer to ADR-017's per-user snapshot fan-out.
+
+Plan-2 review fixes folded in: SSE/snapshot identity scoping gates on
+`bake === 'user'` (`bakeByPattern`), not unconditional; cached-JSON `pageData`
+patched alongside `data` at all 4 write sites; `unregisterLoader` bounds
+`loaderTargets` on eviction; `RedisCache.slotKey` honors `variant`.
+
+**Known limitations:** DELETE-driven tombstoning is **not** owner-scoped
+(`notifyDelete` → `tombstoneDependentRoutes`, pre-existing, deliberately left
+unchanged) — only INSERT/UPDATE are owner-scoped. Auto-deps is proven at the
+capture/trigger/watcher layer and wired into `boot.ts`'s real `load()` path,
+but not yet exercised end-to-end through a page with live fields in any app
+(jags-list has zero `Live.value`/`Live.list` usage today). Dynamic-segment
+`bake='user'` + live fields still falls back to shared-key SSE scoping
+(warned at runtime). Deferred to a future plan: shared-shell dedup, eager
+actor re-materialization, row-level auto-deps (`WHERE`-clause parsing),
+auto-owner inference. Extends ADR-016, ADR-017.
+
 ---
 
 ## ADR-004: Field-Level Granularity — LiveProp vs Static
