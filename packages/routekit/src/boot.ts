@@ -22,6 +22,7 @@ import {
   type LiveList,
   LiveProp,
   StartupError,
+  withDepCapture,
 } from '@kiln/core';
 import {
   KilnCache,
@@ -201,13 +202,21 @@ export function buildPageHandler(
     let rawPageProps: any = {};
     let pagePropsLoaded = false;
     let renderPure = true;
+    // Tables observed via a createKilnSql-wrapped query run inside load() —
+    // unioned into each live field's depends_on below (step 12) so
+    // Live.value(x) with no explicit dep list still revalidates on writes to
+    // the tables it actually reads. Populated once, by the real per-request
+    // load() call (not the watcher's later background loader re-runs).
+    let observedTables: string[] = [];
     const loadPageProps = async () => {
       if (pagePropsLoaded) return pageProps;
       pagePropsLoaded = true;
       if (typeof module.load !== 'function') return pageProps;
       try {
         const tracker = createPurityTracker(req);
-        rawPageProps = await module.load(tracker.proxied);
+        const { result, tables } = await withDepCapture(async () => module.load(tracker.proxied));
+        observedTables = [...tables];
+        rawPageProps = result;
         if (tracker.identityAccessed()) renderPure = false;
         assertEmbeddedLiveLists(rawPageProps, kilnConfig);
         rawPageProps = await materializeLiveLists(rawPageProps, store);
@@ -575,13 +584,25 @@ export function buildPageHandler(
     // 12. Persist live fields on pageMeta (extracted once at step 7)
     const liveFields = pageLiveFields;
     if (store && liveFields.length > 0 && !tombstoned && (!variant || isUserVariant)) {
+      // Auto-deps (default on): union tables observed during this request's
+      // load() into every live field's explicit deps, so a field declared
+      // with no dependsOn still gets one derived from what it actually
+      // queried. Explicit deps are preserved, never replaced — apps can opt
+      // out entirely via fsr.autoDeps: false.
+      const autoDepsEnabled = kilnConfig?.fsr?.autoDeps !== false;
       for (const field of liveFields) {
+        const dependsOn = Array.from(
+          new Set([
+            ...(field.dependsOn ? [field.dependsOn] : []),
+            ...(autoDepsEnabled ? observedTables : []),
+          ]),
+        );
         await store.upsertSlot(
           req.path,
           field.name,
           null,
           [],
-          field.dependsOn ? [field.dependsOn] : [],
+          dependsOn,
           field.debounce ?? options.debounce ?? kilnConfig?.fsr?.patchDebounceSecs,
           null,
           userKey,

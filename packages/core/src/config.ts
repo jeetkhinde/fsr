@@ -54,6 +54,10 @@ export interface FsrConfig {
   postgresUrl?: string;
   /** Tables `kiln sync-triggers` installs/verifies `kiln_emit_event` triggers on. */
   triggerTables?: TriggerTableConfig[];
+  /** Union tables observed via createKilnSql queries during a page's load()
+   * into its live fields' depends_on. Default on; set false to opt out and
+   * rely solely on each field's explicit dependsOn list. */
+  autoDeps?: boolean;
 }
 
 export interface ReactRuntimeConfig {

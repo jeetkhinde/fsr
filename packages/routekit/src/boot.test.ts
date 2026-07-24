@@ -939,6 +939,116 @@ describe('buildPageHandler', () => {
     await fs.rm(tmpDir, { recursive: true });
   });
 
+  it('auto-derives depends_on from tables read during load()', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-autodep-'));
+    const { createElement } = await import('react');
+    const { Live, collectDeps } = await import('@kiln/core');
+    const upserts: any[] = [];
+    const store = {
+      ensureRouteRow: async () => {},
+      isTombstoned: async () => false,
+      setBakedPaths: async () => {},
+      touchRoute: async () => {},
+      upsertSlot: async (...args: any[]) => {
+        upserts.push(args);
+      },
+    };
+    const pageModule = {
+      load: async () => {
+        // simulate a captured query by adding to the active scope directly:
+        collectDeps()?.add('tasks');
+        return { count: Live.value(0) }; // live field, NO explicit deps
+      },
+      default: ({ count }: any) => createElement('div', null, `n=${count}`),
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/auto', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      store as any,
+    );
+    await handler(makeReq({ path: '/auto' }) as any, makeRes());
+    const countUpsert = upserts.find((a) => a[1] === 'count');
+    expect(countUpsert).toBeDefined();
+    expect(countUpsert[4]).toContain('tasks'); // dependsOn arg (index 4) unions the observed table
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it('unions auto-derived tables with an explicit dependsOn, never replacing it', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-autodep-union-'));
+    const { createElement } = await import('react');
+    const { Live, collectDeps } = await import('@kiln/core');
+    const upserts: any[] = [];
+    const store = {
+      ensureRouteRow: async () => {},
+      isTombstoned: async () => false,
+      setBakedPaths: async () => {},
+      touchRoute: async () => {},
+      upsertSlot: async (...args: any[]) => {
+        upserts.push(args);
+      },
+    };
+    const pageModule = {
+      load: async () => {
+        collectDeps()?.add('tasks');
+        return { count: Live.value(0, ['sessions']) }; // explicit dep + observed table
+      },
+      default: ({ count }: any) => createElement('div', null, `n=${count}`),
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/auto2', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      store as any,
+    );
+    await handler(makeReq({ path: '/auto2' }) as any, makeRes());
+    const countUpsert = upserts.find((a) => a[1] === 'count');
+    expect(countUpsert).toBeDefined();
+    expect(countUpsert[4]).toEqual(expect.arrayContaining(['sessions', 'tasks']));
+    expect(countUpsert[4]).toHaveLength(2);
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it('skips the auto-derived union when fsr.autoDeps is false, keeping only explicit deps', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-autodep-off-'));
+    const { createElement } = await import('react');
+    const { Live, collectDeps } = await import('@kiln/core');
+    const upserts: any[] = [];
+    const store = {
+      ensureRouteRow: async () => {},
+      isTombstoned: async () => false,
+      setBakedPaths: async () => {},
+      touchRoute: async () => {},
+      upsertSlot: async (...args: any[]) => {
+        upserts.push(args);
+      },
+    };
+    const pageModule = {
+      load: async () => {
+        collectDeps()?.add('tasks');
+        return { count: Live.value(0, ['sessions']) };
+      },
+      default: ({ count }: any) => createElement('div', null, `n=${count}`),
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/auto3', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      { fsr: { autoDeps: false } } as any,
+      store as any,
+    );
+    await handler(makeReq({ path: '/auto3' }) as any, makeRes());
+    const countUpsert = upserts.find((a) => a[1] === 'count');
+    expect(countUpsert).toBeDefined();
+    expect(countUpsert[4]).toEqual(['sessions']);
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
   it('serves different cached HTML per cacheKey variant with no cross-contamination', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-variant-'));
     const { createElement } = await import('react');
