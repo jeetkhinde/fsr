@@ -22,6 +22,15 @@ export interface LiveConfig {
   purgeAfterSeconds: number;
 }
 
+export interface TriggerTableConfig {
+  table: string;
+  /** Dep key emitted on change; defaults to the table name. */
+  depKey?: string;
+  /** Column whose value scopes per-user invalidation (owner in the payload). */
+  ownerColumn?: string;
+  events?: ('insert' | 'update' | 'delete')[];
+}
+
 export interface FsrConfig {
   watcher: 'embedded' | 'external';
   pollIntervalMs: number;
@@ -43,6 +52,8 @@ export interface FsrConfig {
   /** @deprecated Use purgeAfterSeconds. */
   idleThresholdSecs?: number;
   postgresUrl?: string;
+  /** Tables `kiln sync-triggers` installs/verifies `kiln_emit_event` triggers on. */
+  triggerTables?: TriggerTableConfig[];
 }
 
 export interface ReactRuntimeConfig {
