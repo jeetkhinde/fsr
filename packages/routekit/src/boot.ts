@@ -1249,16 +1249,23 @@ export async function startKiln(
       // One ping on subscribe is enough to satisfy the tier; connectionTtlSecs
       // bounds how stale the active flag can get before a client reconnects
       // and re-pings (fsrHubStream owns the keepalive loop, not this handler).
+      let markedActive = true;
       if (options.store) {
-        await options.store.markActive(route, sseUserKey).catch((err: any) => {
-          console.warn(`FSR SSE: markActive failed for ${route}:`, err?.message ?? err);
-        });
+        markedActive = await options.store.markActive(route, sseUserKey)
+          .then(() => true)
+          .catch((err: any) => {
+            console.warn(`FSR SSE: markActive failed for ${route}:`, err?.message ?? err);
+            return false;
+          });
       }
       // Same-process activity signal (Important #2 review fix): lets the
       // read path's dormant-staleness check (isDormantStale) skip its own
       // Postgres query for a route this process already knows is
       // SSE-active, without waiting on a round trip to see last_active_at.
-      options.watcher?.markLocallyActive?.(route, sseUserKey);
+      // Only when markActive actually landed — otherwise the watcher's
+      // last_active_at gate won't revalidate this route either, and the local
+      // mark would suppress the one check that would have caught it.
+      if (markedActive) options.watcher?.markLocallyActive?.(route, sseUserKey);
       const { fsrHubStream } = await import('@kiln/engine' as any);
       const stream = fsrHubStream({
         route,
