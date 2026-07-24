@@ -130,6 +130,12 @@ export class FsrStore {
     `;
   }
 
+  async markActive(route: string, userKey = ''): Promise<void> {
+    await this.sql`
+      UPDATE kiln_fsr SET last_active_at = NOW()
+      WHERE route = ${route} AND slot = '' AND user_key = ${userKey}`;
+  }
+
   async tombstone(route: string): Promise<void> {
     const rows = await this.sql`
       UPDATE kiln_fsr
@@ -255,40 +261,81 @@ export class FsrStore {
     }
   }
 
-  async fetchStaleSlots(): Promise<StaleSlot[]> {
-    const rows = await this.sql`
-      WITH candidates AS (
-        SELECT s.route, s.slot, s.user_key
-        FROM kiln_fsr s
-        JOIN kiln_fsr r ON s.route = r.route AND r.user_key = s.user_key AND r.slot = ''
-        WHERE s.slot != ''
-        AND (
-          s.stale = TRUE
-          OR (
-            COALESCE(r.revalidate_secs, 300) > 0
-            AND s.last_patched_at +
-              (COALESCE(r.revalidate_secs, 300) * interval '1 second') <= NOW()
+  async fetchStaleSlots(opts?: { activeWindowSecs?: number }): Promise<StaleSlot[]> {
+    const activeWindowSecs = opts?.activeWindowSecs;
+    let rows: any[];
+    if (activeWindowSecs === undefined) {
+      rows = await this.sql`
+        WITH candidates AS (
+          SELECT s.route, s.slot, s.user_key
+          FROM kiln_fsr s
+          JOIN kiln_fsr r ON s.route = r.route AND r.user_key = s.user_key AND r.slot = ''
+          WHERE s.slot != ''
+          AND (
+            s.stale = TRUE
+            OR (
+              COALESCE(r.revalidate_secs, 300) > 0
+              AND s.last_patched_at +
+                (COALESCE(r.revalidate_secs, 300) * interval '1 second') <= NOW()
+            )
           )
+          AND (s.refresh_claimed_until IS NULL OR s.refresh_claimed_until <= NOW())
+          AND (
+            COALESCE(s.debounce_secs, ${this.globalDebounceSecs}) = 0
+            OR s.last_patched_at IS NULL
+            OR s.last_patched_at + (COALESCE(s.debounce_secs, ${this.globalDebounceSecs}) * interval '1 second') <= NOW()
+          )
+          FOR UPDATE OF s SKIP LOCKED
         )
-        AND (s.refresh_claimed_until IS NULL OR s.refresh_claimed_until <= NOW())
-        AND (
-          COALESCE(s.debounce_secs, ${this.globalDebounceSecs}) = 0
-          OR s.last_patched_at IS NULL
-          OR s.last_patched_at + (COALESCE(s.debounce_secs, ${this.globalDebounceSecs}) * interval '1 second') <= NOW()
+        UPDATE kiln_fsr s
+        SET refresh_claimed_until = NOW() + interval '30 seconds'
+        FROM candidates c, kiln_fsr r
+        WHERE s.route = c.route AND s.slot = c.slot AND s.user_key = c.user_key
+          AND r.route = s.route AND r.user_key = s.user_key AND r.slot = ''
+        RETURNING s.route, s.slot, s.user_key as "userKey", s.query, s.query_params as "queryParams",
+                  s.depends_on as "dependsOn", (r.html_path IS NOT NULL) as "promoted",
+                  s.debounce_secs as "debounceSecs", r.html_path as "htmlPath",
+                  r.json_path as "jsonPath", s.column_name as "columnName", r.patch_mode as "patchMode"
+      `;
+    } else {
+      rows = await this.sql`
+        WITH candidates AS (
+          SELECT s.route, s.slot, s.user_key
+          FROM kiln_fsr s
+          JOIN kiln_fsr r ON s.route = r.route AND r.user_key = s.user_key AND r.slot = ''
+          WHERE s.slot != ''
+          AND (
+            s.stale = TRUE
+            OR (
+              COALESCE(r.revalidate_secs, 300) > 0
+              AND s.last_patched_at +
+                (COALESCE(r.revalidate_secs, 300) * interval '1 second') <= NOW()
+            )
+          )
+          AND (s.refresh_claimed_until IS NULL OR s.refresh_claimed_until <= NOW())
+          AND (
+            COALESCE(s.debounce_secs, ${this.globalDebounceSecs}) = 0
+            OR s.last_patched_at IS NULL
+            OR s.last_patched_at + (COALESCE(s.debounce_secs, ${this.globalDebounceSecs}) * interval '1 second') <= NOW()
+          )
+          AND (
+            r.last_active_at IS NOT NULL
+            AND r.last_active_at + (${activeWindowSecs} * interval '1 second') >= NOW()
+          )
+          FOR UPDATE OF s SKIP LOCKED
         )
-        FOR UPDATE OF s SKIP LOCKED
-      )
-      UPDATE kiln_fsr s
-      SET refresh_claimed_until = NOW() + interval '30 seconds'
-      FROM candidates c, kiln_fsr r
-      WHERE s.route = c.route AND s.slot = c.slot AND s.user_key = c.user_key
-        AND r.route = s.route AND r.user_key = s.user_key AND r.slot = ''
-      RETURNING s.route, s.slot, s.user_key as "userKey", s.query, s.query_params as "queryParams",
-                s.depends_on as "dependsOn", (r.html_path IS NOT NULL) as "promoted",
-                s.debounce_secs as "debounceSecs", r.html_path as "htmlPath",
-                r.json_path as "jsonPath", s.column_name as "columnName", r.patch_mode as "patchMode"
-    `;
-    
+        UPDATE kiln_fsr s
+        SET refresh_claimed_until = NOW() + interval '30 seconds'
+        FROM candidates c, kiln_fsr r
+        WHERE s.route = c.route AND s.slot = c.slot AND s.user_key = c.user_key
+          AND r.route = s.route AND r.user_key = s.user_key AND r.slot = ''
+        RETURNING s.route, s.slot, s.user_key as "userKey", s.query, s.query_params as "queryParams",
+                  s.depends_on as "dependsOn", (r.html_path IS NOT NULL) as "promoted",
+                  s.debounce_secs as "debounceSecs", r.html_path as "htmlPath",
+                  r.json_path as "jsonPath", s.column_name as "columnName", r.patch_mode as "patchMode"
+      `;
+    }
+
     return rows.map((r: any) => ({
       route: r.route,
       slot: r.slot,
@@ -404,6 +451,34 @@ export class FsrStore {
       columnName: r.columnName,
       patchMode: r.patchMode
     }));
+  }
+
+  async fetchDormantStaleSlot(route: string, userKey = ''): Promise<StaleSlot | null> {
+    const rows = await this.sql`
+      SELECT s.route, s.slot, s.user_key as "userKey", s.query, s.query_params as "queryParams", s.depends_on as "dependsOn",
+             (r.html_path IS NOT NULL) as "promoted", s.debounce_secs as "debounceSecs", r.html_path as "htmlPath",
+             r.json_path as "jsonPath", s.column_name as "columnName", r.patch_mode as "patchMode"
+      FROM kiln_fsr s
+      JOIN kiln_fsr r ON s.route = r.route AND r.user_key = s.user_key AND r.slot = ''
+      WHERE s.route = ${route} AND s.slot != '' AND s.user_key = ${userKey} AND s.stale = TRUE
+      LIMIT 1
+    `;
+    const r = rows[0] as any;
+    if (!r) return null;
+    return {
+      route: r.route,
+      slot: r.slot,
+      userKey: r.userKey ?? '',
+      query: r.query,
+      queryParams: r.queryParams,
+      dependsOn: r.dependsOn || [],
+      promoted: !!r.promoted,
+      debounceSecs: r.debounceSecs,
+      htmlPath: r.htmlPath,
+      jsonPath: r.jsonPath,
+      columnName: r.columnName,
+      patchMode: r.patchMode
+    };
   }
 
   async fetchAllForInspect(): Promise<InspectRow[]> {

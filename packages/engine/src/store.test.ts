@@ -182,6 +182,22 @@ async function runTests() {
     const clearedJson = await redisCache.getJson('/test-route-1');
     assert.equal(clearedJson, null);
 
+    // active/dormant tiers (ADR-018)
+    console.log('Testing active/dormant freshness...');
+    await store.ensureRouteRow('/active-r', 300, 3600, 'json');
+    await store.ensureRouteRow('/dormant-r', 300, 3600, 'json');
+    await store.upsertSlot('/active-r', 's', null, [], ['dep_x'], 0);
+    await store.upsertSlot('/dormant-r', 's', null, [], ['dep_x'], 0);
+    await store.invalidateDepKey('dep_x'); // both slots now stale
+    await store.markActive('/active-r');    // only active-r pinged
+    const active = await store.fetchStaleSlots({ activeWindowSecs: 60 });
+    const routes = active.map((s) => s.route);
+    assert.ok(routes.includes('/active-r'), 'active route revalidated eagerly');
+    assert.ok(!routes.includes('/dormant-r'), 'dormant route NOT claimed eagerly');
+    // dormant slot is still individually fetchable for on-read rebuild
+    const dormant = await store.fetchDormantStaleSlot('/dormant-r');
+    assert.equal(dormant?.slot, 's');
+
     console.log('🎉 FsrStore and RedisCache integration tests PASSED!');
   } finally {
     await bunSql.unsafe('DELETE FROM kiln_fsr');

@@ -129,8 +129,52 @@ ALTER TABLE kiln_fsr DROP COLUMN IF EXISTS last_hit;
 -- ADR-017 (per-user artifacts): rows gain a user_key dimension; '' = the
 -- shared/route-level row, anything else scopes the row to one user's cache.
 ALTER TABLE kiln_fsr ADD COLUMN IF NOT EXISTS user_key TEXT NOT NULL DEFAULT '';
-ALTER TABLE kiln_fsr DROP CONSTRAINT IF EXISTS kiln_fsr_pkey;
-ALTER TABLE kiln_fsr ADD CONSTRAINT kiln_fsr_pkey PRIMARY KEY (route, user_key, slot);
 ALTER TABLE kiln_fsr_lists ADD COLUMN IF NOT EXISTS user_key TEXT NOT NULL DEFAULT '';
-ALTER TABLE kiln_fsr_lists DROP CONSTRAINT IF EXISTS kiln_fsr_lists_pkey;
-ALTER TABLE kiln_fsr_lists ADD CONSTRAINT kiln_fsr_lists_pkey PRIMARY KEY (route, user_key, name)`;
+
+-- Plan-2 review #3: the PK swap above used to run unconditionally on every
+-- boot (DROP CONSTRAINT + ADD CONSTRAINT), which is wasteful/unsafe to keep
+-- unconditional long-term. Guard it: only rebuild the PK when its actual
+-- columns don't already match the target shape.
+--
+-- NOTE: pg_attribute.attnum reflects each column's *physical declaration
+-- order in the table* (e.g. kiln_fsr declares route, slot, user_key, ...),
+-- which is NOT the same as the order columns appear in the PK constraint
+-- (route, user_key, slot). Ordering the comparison by attnum against a
+-- differently-ordered target array would never match, making the guard
+-- always report "needs migration" and defeating the whole point. Both
+-- sides are instead canonicalized alphabetically (by attname) so the
+-- comparison is a true order-independent column-set check.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_index i
+    JOIN pg_constraint c ON c.conindid = i.indexrelid
+    WHERE c.conname = 'kiln_fsr_pkey'
+      AND (SELECT array_agg(attname ORDER BY attname) FROM pg_attribute
+           WHERE attrelid = c.conrelid AND attnum = ANY(c.conkey))
+          = ARRAY['route','slot','user_key']::name[]
+  ) THEN
+    ALTER TABLE kiln_fsr DROP CONSTRAINT IF EXISTS kiln_fsr_pkey;
+    ALTER TABLE kiln_fsr ADD CONSTRAINT kiln_fsr_pkey PRIMARY KEY (route, user_key, slot);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_index i
+    JOIN pg_constraint c ON c.conindid = i.indexrelid
+    WHERE c.conname = 'kiln_fsr_lists_pkey'
+      AND (SELECT array_agg(attname ORDER BY attname) FROM pg_attribute
+           WHERE attrelid = c.conrelid AND attnum = ANY(c.conkey))
+          = ARRAY['name','route','user_key']::name[]
+  ) THEN
+    ALTER TABLE kiln_fsr_lists DROP CONSTRAINT IF EXISTS kiln_fsr_lists_pkey;
+    ALTER TABLE kiln_fsr_lists ADD CONSTRAINT kiln_fsr_lists_pkey PRIMARY KEY (route, user_key, name);
+  END IF;
+END $$;
+
+-- ADR-018 (active/dormant freshness tiers): route rows track last activity
+-- (SSE subscription or read) so fetchStaleSlots can eagerly revalidate only
+-- active routes, leaving dormant stale slots for lazy on-read rebuild.
+ALTER TABLE kiln_fsr ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMP`;
