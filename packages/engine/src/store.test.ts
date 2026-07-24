@@ -93,6 +93,27 @@ async function runTests() {
     stale = await store.fetchStaleSlots();
     assert.equal(stale.length, 0);
 
+    // Task 6: a fresh render's re-upsertSlot (boot.ts step 12) must itself
+    // clear staleness — that's how the dormant-rebuild-on-read flow (boot.ts)
+    // "just works" without an extra explicit markFresh call. Re-invalidate
+    // the slot, then upsert it again (as a fresh render would) and confirm
+    // ON CONFLICT resets stale to FALSE.
+    console.log('Testing upsertSlot resets stale on conflict (fresh render)...');
+    await store.invalidateDepKey('dep_key_x');
+    rows = await store.fetchAllForInspect();
+    assert.equal(rows.find(r => r.slot === 'slot_a')?.stale, true, 'precondition: slot is stale again');
+    await store.upsertSlot(
+      '/test-route-1',
+      'slot_a',
+      'SELECT val FROM t WHERE id = $1',
+      { id: 10 },
+      ['dep_key_x'],
+      5,
+      'val'
+    );
+    rows = await store.fetchAllForInspect();
+    assert.equal(rows.find(r => r.slot === 'slot_a')?.stale, false, 'upsertSlot ON CONFLICT clears stale — a fresh render is fresh by definition');
+
     // 5. getPromotedPaths & setBakedPaths
     console.log('Testing setBakedPaths and getPromotedPaths...');
     await store.setBakedPaths('/test-route-1', '/tmp/baked.html', '/tmp/baked.json');

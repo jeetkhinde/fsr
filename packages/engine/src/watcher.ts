@@ -27,6 +27,10 @@ export interface WatcherConfig {
   purgeAfterSeconds: number;
   purgeSweepSeconds?: number;
   revalidateSeconds?: number;
+  /** Only eagerly revalidate stale slots on routes active within this many
+   * seconds (last_active_at). Undefined = revalidate all stale slots
+   * unconditionally (today's behavior, no dormancy tier). */
+  activeWindowSecs?: number;
   /** Directory the watcher's event cursor file lives in. Default '.kiln-cache'. */
   cacheDir?: string;
   scheduledInvalidations: ScheduledInvalidation[];
@@ -427,7 +431,7 @@ export class FsrWatcher {
   /** Single tick for both polling and Redis modes — Redis-specific steps
    * no-op when no Redis client is configured. */
   private async watcherTick(): Promise<void> {
-    const stale = await this.store.fetchStaleSlots();
+    const stale = await this.store.fetchStaleSlots({ activeWindowSecs: this.config.activeWindowSecs });
     if (stale.length === 0) {
       await this.processStaleLists();
       return;

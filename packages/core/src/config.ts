@@ -58,6 +58,10 @@ export interface FsrConfig {
    * into its live fields' depends_on. Default on; set false to opt out and
    * rely solely on each field's explicit dependsOn list. */
   autoDeps?: boolean;
+  /** Only eagerly revalidate stale snapshots on routes active within this
+   * many seconds (last_active_at). Dormant routes' stale snapshots are left
+   * for lazy rebuild-on-read instead. Default 30 when unset (see initFsr). */
+  activeWindowSecs?: number;
 }
 
 export interface ReactRuntimeConfig {

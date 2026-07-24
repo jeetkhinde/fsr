@@ -287,6 +287,18 @@ export function buildPageHandler(
       // fresh render, which re-bakes in step 11.
       await cache.delete(req.path, variant);
     }
+    // A validated artifact can still be sitting on stale data: if the route
+    // is dormant (no recent last_active_at), the watcher's eager loop never
+    // revalidated it (Task 5's activeWindowSecs gate). Rebuild on this read
+    // rather than serve known-stale content — the fresh render below re-bakes
+    // and upsertSlot clears the stale flag.
+    if (materialized && store && typeof store.fetchDormantStaleSlot === 'function') {
+      const dormant = await store.fetchDormantStaleSlot(req.path, userKey);
+      if (dormant) {
+        await cache.delete(req.path, variant);
+        materialized = null;
+      }
+    }
     if (materialized) {
       if (kilnConfig?.fsr?.watcher === 'external') {
         const loaded = await loadPageProps();

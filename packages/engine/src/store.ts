@@ -119,7 +119,8 @@ export class FsrStore {
         query_params  = EXCLUDED.query_params,
         depends_on    = EXCLUDED.depends_on,
         debounce_secs = EXCLUDED.debounce_secs,
-        column_name   = EXCLUDED.column_name
+        column_name   = EXCLUDED.column_name,
+        stale         = FALSE
     `;
   }
 

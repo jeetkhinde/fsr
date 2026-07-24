@@ -1102,6 +1102,46 @@ describe('buildPageHandler', () => {
 
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
+
+  it('rebuilds a dormant stale snapshot on read instead of serving it stale', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-dormant-'));
+    const { createElement } = await import('react');
+    let n = 0;
+    let dormantStale = false;
+    const store = {
+      ensureRouteRow: async () => {},
+      isTombstoned: async () => false,
+      setBakedPaths: async () => {},
+      touchRoute: async () => {},
+      fetchDormantStaleSlot: async (_route: string, _userKey: string) => {
+        if (!dormantStale) return null;
+        dormantStale = false; // one-shot: cleared once observed, like a real stale flag flip
+        return { route: '/dz', slot: 'n', userKey: '', query: null, queryParams: null, dependsOn: [], promoted: true, debounceSecs: null, htmlPath: null, jsonPath: null, columnName: null, patchMode: null };
+      },
+      __setDormantStale: (_route: string, _userKey: string, val: boolean) => {
+        dormantStale = val;
+      },
+    };
+    const pageModule = {
+      load: async () => ({ n: ++n }),
+      default: ({ n }: any) => createElement('div', null, `n=${n}`),
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/dz', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      store as any,
+    );
+    await handler(makeReq({ path: '/dz' }) as any, makeRes()); // bake n=1
+    (store as any).__setDormantStale('/dz', '', true); // slot goes stale, dormant
+    const r2 = makeRes();
+    await handler(makeReq({ path: '/dz' }) as any, r2);
+    expect(r2.captured?.body).toContain('n=2'); // rebuilt, not served stale
+    expect(n).toBe(2);
+    await fs.rm(tmpDir, { recursive: true });
+  });
 });
 
 describe('applyLivePropMarkers', () => {
