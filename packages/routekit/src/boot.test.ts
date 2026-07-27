@@ -1013,6 +1013,95 @@ describe('buildPageHandler', () => {
     await fs.rm(tmpDir, { recursive: true });
   });
 
+  it('snapshots slot versions BEFORE load() and passes them to upsertSlot (stale race guard)', async () => {
+    // upsertSlot clears `stale` so a rebuild-on-read doesn't leave the flag
+    // set forever, but it must not swallow an invalidation that landed while
+    // load() was running — on a dormant route neither freshness tier would
+    // ever notice, so the snapshot would serve pre-invalidation data
+    // indefinitely. The guard is the slot's `version` as observed before
+    // load(); capturing it after would already include that invalidation.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-stalerace-'));
+    const { createElement } = await import('react');
+    const { Live } = await import('@kiln/core');
+    const calls: string[] = [];
+    const upserts: any[] = [];
+    let version = 7;
+    const store = {
+      ensureRouteRow: async () => {},
+      isTombstoned: async () => false,
+      setBakedPaths: async () => {},
+      touchRoute: async () => {},
+      fetchSlotVersions: async () => {
+        calls.push('fetchSlotVersions');
+        return { count: version };
+      },
+      upsertSlot: async (...args: any[]) => {
+        upserts.push(args);
+      },
+    };
+    const pageModule = {
+      load: async () => {
+        calls.push('load');
+        // A dependency write lands mid-render: invalidateDepKey bumps version.
+        version = 8;
+        return { count: Live.value(0) };
+      },
+      default: ({ count }: any) => createElement('div', null, `n=${count}`),
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/race', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      store as any,
+    );
+    await handler(makeReq({ path: '/race' }) as any, makeRes());
+
+    expect(calls).toEqual(['fetchSlotVersions', 'load']); // ordering is the whole point
+    const countUpsert = upserts.find((a) => a[1] === 'count');
+    expect(countUpsert).toBeDefined();
+    // expectedVersion (arg index 8) is the PRE-load value, so the store's
+    // guard sees a version mismatch and declines to clear the stale flag.
+    expect(countUpsert[8]).toBe(7);
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it('skips the pre-load version snapshot once a route is known to have no live fields', async () => {
+    // The snapshot is only useful to upsertSlot, which only runs for pages
+    // with live fields — a plain static page must not pay a Postgres query
+    // per render for it. First render can't know yet, so it still asks.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-stalerace-skip-'));
+    const { createElement } = await import('react');
+    let versionCalls = 0;
+    const store = {
+      ensureRouteRow: async () => {},
+      isTombstoned: async () => false,
+      setBakedPaths: async () => {},
+      touchRoute: async () => {},
+      fetchSlotVersions: async () => { versionCalls++; return {}; },
+      upsertSlot: async () => {},
+    };
+    const pageModule = {
+      load: async () => ({ title: 'no live fields here' }),
+      default: ({ title }: any) => createElement('div', null, title),
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/plain', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      store as any,
+    );
+    await handler(makeReq({ path: '/plain' }) as any, makeRes());
+    expect(versionCalls).toBe(1); // first render: live fields still unknown
+    await handler(makeReq({ path: '/plain?x=1' }) as any, makeRes());
+    await handler(makeReq({ path: '/plain?x=2' }) as any, makeRes());
+    expect(versionCalls).toBe(1); // now known live-field-free: no further queries
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
   it('unions auto-derived tables with an explicit dependsOn, never replacing it', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-autodep-union-'));
     const { createElement } = await import('react');

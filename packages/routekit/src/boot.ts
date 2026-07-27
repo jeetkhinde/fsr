@@ -180,6 +180,13 @@ export function buildPageHandler(
     lastTouched.set(key, now);
     void store.touchRoute(route, userKey).catch(() => {});
   };
+  // Highest live-field count this route has ever produced in this process.
+  // null = never rendered yet, so we can't rule live fields out. Gates the
+  // pre-load version snapshot below so a page that demonstrably has no live
+  // fields (the common static case) doesn't pay a query it can't use.
+  // Monotonic on purpose: a page whose live fields are conditional must keep
+  // snapshotting once it has shown any.
+  let maxLiveFieldsSeen: number | null = null;
 
   const handle = async (req: KilnRequest, res: KilnResponse) => {
     // 1. Resolve layout patterns for content negotiation
@@ -245,11 +252,27 @@ export function buildPageHandler(
     // the tables it actually reads. Populated once, by the real per-request
     // load() call (not the watcher's later background loader re-runs).
     let observedTables: string[] = [];
+    // Each live slot's `version` as of BEFORE load() ran. Handed back to
+    // upsertSlot (step 12) so it can tell whether a dependency write landed
+    // *during* this render — if it did, the slot must stay stale rather than
+    // have its flag reset over data that predates the write. Must be awaited
+    // before load(), not raced with it: a snapshot that lands after load()'s
+    // own read would already reflect the invalidation it exists to catch.
+    let slotVersionsAtLoad: Record<string, number> = {};
     const loadPageProps = async () => {
       if (pagePropsLoaded) return pageProps;
       pagePropsLoaded = true;
       if (typeof module.load !== 'function') return pageProps;
       try {
+        if (
+          store &&
+          typeof store.fetchSlotVersions === 'function' &&
+          (maxLiveFieldsSeen === null || maxLiveFieldsSeen > 0)
+        ) {
+          slotVersionsAtLoad = await store
+            .fetchSlotVersions(req.path, userKey)
+            .catch(() => ({}));
+        }
         const tracker = createPurityTracker(req);
         const { result, tables } = await withDepCapture(async () => module.load(tracker.proxied));
         observedTables = [...tables];
@@ -657,6 +680,11 @@ export function buildPageHandler(
 
     // 12. Persist live fields on pageMeta (extracted once at step 7)
     const liveFields = pageLiveFields;
+    // Feeds the pre-load version-snapshot gate above. Recorded even when the
+    // upsert branch below is skipped (tombstoned, wrong variant) — what it
+    // answers is "can this route produce live fields at all", not "did we
+    // write them this time".
+    maxLiveFieldsSeen = Math.max(maxLiveFieldsSeen ?? 0, liveFields.length);
     if (store && liveFields.length > 0 && !tombstoned && (!variant || isUserVariant)) {
       // Auto-deps (default on): union tables observed during this request's
       // load() into every live field's explicit deps, so a field declared
@@ -680,6 +708,10 @@ export function buildPageHandler(
           field.debounce ?? options.debounce ?? kilnConfig?.fsr?.patchDebounceSecs,
           null,
           userKey,
+          // Undefined for a slot that didn't exist pre-load (INSERT path, or
+          // the gate above skipped the snapshot) — upsertSlot then leaves
+          // `stale` alone instead of clearing it blind.
+          slotVersionsAtLoad[field.name],
         );
       }
       const loaderReq = makeLoaderRequest(req, isUserVariant);

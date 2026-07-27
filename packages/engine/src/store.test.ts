@@ -98,10 +98,16 @@ async function runTests() {
     // "just works" without an extra explicit markFresh call. Re-invalidate
     // the slot, then upsert it again (as a fresh render would) and confirm
     // ON CONFLICT resets stale to FALSE.
+    //
+    // The render passes the version it observed BEFORE load() — see the
+    // race-guard section further down for why clearing unconditionally is
+    // unsafe. Here nothing invalidates mid-render, so the version still
+    // matches and the flag clears.
     console.log('Testing upsertSlot resets stale on conflict (fresh render)...');
     await store.invalidateDepKey('dep_key_x');
     rows = await store.fetchAllForInspect();
     assert.equal(rows.find(r => r.slot === 'slot_a')?.stale, true, 'precondition: slot is stale again');
+    const slotAVersion = (await store.fetchSlotVersions('/test-route-1'))['slot_a'];
     await store.upsertSlot(
       '/test-route-1',
       'slot_a',
@@ -109,7 +115,9 @@ async function runTests() {
       { id: 10 },
       ['dep_key_x'],
       5,
-      'val'
+      'val',
+      '',
+      slotAVersion
     );
     rows = await store.fetchAllForInspect();
     assert.equal(rows.find(r => r.slot === 'slot_a')?.stale, false, 'upsertSlot ON CONFLICT clears stale — a fresh render is fresh by definition');
@@ -218,6 +226,70 @@ async function runTests() {
     // dormant slot is still individually fetchable for on-read rebuild
     const dormant = await store.fetchDormantStaleSlot('/dormant-r');
     assert.equal(dormant?.slot, 's');
+
+    // upsertSlot's stale-clearing races invalidation (ADR-018 follow-up).
+    //
+    // upsertSlot clears `stale` so a rebuild-on-read doesn't leave the flag
+    // set forever. But a dependency write landing between the render's
+    // load() and its upsertSlot must NOT have its stale=TRUE swallowed: on a
+    // DORMANT route neither freshness tier would ever notice (the watcher
+    // skips dormant routes, and the read path's rebuild triggers only on
+    // stale=TRUE), so that snapshot would serve the pre-invalidation data
+    // until the next dependency write. invalidateDepKey already bumps
+    // `version`, so a version captured before load() is the guard.
+    console.log('Testing upsertSlot stale/invalidation race guard...');
+    await store.ensureRouteRow('/race-r', 300, 3600, 'json');
+    await store.upsertSlot('/race-r', 's', null, [], ['race_dep'], 0);
+
+    // Snapshot the version the way boot.ts does — BEFORE load() runs.
+    const versionsBeforeLoad = await store.fetchSlotVersions('/race-r');
+    assert.equal(typeof versionsBeforeLoad['s'], 'number', 'fetchSlotVersions returns a numeric version per slot');
+
+    // ...an invalidation lands mid-render...
+    await store.invalidateDepKey('race_dep');
+    const staleOf = async (route: string, slot: string, userKey = '') =>
+      (await store.fetchAllForInspect()).find(
+        (r) => r.route === route && r.slot === slot && r.userKey === userKey,
+      )?.stale;
+    assert.equal(await staleOf('/race-r', 's'), true);
+
+    // ...and the render finishes, upserting with its now-outdated version.
+    // The guard must decline to clear: this render's data predates the write.
+    await store.upsertSlot('/race-r', 's', null, [], ['race_dep'], 0, null, '', versionsBeforeLoad['s']);
+    assert.equal(
+      await staleOf('/race-r', 's'),
+      true,
+      'an invalidation during the render must survive upsertSlot',
+    );
+
+    // The next render captures the CURRENT version and does clear it —
+    // otherwise the route would rebuild on every read forever.
+    const versionsAfter = await store.fetchSlotVersions('/race-r');
+    await store.upsertSlot('/race-r', 's', null, [], ['race_dep'], 0, null, '', versionsAfter['s']);
+    assert.equal(
+      await staleOf('/race-r', 's'),
+      false,
+      'an uncontended render still clears stale',
+    );
+
+    // No expectedVersion (a caller that cannot prove it observed a
+    // pre-load version) leaves `stale` alone rather than clearing blind.
+    await store.invalidateDepKey('race_dep');
+    await store.upsertSlot('/race-r', 's', null, [], ['race_dep'], 0);
+    assert.equal(
+      await staleOf('/race-r', 's'),
+      true,
+      'omitting expectedVersion must not clear stale',
+    );
+
+    // A first-ever slot still starts fresh (INSERT path, column default).
+    await store.upsertSlot('/race-r', 'brand-new', null, [], ['race_dep'], 0);
+    assert.equal(await staleOf('/race-r', 'brand-new'), false, 'a newly inserted slot is not stale');
+    assert.equal(
+      (await store.fetchSlotVersions('/race-r'))['brand-new'],
+      0,
+      'a newly inserted slot starts at version 0',
+    );
 
     console.log('🎉 FsrStore and RedisCache integration tests PASSED!');
   } finally {

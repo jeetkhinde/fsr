@@ -92,6 +92,41 @@ export class FsrStore {
     `;
   }
 
+  /** Slot → `version` for one (route, user_key), for callers that need to
+   * detect an invalidation landing mid-render. Snapshot this BEFORE running
+   * `load()` and hand each slot's value back to `upsertSlot` as
+   * `expectedVersion`; capturing it afterwards would already include the very
+   * invalidation the guard exists to notice. Absent slots are simply missing
+   * from the result (they'll take upsertSlot's INSERT path). */
+  async fetchSlotVersions(route: string, userKey = ''): Promise<Record<string, number>> {
+    const rows = await this.sql`
+      SELECT slot, version FROM kiln_fsr
+      WHERE route = ${route} AND user_key = ${userKey} AND slot != ''`;
+    const out: Record<string, number> = {};
+    for (const r of rows as any[]) out[r.slot] = Number(r.version);
+    return out;
+  }
+
+  /**
+   * @param expectedVersion the slot's `version` as observed BEFORE this
+   * render's `load()` ran. `stale` is cleared only if the row still carries
+   * that version — i.e. nothing invalidated the slot while we were rendering.
+   *
+   * Clearing `stale` unconditionally would swallow any invalidation that
+   * landed between `load()` reading the data and this write, leaving the
+   * freshly baked artifact holding pre-invalidation data with its stale flag
+   * reset. On an ACTIVE route the time-based `revalidate_secs` branch of
+   * fetchStaleSlots eventually recovers, but a DORMANT route has neither
+   * tier — the watcher skips it and the read path's rebuild only triggers on
+   * `stale = TRUE` — so it would serve that snapshot until the next
+   * dependency write. `invalidateDepKey` bumps `version` alongside setting
+   * `stale`, which is what makes the comparison meaningful.
+   *
+   * Omitting it leaves `stale` untouched rather than clearing blind. Both
+   * failure directions are safe: a version that moved for a benign reason
+   * (`markFresh` also bumps it) just costs one redundant rebuild, which
+   * re-reads the current version and clears the flag then.
+   */
   async upsertSlot(
     route: string,
     slot: string,
@@ -100,19 +135,20 @@ export class FsrStore {
     dependsOn: string[],
     debounceSecs?: number,
     columnName?: string | null,
-    userKey = ''
+    userKey = '',
+    expectedVersion?: number
   ): Promise<void> {
     await this.sql`
       INSERT INTO kiln_fsr
         (route, slot, user_key, query, query_params, depends_on, debounce_secs, column_name)
       VALUES (
-        ${route}, 
-        ${slot}, 
+        ${route},
+        ${slot},
         ${userKey},
-        ${querySql}, 
+        ${querySql},
         ${queryParams}::jsonb,
         ARRAY(SELECT jsonb_array_elements_text(${dependsOn}::jsonb))::text[],
-        ${debounceSecs ?? null}, 
+        ${debounceSecs ?? null},
         ${columnName ?? null}
       )
       ON CONFLICT (route, user_key, slot) DO UPDATE SET
@@ -121,7 +157,12 @@ export class FsrStore {
         depends_on    = EXCLUDED.depends_on,
         debounce_secs = EXCLUDED.debounce_secs,
         column_name   = EXCLUDED.column_name,
-        stale         = FALSE
+        stale         = CASE
+                          WHEN ${expectedVersion ?? null}::int IS NOT NULL
+                           AND kiln_fsr.version = ${expectedVersion ?? null}::int
+                          THEN FALSE
+                          ELSE kiln_fsr.stale
+                        END
     `;
   }
 
