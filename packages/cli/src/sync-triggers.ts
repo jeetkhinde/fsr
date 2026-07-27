@@ -25,12 +25,25 @@ export async function syncTriggers(
 ): Promise<SyncResult[]> {
   const out: SyncResult[] = [];
   for (const t of tables) {
-    const name = triggerName(t.table);
     // Trigger args are string literals: depKey, then the optional owner column.
     // Identifiers (table/trigger name) are validated here, never interpolated raw.
-    assertIdent(t.table); assertIdent(name);
+    assertIdent(t.table);
+    // Fold to the identifier Postgres actually resolves. An unquoted
+    // `CREATE TABLE SyncTrigMixed` is stored as `synctrigmixed`, and auto-deps'
+    // extractTables folds what it captures the same way — so a verbatim
+    // `SyncTrigMixed` depKey could never match a captured dep (silent
+    // under-invalidation), and the verbatim trigger name could never match the
+    // folded one Postgres stored, making the existence probe miss and every run
+    // re-CREATE. Quoted, case-preserving table names are not supported (see
+    // assertIdent, which rejects the quotes outright).
+    const table = t.table.toLowerCase();
+    const name = triggerName(table);
+    assertIdent(name);
     if (t.ownerColumn) assertIdent(t.ownerColumn);
-    const depKey = t.depKey ?? t.table;
+    // Only the DEFAULT depKey folds. An explicit depKey is an arbitrary
+    // user-chosen string matched verbatim against hand-written dependsOn
+    // lists, not an identifier, so folding it would break those lists.
+    const depKey = t.depKey ?? table;
     const eventList = t.events ?? ['insert', 'update', 'delete'];
     for (const e of eventList) {
       // `events` reaches the CREATE TRIGGER text uninterpolated-by-parameter,
@@ -52,15 +65,15 @@ export async function syncTriggers(
       SELECT pg_get_triggerdef(tg.oid) AS def
       FROM pg_trigger tg
       WHERE tg.tgname = ${name}
-        AND tg.tgrelid = ${t.table}::regclass
+        AND tg.tgrelid = ${table}::regclass
         AND NOT tg.tgisinternal`;
     if (existing.length > 0) {
       const def = String(existing[0].def ?? '');
       if (triggerDefMatches(def, events, args)) { out.push({ table: t.table, action: 'exists' }); continue; }
       if (opts.check) { out.push({ table: t.table, action: 'outdated' }); continue; }
-      await sql.unsafe(`DROP TRIGGER ${name} ON ${t.table}`);
+      await sql.unsafe(`DROP TRIGGER ${name} ON ${table}`);
       await sql.unsafe(
-        `CREATE TRIGGER ${name} AFTER ${events} ON ${t.table} ` +
+        `CREATE TRIGGER ${name} AFTER ${events} ON ${table} ` +
         `FOR EACH ROW EXECUTE FUNCTION kiln_emit_event(${args})`);
       out.push({ table: t.table, action: 'updated' });
       continue;
@@ -68,7 +81,7 @@ export async function syncTriggers(
     if (opts.check) { out.push({ table: t.table, action: 'missing' }); continue; }
 
     await sql.unsafe(
-      `CREATE TRIGGER ${name} AFTER ${events} ON ${t.table} ` +
+      `CREATE TRIGGER ${name} AFTER ${events} ON ${table} ` +
       `FOR EACH ROW EXECUTE FUNCTION kiln_emit_event(${args})`);
     out.push({ table: t.table, action: 'created' });
   }
