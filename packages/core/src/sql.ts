@@ -18,6 +18,29 @@ export function extractTables(query: string): string[] {
   return [...out];
 }
 
+/** Query shapes already warned about. Deduped and bounded: an unparseable
+ * table reference is a property of the CODE, not of the request, so the same
+ * call site firing thousands of times adds nothing after the first. */
+const warnedUnresolved = new Set<string>();
+
+/** Over-capture costs an extra revalidation; under-capture serves stale data
+ * with nothing logged anywhere. A dynamically-interpolated table name —
+ * sql("name"), which reaches the template as a bound `?` — is invisible to
+ * extractTables, so it is exactly that silent direction and deserves a word. */
+function warnUnresolvedTableRef(query: string): void {
+  // A query that touches no table at all (SELECT 1, SELECT now()) is not a
+  // miss — warning on those turns this into noise people learn to scroll past.
+  if (!/\b(?:from|join|into|update)\b/i.test(query)) return;
+  if (warnedUnresolved.has(query) || warnedUnresolved.size >= 100) return;
+  warnedUnresolved.add(query);
+  console.warn(
+    `[kiln] auto-deps found no table in: ${query.trim()}\n` +
+    `  A dynamically-interpolated table name is invisible to dependency capture, so live ` +
+    `fields on this page will not revalidate when that table changes. Give the field an ` +
+    `explicit dependsOn.`,
+  );
+}
+
 export function collectDeps(): Set<string> | null {
   return depScope.getStore() ?? null;
 }
@@ -53,7 +76,12 @@ export function createKilnSql(url: string): SQL {
     // whenever a capture scope is active (Plan 3 review Important #3).
     if (isTemplateStringsArray(strings)) {
       const scope = depScope.getStore();
-      if (scope) for (const t of extractTables(strings.join(' ? '))) scope.add(t);
+      if (scope) {
+        const query = strings.join(' ? ');
+        const found = extractTables(query);
+        if (found.length === 0) warnUnresolvedTableRef(query);
+        for (const t of found) scope.add(t);
+      }
     }
     return (base as any)(strings, ...values);
   };
