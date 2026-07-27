@@ -4,6 +4,68 @@ Historical record of fixed framework bugs, kept out of the active file to keep s
 
 > **Last full verification**: 2026-07-12 (Gemini-audit round 2). `tsc --noEmit` clean across every package; unit suite 149 pass / 0 fail.
 
+## 1. Fixed in the 2026-07-27 source audit (branch `fix/emit-event-non-bigint-id`)
+
+Self-audit of the framework at `758eb44`, all six findings verified against source before fixing
+and each fixed test-first. One hypothesis raised during the audit (that `DeepPartial` silently made
+required config fields optional) was **disproved** by a `tsc` probe and never filed.
+
+*   **`kiln_emit_event` broke writes on any table without a bigint-castable `id` (HIGH)** — the
+    function declared `record_id BIGINT` and assigned `NEW.id`/`OLD.id` directly. As an
+    `AFTER … FOR EACH ROW` trigger, anything raised inside it aborts the **application's** write,
+    not just the invalidation: a uuid PK failed the cast (`invalid input syntax for type bigint`)
+    and a table with no `id` raised `record "new" has no field "id"`. Both verified against live
+    Postgres. `sync-triggers` installed it with no preconditions checked, so ordinary schemas (uuid
+    PKs, composite-key join tables) broke at the first write. Now TEXT read via
+    `to_jsonb(NEW) ->> 'id'`: missing keys yield NULL instead of raising, and no cast is attempted.
+    A null id costs only row-level targeting — consumers already guard `id !== null` before building
+    `depKey:id`, and the table-level depKey still invalidates. Applied via `CREATE OR REPLACE`, so
+    existing deployments upgrade on next boot with no migration.
+    (`packages/engine/src/schema.ts`, `packages/engine/src/emit-event.test.ts`)
+
+*   **Auto-deps folded table names, `sync-triggers` didn't — silent under-invalidation** — Postgres
+    stores unquoted `CREATE TABLE SyncTrigMixed` as `synctrigmixed` and `extractTables` lowercases
+    what it captures, but the config string was used verbatim. A mixed-case `table` therefore emitted
+    a depKey no captured dep could ever equal (`invalidateDepKey` matches with `= ANY(depends_on)`),
+    so writes invalidated nothing with no error anywhere; separately the existence probe compared the
+    verbatim trigger name against the folded one Postgres stored, so it never matched and every run
+    re-CREATEd. The table name is now folded once for the probe, the DDL target, and the default
+    depKey. An **explicit** depKey stays verbatim — it is an arbitrary key matched against
+    hand-written `dependsOn` lists, not an identifier. (`packages/cli/src/sync-triggers.ts`)
+
+*   **SSE admission leaked a slot per ungraceful shutdown** — cross-process admission was a bare
+    `INCR` whose `DECR` lived only in the stream's `finally`. A counter can only be corrected by the
+    process that incremented it, so a SIGKILL/OOM/crash stranded its increments permanently; the
+    count drifted up across restarts and, once past `maxConnections`, refused **every** new
+    subscription app-wide, with no TTL or reconciliation — recoverable only by deleting the Redis key
+    by hand. Connections are now members of a sorted set scored by last heartbeat, so anything that
+    stops heartbeating is pruned by the next admission. The heartbeat runs on its own interval rather
+    than riding `resetKeepalive`, which restarts on every patch and so could leave a *busy*
+    connection looking like an orphan. The key carries a refreshed TTL backstop and changed name with
+    its type (`…:fsr:connections`); the legacy string key is never read again.
+    (`packages/engine/src/hub.ts`, `packages/engine/src/cache.ts`, `packages/engine/src/hub-admission.test.ts`)
+
+*   **`sync-triggers` drift repair was not transactional** — `DROP TRIGGER` and `CREATE TRIGGER` ran
+    as two separate statements; a failure in between left the table with no trigger at all and writes
+    silently stopped invalidating until someone ran `--check`. Both now run in one `sql.begin()`.
+    The regression test forces the CREATE to fail deterministically by renaming `kiln_emit_event` out
+    from under it (installed triggers follow the rename by OID) and asserts the original trigger
+    survives. (`packages/cli/src/sync-triggers.ts`)
+
+*   **Schema-qualified table names reported as "unsafe"** — `public.contacts` is an ordinary name;
+    calling it an unsafe SQL identifier sent the reader hunting for an injection problem that wasn't
+    there. Table names now get their own check naming the real limitation. Schema *support* was
+    deliberately not added: the trigger name would be malformed and `extractTables` strips the schema,
+    so `app.x` and `public.x` would collide on the single dep key `x` — accepting the config would
+    trade a clear error for a silent mis-invalidation. (`packages/cli/src/sync-triggers.ts`)
+
+*   **Auto-deps was silent when it could not parse a table reference** — a dynamically-interpolated
+    table name reaches the template as a bound placeholder, so `extractTables` captured nothing and
+    the live field simply never revalidated. `createKilnSql` now warns when a query inside a capture
+    scope yields zero tables *and* contains a FROM/JOIN/INTO/UPDATE keyword, so `SELECT 1` and
+    `SELECT now()` stay silent rather than training people to ignore it. Deduped by query shape and
+    capped. (`packages/core/src/sql.ts`)
+
 ## 0. Fixed in the 2026-07-12 audit (branch `fix/gemini-audit-round2`)
 
 Source: an external (Gemini) audit produced a 159-item list across 4 sections; each item was independently re-verified against the actual source (not taken on faith — roughly a third of the original claims were false, mischaracterized, or already-fixed).

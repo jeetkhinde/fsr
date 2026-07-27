@@ -51,13 +51,15 @@ Last updated: 2026-07-27
 
 ## Phase 5: DX & Maintainability Backlog
 
-Raised by the 2026-07-27 source audit at `758eb44`. Correctness defects from the same audit are
-**not** here — they live in [bugs-active.md](bugs-active.md) §1 and should be fixed first.
+Raised by the 2026-07-27 source audit at `758eb44`. The correctness defects from the same audit are
+**not** here — all six were fixed on `fix/emit-event-non-bigint-id` and archived in
+[bugs-resolved.md](bugs-resolved.md) §1.
 
-1. **Precondition checks + actionable errors in `kiln sync-triggers`** — pairs with
-   [bugs-active.md](bugs-active.md) §1.1/§1.5. The command should refuse to install a trigger on a
-   table it cannot support (no bigint-castable `id`) and say why, rather than installing something
-   that breaks writes at runtime. Highest-leverage DX fix in this list.
+1. **Warn at sync time when a table has no `id` column** — the remaining slice of the original
+   §1.1/§1.5 DX item. The write-breaking defect is fixed ([bugs-resolved.md](bugs-resolved.md) §1),
+   so a hard install-time failure is no longer warranted — but an `id`-less table now silently gets
+   only table-level invalidation, never the row-level `depKey:id` form. `sync-triggers` should say
+   so once, at install time, instead of leaving it to be discovered. Needs its own test.
 
 2. **Cache bound methods in the `createKilnSql` Proxy** — `packages/core/src/sql.ts:61-66` rebinds on
    every property access, so `sql.unsafe !== sql.unsafe` (a fresh bound function per `get`). Breaks
@@ -85,6 +87,14 @@ Raised by the 2026-07-27 source audit at `758eb44`. Correctness defects from the
    whole `live` block warn on use (`config.ts:228,244-251`) but are still typed and merged. Pick a
    removal release.
 
-8. **Exercise auto-deps end-to-end in an app** — see [bugs-active.md](bugs-active.md) §1 carry-forward.
-   `jags-list` has no `Live.value`/`Live.list` usage, and both §1.1 and §1.2 are defects that one
-   real live-field page would have surfaced immediately. This is the highest-value *test* gap.
+8. **Exercise auto-deps end-to-end in an app** — see [bugs-active.md](bugs-active.md) carry-forward.
+   `jags-list` has no `Live.value`/`Live.list` usage, and two of the six defects fixed on 2026-07-27
+   (the BIGINT id cast and the depKey folding mismatch) would have surfaced immediately from one real
+   live-field page. This is the highest-value *test* gap.
+
+9. **A fresh clone/worktree cannot build in one pass** (found 2026-07-27) — `test-app`'s build shells
+   out to the `kiln` binary, but `bun install` only creates that bin symlink once
+   `packages/cli/dist/cli.js` exists. So the first `bun run build` in a clean tree fails with
+   `kiln: command not found` and the sequence has to be install → build → install → build. An
+   existing workspace has the symlink from an earlier cycle, which hides this from everyone who
+   already has one. Either bootstrap `@kiln/cli` before the workspace build or invoke it by path.
