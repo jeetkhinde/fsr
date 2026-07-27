@@ -27,7 +27,7 @@ export async function syncTriggers(
   for (const t of tables) {
     // Trigger args are string literals: depKey, then the optional owner column.
     // Identifiers (table/trigger name) are validated here, never interpolated raw.
-    assertIdent(t.table);
+    assertTableIdent(t.table);
     // Fold to the identifier Postgres actually resolves. An unquoted
     // `CREATE TABLE SyncTrigMixed` is stored as `synctrigmixed`, and auto-deps'
     // extractTables folds what it captures the same way — so a verbatim
@@ -117,4 +117,19 @@ function triggerDefMatches(def: string, events: string, args: string): boolean {
 const IDENT = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 function assertIdent(s: string): void {
   if (!IDENT.test(s)) throw new Error(`[kiln] unsafe SQL identifier: ${JSON.stringify(s)}`);
+}
+
+/** Table names get their own check so `public.contacts` — a perfectly ordinary
+ * name — doesn't get reported as "unsafe", which sends the reader looking for
+ * an injection problem they don't have. Schemas genuinely aren't supported yet:
+ * the trigger name would be malformed, and auto-deps strips the schema when it
+ * captures, so `app.x` and `public.x` would collide on the single dep key `x`. */
+function assertTableIdent(s: string): void {
+  if (s.includes('.')) {
+    throw new Error(
+      `[kiln] schema-qualified table names are not supported yet: ${JSON.stringify(s)}. ` +
+      `Use the bare table name and make sure the schema is on the connection's search_path.`,
+    );
+  }
+  assertIdent(s);
 }

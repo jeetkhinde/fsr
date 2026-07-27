@@ -123,6 +123,20 @@ try {
   await sql.unsafe('ALTER FUNCTION kiln_emit_event_bak() RENAME TO kiln_emit_event');
 }
 
+// 9. `public.contacts` is a legitimate table name, not a hostile one. Saying
+// "unsafe SQL identifier" sends the reader hunting for an injection problem
+// they don't have; the real answer is that schemas aren't supported yet.
+await assert.rejects(
+  async () => syncTriggers(sql, [{ table: 'public.synctrig_demo' }], { check: false }),
+  /schema-qualified/i,
+  'a schema-qualified name must explain itself, not read as an injection attempt',
+);
+// …while genuinely malformed input must still be rejected as unsafe.
+await assert.rejects(
+  async () => syncTriggers(sql, [{ table: 'foo; DROP TABLE bar' }], { check: false }),
+  /unsafe SQL identifier/,
+);
+
 await sql`DROP TABLE IF EXISTS synctrig_demo CASCADE`;
 await sql`DROP TABLE IF EXISTS synctrig_bare CASCADE`;
 await sql`DROP TABLE IF EXISTS SyncTrigMixed CASCADE`;
