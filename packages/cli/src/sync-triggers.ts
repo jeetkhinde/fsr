@@ -71,10 +71,17 @@ export async function syncTriggers(
       const def = String(existing[0].def ?? '');
       if (triggerDefMatches(def, events, args)) { out.push({ table: t.table, action: 'exists' }); continue; }
       if (opts.check) { out.push({ table: t.table, action: 'outdated' }); continue; }
-      await sql.unsafe(`DROP TRIGGER ${name} ON ${table}`);
-      await sql.unsafe(
-        `CREATE TRIGGER ${name} AFTER ${events} ON ${table} ` +
-        `FOR EACH ROW EXECUTE FUNCTION kiln_emit_event(${args})`);
+      // One transaction, not two statements: a failure or disconnect between
+      // the DROP and the CREATE would otherwise leave the table with NO
+      // trigger, and writes would silently stop invalidating until someone
+      // happened to run --check. Postgres makes trigger DDL transactional, so
+      // a failed recreate rolls back to the trigger that was already there.
+      await sql.begin(async (tx: any) => {
+        await tx.unsafe(`DROP TRIGGER ${name} ON ${table}`);
+        await tx.unsafe(
+          `CREATE TRIGGER ${name} AFTER ${events} ON ${table} ` +
+          `FOR EACH ROW EXECUTE FUNCTION kiln_emit_event(${args})`);
+      });
       out.push({ table: t.table, action: 'updated' });
       continue;
     }

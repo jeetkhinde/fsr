@@ -91,8 +91,41 @@ assert.ok(
   'an explicit depKey must survive verbatim',
 );
 
+// 8. The drift-repair path DROPs then CREATEs. If the CREATE fails, a
+// non-transactional pair leaves the table with NO trigger at all — every write
+// silently stops invalidating until someone happens to run --check. Force the
+// CREATE to fail by renaming the function out from under it (installed triggers
+// reference it by OID, so they follow the rename and keep working), then assert
+// the original trigger is still installed.
+await sql`DROP TABLE IF EXISTS synctrig_tx CASCADE`;
+await sql`CREATE TABLE synctrig_tx (id BIGSERIAL PRIMARY KEY, owner_id TEXT)`;
+res = await syncTriggers(sql, [{ table: 'synctrig_tx', ownerColumn: 'owner_id' }], { check: false });
+assert.equal(res[0].action, 'created');
+
+await sql.unsafe('ALTER FUNCTION kiln_emit_event() RENAME TO kiln_emit_event_bak');
+try {
+  await assert.rejects(
+    async () => syncTriggers(sql, [{ table: 'synctrig_tx' }], { check: false }),
+    /kiln_emit_event/,
+    'a CREATE that cannot resolve the function must surface as an error',
+  );
+  const survived = await sql`
+    SELECT 1 FROM pg_trigger
+    WHERE tgname = 'synctrig_tx_kiln_invalidate'
+      AND tgrelid = 'synctrig_tx'::regclass AND NOT tgisinternal`;
+  assert.equal(
+    survived.length,
+    1,
+    'a failed recreate must roll back to the old trigger, not leave the table triggerless',
+  );
+} finally {
+  // Always restore: this runs against a shared test database.
+  await sql.unsafe('ALTER FUNCTION kiln_emit_event_bak() RENAME TO kiln_emit_event');
+}
+
 await sql`DROP TABLE IF EXISTS synctrig_demo CASCADE`;
 await sql`DROP TABLE IF EXISTS synctrig_bare CASCADE`;
 await sql`DROP TABLE IF EXISTS SyncTrigMixed CASCADE`;
+await sql`DROP TABLE IF EXISTS synctrig_tx CASCADE`;
 await sql.end();
 console.log('sync-triggers tests passed');
