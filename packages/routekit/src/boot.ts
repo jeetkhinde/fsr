@@ -22,6 +22,7 @@ import {
   type LiveList,
   LiveProp,
   StartupError,
+  withDepCapture,
 } from '@kiln/core';
 import {
   KilnCache,
@@ -84,6 +85,37 @@ function wantsJson(req: KilnRequest): boolean {
   const accept = req.headers.get('accept') ?? '';
   if (accept.includes('text/html')) return false;
   return accept.includes('application/json');
+}
+
+/**
+ * True when a validated cache hit for (route, userKey) is dormant-stale and
+ * must be rebuilt rather than served. Shared by both cached-read fast paths
+ * (JSON, ~step 2, and HTML, ~step 3) so a route hit only through its JSON
+ * endpoint gets the same never-serve-known-stale guarantee a promoted HTML
+ * route already had (Plan 3 review Important #1).
+ *
+ * Gated on route activity FIRST (Important #2): a route this process just
+ * confirmed active via SSE subscribe (FsrWatcher.markLocallyActive, called
+ * on subscribe) is already being kept fresh by the watcher via pg_notify, so
+ * the Postgres dormant-staleness query is skipped entirely for it — this
+ * restores the "zero-Postgres cached read path for active snapshots"
+ * guarantee. Only a route with no such local signal (genuinely dormant/cold,
+ * or active only in another process) pays the query.
+ */
+async function isDormantStale(
+  store: FsrStore | undefined,
+  watcher: FsrWatcher | undefined,
+  route: string,
+  userKey: string,
+  activeWindowSecs: number
+): Promise<boolean> {
+  if (!store || typeof store.fetchDormantStaleSlot !== 'function') return false;
+  if (watcher && typeof watcher.isLocallyActive === 'function' &&
+      watcher.isLocallyActive(route, userKey, activeWindowSecs)) {
+    return false;
+  }
+  const dormant = await store.fetchDormantStaleSlot(route, userKey);
+  return !!dormant;
 }
 
 // ---------------------------------------------------------------------------
@@ -176,6 +208,10 @@ export function buildPageHandler(
     const isUserVariant = bakeMode === 'user' && uid !== null;
     const revalidate = options.revalidate ?? kilnConfig?.fsr?.revalidateSeconds ?? 300;
     const purgeAfter = options.purgeAfter ?? kilnConfig?.fsr?.purgeAfterSeconds ?? 2_592_000;
+    // Matches the default the CLI wires into FsrWatcherConfig.activeWindowSecs
+    // (packages/cli/src/cli.ts) — keeps the read path's "is this route
+    // locally active" gate consistent with the watcher's own eager-tick window.
+    const activeWindowSecs = kilnConfig?.fsr?.activeWindowSecs ?? 30;
     const bakeEligible =
       bakeMode !== false && !knownImpure && !(bakeMode === 'user' && uid === null);
 
@@ -201,13 +237,21 @@ export function buildPageHandler(
     let rawPageProps: any = {};
     let pagePropsLoaded = false;
     let renderPure = true;
+    // Tables observed via a createKilnSql-wrapped query run inside load() —
+    // unioned into each live field's depends_on below (step 12) so
+    // Live.value(x) with no explicit dep list still revalidates on writes to
+    // the tables it actually reads. Populated once, by the real per-request
+    // load() call (not the watcher's later background loader re-runs).
+    let observedTables: string[] = [];
     const loadPageProps = async () => {
       if (pagePropsLoaded) return pageProps;
       pagePropsLoaded = true;
       if (typeof module.load !== 'function') return pageProps;
       try {
         const tracker = createPurityTracker(req);
-        rawPageProps = await module.load(tracker.proxied);
+        const { result, tables } = await withDepCapture(async () => module.load(tracker.proxied));
+        observedTables = [...tables];
+        rawPageProps = result;
         if (tracker.identityAccessed()) renderPure = false;
         assertEmbeddedLiveLists(rawPageProps, kilnConfig);
         rawPageProps = await materializeLiveLists(rawPageProps, store);
@@ -234,9 +278,17 @@ export function buildPageHandler(
           | null;
         const buildOk = !kilnConfig?.fsr?.buildId || snap?.buildId === kilnConfig.fsr.buildId;
         if (snap?.pageData && buildOk) {
-          touchRoute(req.path, userKey);
-          res.json(snap.pageData);
-          return;
+          // A route hit only via this JSON endpoint never touches the HTML
+          // dormant check below — without this it could serve known-stale
+          // pageData forever once its dependency changes (Important #1).
+          // Mirrors the HTML path's own dormant-stale handling exactly.
+          if (await isDormantStale(store, watcher, req.path, userKey, activeWindowSecs)) {
+            await cache.delete(req.path, variant);
+          } else {
+            touchRoute(req.path, userKey);
+            res.json(snap.pageData);
+            return;
+          }
         }
       }
       const data = await loadPageProps();
@@ -277,6 +329,16 @@ export function buildPageHandler(
       // Corrupt or layout-stale artifact: drop it and fall through to a
       // fresh render, which re-bakes in step 11.
       await cache.delete(req.path, variant);
+    }
+    // A validated artifact can still be sitting on stale data: if the route
+    // is dormant (no recent last_active_at), the watcher's eager loop never
+    // revalidated it (Task 5's activeWindowSecs gate). Rebuild on this read
+    // rather than serve known-stale content — the fresh render below re-bakes
+    // and upsertSlot clears the stale flag. isDormantStale gates the
+    // Postgres check itself on local activity (Important #2).
+    if (materialized && await isDormantStale(store, watcher, req.path, userKey, activeWindowSecs)) {
+      await cache.delete(req.path, variant);
+      materialized = null;
     }
     if (materialized) {
       if (kilnConfig?.fsr?.watcher === 'external') {
@@ -541,6 +603,25 @@ export function buildPageHandler(
           `updates are not supported yet (scalar LiveProp fields are) and were skipped.`,
       );
     }
+    // bake='user' on a dynamic-segment pattern (e.g. "/users/:id") is a
+    // supported combination per ADR-017, but the /__kiln/fsr SSE + snapshot
+    // handlers gate identity scoping via bakeByPattern (keyed by page.pattern,
+    // step 5 below), matched against the concrete request pathname
+    // ("/users/5"). That exact-string match never hits a dynamic pattern, so
+    // sseUserKey silently resolves to '' (the shared key) instead of this
+    // user's identity — this page's live SSE patches would not be correctly
+    // scoped to the subscribing user. Warn loudly (once per pattern) rather
+    // than let it fail silently; keyed by pattern (not req.path) so every
+    // concrete instance of this dynamic route shares one warning.
+    if (bakeMode === 'user' && watcher && pageMeta.pattern.includes(':') && pageLiveFields.length > 0) {
+      warnOnce(
+        `dynamic-user-live:${pageMeta.pattern}`,
+        `[kiln] route "${pageMeta.pattern}" combines bake='user' with a dynamic path segment ` +
+          `and LiveProp field(s); live SSE identity scoping does not currently resolve dynamic ` +
+          `path segments, so this page's live patches will not be correctly scoped to the ` +
+          `subscribing user.`,
+      );
+    }
 
     if (watcher && !tombstoned && !variant) {
       await registerLiveLists({
@@ -575,13 +656,25 @@ export function buildPageHandler(
     // 12. Persist live fields on pageMeta (extracted once at step 7)
     const liveFields = pageLiveFields;
     if (store && liveFields.length > 0 && !tombstoned && (!variant || isUserVariant)) {
+      // Auto-deps (default on): union tables observed during this request's
+      // load() into every live field's explicit deps, so a field declared
+      // with no dependsOn still gets one derived from what it actually
+      // queried. Explicit deps are preserved, never replaced — apps can opt
+      // out entirely via fsr.autoDeps: false.
+      const autoDepsEnabled = kilnConfig?.fsr?.autoDeps !== false;
       for (const field of liveFields) {
+        const dependsOn = Array.from(
+          new Set([
+            ...(field.dependsOn ? [field.dependsOn] : []),
+            ...(autoDepsEnabled ? observedTables : []),
+          ]),
+        );
         await store.upsertSlot(
           req.path,
           field.name,
           null,
           [],
-          field.dependsOn ? [field.dependsOn] : [],
+          dependsOn,
           field.debounce ?? options.debounce ?? kilnConfig?.fsr?.patchDebounceSecs,
           null,
           userKey,
@@ -1020,9 +1113,19 @@ export async function startKiln(
   }
 
   // 5. Register page routes
+  // Populated below with each page's declared bake mode so the /__kiln/fsr
+  // SSE + snapshot handlers can gate identity-scoping on it (Task 8): only
+  // bake='user' routes should ever narrow sseUserKey via identity(req) — a
+  // shared route (bake 'shared'/'static'/false/default 'auto') must always
+  // resolve userKey='' even when an identity hook is configured for other
+  // routes in the app, or its shared (userKey='') patches never reach a
+  // subscriber whose identity narrowed the key.
+  const bakeByPattern = new Map<string, BakeMode | undefined>();
   for (const page of manifest.pages) {
     const absolutePagePath = path.resolve(page.filePath);
     const mod = await import(pathToFileURL(absolutePagePath).href);
+    const pageOptions = extractPageOptions(mod);
+    bakeByPattern.set(page.pattern, pageOptions.bake);
 
     const errorFiles: PageErrorFiles = {
       errorFile: nearestSpecialFile(page.relativePath, manifest.errorPages),
@@ -1048,7 +1151,7 @@ export async function startKiln(
         buildActionHandler(mod.actions, {
           cache: new KilnCache(cacheOpts),
           identity,
-          bake: extractPageOptions(mod).bake,
+          bake: pageOptions.bake,
         })
       );
     }
@@ -1057,7 +1160,6 @@ export async function startKiln(
     // Runs the real page handler against a synthetic request so the entry is
     // fully loaded, baked, and cached — identical to what the first live
     // request would have produced.
-    const pageOptions = extractPageOptions(mod);
     if (page.hasEntries && pageOptions.bake === 'static' && typeof mod.entries === 'function') {
       Promise.resolve()
         .then(async () => {
@@ -1135,7 +1237,47 @@ export async function startKiln(
       const slots = (req.query.slots || '').split(',').filter(Boolean);
       // Resolved from the request's own session — a client cannot subscribe
       // to another user's patch stream because there is nothing to spoof.
-      const sseUserKey = identity ? identity(req) ?? '' : '';
+      // Gated on the SUBSCRIBED route's own bake mode, not merely whether an
+      // identity hook is configured for the app: a shared route must always
+      // get userKey='' (the shared row) even when other routes declare
+      // bake='user', or its shared patches never reach this subscriber.
+      const routeBake = bakeByPattern.get(route);
+      const sseUserKey = routeBake === 'user' && identity ? identity(req) ?? '' : '';
+      // A subscriber watching this (route, user) snapshot counts as activity
+      // — a page someone has open gets eager patches even though nobody is
+      // re-requesting it (which is what would otherwise bump last_active_at).
+      //
+      // This has to REPEAT for as long as the connection lives, not fire once
+      // on subscribe: last_active_at only counts as active for
+      // activeWindowSecs (default 30s), while a connection lives up to
+      // connectionTtlSecs (default 3600s). A single ping would let an open,
+      // healthy subscription fall into the dormant tier 30s in, at which
+      // point fetchStaleSlots stops claiming its slots and the client simply
+      // stops receiving live patches. fsrHubStream owns the repeat (and
+      // clears it in its finally), so the timer can't outlive the stream.
+      const activeWindowSecs = config.fsr?.activeWindowSecs ?? 30;
+      const pingActive = async () => {
+        let markedActive = true;
+        if (options.store) {
+          markedActive = await options.store.markActive(route, sseUserKey)
+            .then(() => true)
+            .catch((err: any) => {
+              console.warn(`FSR SSE: markActive failed for ${route}:`, err?.message ?? err);
+              return false;
+            });
+        }
+        // Same-process activity signal (Important #2 review fix): lets the
+        // read path's dormant-staleness check (isDormantStale) skip its own
+        // Postgres query for a route this process already knows is SSE-active.
+        // Only when markActive actually landed — otherwise the watcher's
+        // last_active_at gate won't revalidate this route either, and the
+        // local mark would suppress the one check that would have caught it.
+        if (markedActive) options.watcher?.markLocallyActive?.(route, sseUserKey);
+      };
+      // The first ping happens here, before handing off: fsrHubStream is an
+      // async generator, so nothing inside it runs until the adapter starts
+      // iterating the stream. The hub owns only the repeat.
+      await pingActive();
       const { fsrHubStream } = await import('@kiln/engine' as any);
       const stream = fsrHubStream({
         route,
@@ -1148,7 +1290,11 @@ export async function startKiln(
           keepaliveSecs: config.fsr?.keepaliveSecs ?? 30
         },
         watcher: options.watcher,
-        cache: hubCache
+        cache: hubCache,
+        onActivity: () => { void pingActive(); },
+        // Refresh at half the window so a ping is never the thing that
+        // expires: the mark is at most activeWindowSecs/2 old when read.
+        activityPingSecs: Math.max(1, Math.floor(activeWindowSecs / 2)),
       });
       res.sse(stream);
     });
@@ -1158,8 +1304,12 @@ export async function startKiln(
     adapter.registerPage('/__kiln/fsr/snapshot', [], async (req, res) => {
       const route = req.query.route || '';
       const slots = (req.query.slots || '').split(',').filter(Boolean);
+      // Same bake='user' gate as the SSE handler above — a shared route's
+      // snapshot must not be narrowed to the caller's identity.
+      const routeBake = bakeByPattern.get(route);
+      const snapshotUserKey = routeBake === 'user' && identity ? identity(req) ?? '' : '';
       const { fsrSnapshotHandler } = await import('@kiln/engine' as any);
-      const snapshot = await fsrSnapshotHandler(route, slots, options.store, identity ? identity(req) ?? '' : '');
+      const snapshot = await fsrSnapshotHandler(route, slots, options.store, snapshotUserKey);
       res.json(snapshot);
     });
   } else {

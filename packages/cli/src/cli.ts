@@ -53,6 +53,7 @@ async function initFsr(config: KilnConfig): Promise<FsrRuntime> {
     purgeAfterSeconds: config.fsr.purgeAfterSeconds,
     purgeSweepSeconds: config.fsr.purgeSweepSeconds,
     revalidateSeconds: config.fsr.revalidateSeconds,
+    activeWindowSecs: config.fsr.activeWindowSecs ?? 30,
     cacheDir: config.cache?.dir ?? '.kiln-cache',
     scheduledInvalidations: [],
   });
@@ -301,6 +302,28 @@ const buildCommand = defineCommand({
   },
 });
 
+const syncTriggersCommand = defineCommand({
+  meta: { name: 'sync-triggers', description: 'Install/verify Postgres invalidation triggers' },
+  args: { check: { type: 'boolean', description: 'Report missing triggers, write nothing', default: false } },
+  async run({ args }) {
+    const config = await loadKilnConfig();
+    if (!config.fsr?.postgresUrl) { consola.error('fsr.postgresUrl required'); process.exit(1); }
+    const tables = config.fsr.triggerTables ?? [];
+    if (tables.length === 0) { consola.warn('No fsr.triggerTables configured; nothing to do.'); return; }
+    const sql = new SQL(config.fsr.postgresUrl);
+    const store = new FsrStore(sql);
+    await store.initialize(); // ensures kiln_emit_event exists before we reference it
+    const { syncTriggers } = await import('./sync-triggers.js');
+    const results = await syncTriggers(sql, tables, { check: args.check });
+    for (const r of results) consola.info(`  ${r.table}: ${r.action}`);
+    sql.close();
+    if (args.check && results.some((r) => r.action === 'missing' || r.action === 'outdated')) {
+      consola.error('Missing or outdated triggers (run without --check to install).'); process.exit(1);
+    }
+    consola.success(args.check ? 'All triggers present.' : 'Triggers synced.');
+  },
+});
+
 const mainCommand = defineCommand({
   meta: {
     name: 'kiln',
@@ -311,6 +334,7 @@ const mainCommand = defineCommand({
     dev: devCommand,
     start: startCommand,
     build: buildCommand,
+    'sync-triggers': syncTriggersCommand,
   },
 });
 

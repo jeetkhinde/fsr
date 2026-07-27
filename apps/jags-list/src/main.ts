@@ -67,11 +67,15 @@ async function main() {
   await store.initialize();
   if (redis) await redis.getClient().send('PING', []);
   const watcher = new FsrWatcher(store, redis, {
-    pollIntervalMs: fsrConfig.pollIntervalMs,
+    // main.ts builds its own FsrWatcher (not the CLI's initFsr), so it must
+    // supply the same fallbacks the CLI applies — an unset pollIntervalMs
+    // otherwise reaches setTimeout as NaN (effectively a busy-poll loop).
+    pollIntervalMs: fsrConfig.pollIntervalMs ?? 1000,
     patchDebounceSecs: fsrConfig.patchDebounceSecs,
     purgeAfterSeconds: fsrConfig.purgeAfterSeconds,
     purgeSweepSeconds: fsrConfig.purgeSweepSeconds,
     revalidateSeconds: fsrConfig.revalidateSeconds,
+    activeWindowSecs: fsrConfig.activeWindowSecs ?? 30,
     scheduledInvalidations: [],
   });
 

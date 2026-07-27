@@ -200,6 +200,40 @@ describe('buildPageHandler', () => {
     await fs.rm(tmpDir, { recursive: true });
   });
 
+  it('serves live-patched values via the JSON fast path, not the stale bake-time pageData (Task 8)', async () => {
+    // Regression: cache.patchJsonField only patched the snapshot's `data`
+    // object, never the sibling `pageData` the JSON fast path actually
+    // reads — so a client hitting Accept: application/json after a live
+    // patch got stale props even though `data` (and the HTML shell) were
+    // fresh.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-pagedata-fresh-'));
+    const pageModule = {
+      load: async () => ({ count: 1 }),
+      default: ({ count }: any) => null,
+    };
+    const cacheOpts = { cacheDir: tmpDir, ttlSecs: 0, redis: null };
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/counter', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      cacheOpts,
+    );
+    await handler(makeReq({ path: '/counter' }) as any, makeRes()); // bakes: data.count = pageData.count = 1
+
+    // Simulate the live patch a watcher/hub applies on a value change.
+    const { KilnCache } = await import('@kiln/engine');
+    const cache = new KilnCache(cacheOpts);
+    await cache.patchJsonField('/counter', 'count', 99);
+
+    const jsonRes = makeRes();
+    await handler(
+      makeReq({ path: '/counter', headers: new Headers({ accept: 'application/json' }) }) as any,
+      jsonRes,
+    );
+    expect(jsonRes.captured.body).toEqual({ count: 99 }); // fresh, not the baked 1
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
   it('a changed fsr.buildId invalidates baked artifacts on read', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-build-'));
     const { createElement } = await import('react');
@@ -939,6 +973,116 @@ describe('buildPageHandler', () => {
     await fs.rm(tmpDir, { recursive: true });
   });
 
+  it('auto-derives depends_on from tables read during load()', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-autodep-'));
+    const { createElement } = await import('react');
+    const { Live, collectDeps } = await import('@kiln/core');
+    const upserts: any[] = [];
+    const store = {
+      ensureRouteRow: async () => {},
+      isTombstoned: async () => false,
+      setBakedPaths: async () => {},
+      touchRoute: async () => {},
+      upsertSlot: async (...args: any[]) => {
+        upserts.push(args);
+      },
+    };
+    const pageModule = {
+      load: async () => {
+        // simulate a captured query by adding to the active scope directly:
+        collectDeps()?.add('tasks');
+        return { count: Live.value(0) }; // live field, NO explicit deps
+      },
+      default: ({ count }: any) => createElement('div', null, `n=${count}`),
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/auto', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      store as any,
+    );
+    await handler(makeReq({ path: '/auto' }) as any, makeRes());
+    const countUpsert = upserts.find((a) => a[1] === 'count');
+    expect(countUpsert).toBeDefined();
+    expect(countUpsert[4]).toContain('tasks'); // dependsOn arg (index 4) unions the observed table
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it('unions auto-derived tables with an explicit dependsOn, never replacing it', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-autodep-union-'));
+    const { createElement } = await import('react');
+    const { Live, collectDeps } = await import('@kiln/core');
+    const upserts: any[] = [];
+    const store = {
+      ensureRouteRow: async () => {},
+      isTombstoned: async () => false,
+      setBakedPaths: async () => {},
+      touchRoute: async () => {},
+      upsertSlot: async (...args: any[]) => {
+        upserts.push(args);
+      },
+    };
+    const pageModule = {
+      load: async () => {
+        collectDeps()?.add('tasks');
+        return { count: Live.value(0, ['sessions']) }; // explicit dep + observed table
+      },
+      default: ({ count }: any) => createElement('div', null, `n=${count}`),
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/auto2', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      store as any,
+    );
+    await handler(makeReq({ path: '/auto2' }) as any, makeRes());
+    const countUpsert = upserts.find((a) => a[1] === 'count');
+    expect(countUpsert).toBeDefined();
+    expect(countUpsert[4]).toEqual(expect.arrayContaining(['sessions', 'tasks']));
+    expect(countUpsert[4]).toHaveLength(2);
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it('skips the auto-derived union when fsr.autoDeps is false, keeping only explicit deps', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-autodep-off-'));
+    const { createElement } = await import('react');
+    const { Live, collectDeps } = await import('@kiln/core');
+    const upserts: any[] = [];
+    const store = {
+      ensureRouteRow: async () => {},
+      isTombstoned: async () => false,
+      setBakedPaths: async () => {},
+      touchRoute: async () => {},
+      upsertSlot: async (...args: any[]) => {
+        upserts.push(args);
+      },
+    };
+    const pageModule = {
+      load: async () => {
+        collectDeps()?.add('tasks');
+        return { count: Live.value(0, ['sessions']) };
+      },
+      default: ({ count }: any) => createElement('div', null, `n=${count}`),
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/auto3', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      { fsr: { autoDeps: false } } as any,
+      store as any,
+    );
+    await handler(makeReq({ path: '/auto3' }) as any, makeRes());
+    const countUpsert = upserts.find((a) => a[1] === 'count');
+    expect(countUpsert).toBeDefined();
+    expect(countUpsert[4]).toEqual(['sessions']);
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
   it('serves different cached HTML per cacheKey variant with no cross-contamination', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-variant-'));
     const { createElement } = await import('react');
@@ -991,6 +1135,264 @@ describe('buildPageHandler', () => {
     expect(aliceRes2.captured?.body).not.toContain('bob');
 
     await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('rebuilds a dormant stale snapshot on read instead of serving it stale', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-dormant-'));
+    const { createElement } = await import('react');
+    let n = 0;
+    let dormantStale = false;
+    const store = {
+      ensureRouteRow: async () => {},
+      isTombstoned: async () => false,
+      setBakedPaths: async () => {},
+      touchRoute: async () => {},
+      fetchDormantStaleSlot: async (_route: string, _userKey: string) => {
+        if (!dormantStale) return null;
+        dormantStale = false; // one-shot: cleared once observed, like a real stale flag flip
+        return { route: '/dz', slot: 'n', userKey: '', query: null, queryParams: null, dependsOn: [], promoted: true, debounceSecs: null, htmlPath: null, jsonPath: null, columnName: null, patchMode: null };
+      },
+      __setDormantStale: (_route: string, _userKey: string, val: boolean) => {
+        dormantStale = val;
+      },
+    };
+    const pageModule = {
+      load: async () => ({ n: ++n }),
+      default: ({ n }: any) => createElement('div', null, `n=${n}`),
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/dz', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      store as any,
+    );
+    await handler(makeReq({ path: '/dz' }) as any, makeRes()); // bake n=1
+    (store as any).__setDormantStale('/dz', '', true); // slot goes stale, dormant
+    const r2 = makeRes();
+    await handler(makeReq({ path: '/dz' }) as any, r2);
+    expect(r2.captured?.body).toContain('n=2'); // rebuilt, not served stale
+    expect(n).toBe(2);
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it('rebuilds a dormant stale snapshot on the JSON fast path instead of serving stale pageData (Important #1)', async () => {
+    // Regression: the JSON fast path (Accept: application/json) read
+    // snap.pageData straight from cache with NO dormant-stale check at all.
+    // A route hit only via its JSON endpoint (never SSE-subscribed, so
+    // never "active") would serve known-stale pageData forever once its
+    // dependency changed — the watcher's eager loop skips dormant routes by
+    // design, and only the read path's own dormant check can catch this.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-dormant-json-'));
+    let n = 0;
+    let dormantStale = false;
+    const store = {
+      ensureRouteRow: async () => {},
+      isTombstoned: async () => false,
+      setBakedPaths: async () => {},
+      touchRoute: async () => {},
+      fetchDormantStaleSlot: async (_route: string, _userKey: string) => {
+        if (!dormantStale) return null;
+        dormantStale = false; // one-shot: cleared once observed, like a real stale flag flip
+        return { route: '/dzj', slot: 'n', userKey: '', query: null, queryParams: null, dependsOn: [], promoted: true, debounceSecs: null, htmlPath: null, jsonPath: null, columnName: null, patchMode: null };
+      },
+      __setDormantStale: (_route: string, _userKey: string, val: boolean) => {
+        dormantStale = val;
+      },
+    };
+    const pageModule = {
+      load: async () => ({ n: ++n }),
+      default: ({ n }: any) => null,
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/dzj', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      store as any,
+    );
+    await handler(makeReq({ path: '/dzj' }) as any, makeRes()); // bakes n=1, writes JSON snapshot
+
+    // Sanity: before invalidation, the JSON fast path serves the cached
+    // snapshot without re-running load().
+    const preRes = makeRes();
+    await handler(
+      makeReq({ path: '/dzj', headers: new Headers({ accept: 'application/json' }) }) as any,
+      preRes,
+    );
+    expect(preRes.captured.body).toEqual({ n: 1 });
+    expect(n).toBe(1);
+
+    (store as any).__setDormantStale('/dzj', '', true); // slot goes stale, dormant
+    const jsonRes = makeRes();
+    await handler(
+      makeReq({ path: '/dzj', headers: new Headers({ accept: 'application/json' }) }) as any,
+      jsonRes,
+    );
+    expect(jsonRes.captured.body).toEqual({ n: 2 }); // rebuilt, not served stale pageData
+    expect(n).toBe(2);
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it('skips the dormant-staleness Postgres check for a route this process knows is SSE-active (Important #2)', async () => {
+    // Regression: fetchDormantStaleSlot ran on EVERY validated cache hit,
+    // including hot routes the watcher is already keeping fresh via
+    // pg_notify because an SSE subscriber pinned them active in this
+    // process (FsrWatcher.markLocallyActive). That's a Postgres query on
+    // the "zero-Postgres cached read path for active snapshots" the plan's
+    // Global Constraints require staying zero-Postgres.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-active-noquery-'));
+    let n = 0;
+    let dormantCheckCalls = 0;
+    const store = {
+      ensureRouteRow: async () => {},
+      isTombstoned: async () => false,
+      setBakedPaths: async () => {},
+      touchRoute: async () => {},
+      fetchDormantStaleSlot: async (_route: string, _userKey: string) => {
+        dormantCheckCalls++;
+        // Even though the store WOULD report dormant-stale if asked, the
+        // route is locally active — the check must never fire at all.
+        return { route: '/actv', slot: 'n', userKey: '', query: null, queryParams: null, dependsOn: [], promoted: true, debounceSecs: null, htmlPath: null, jsonPath: null, columnName: null, patchMode: null };
+      },
+    };
+    const watcher = {
+      hasRegisteredRoute: () => true, // materialized cache hits respond immediately
+      isLocallyActive: (_route: string, _userKey: string, _windowSecs: number) => true,
+    };
+    const pageModule = {
+      load: async () => ({ n: ++n }),
+      default: ({ n }: any) => null,
+    };
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/actv', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      store as any,
+      watcher as any,
+    );
+    await handler(makeReq({ path: '/actv' }) as any, makeRes()); // bakes n=1
+
+    const r2 = makeRes();
+    await handler(makeReq({ path: '/actv' }) as any, r2); // cache hit, HTML path
+    expect(dormantCheckCalls).toBe(0); // never queried — isLocallyActive gated it out
+    expect(n).toBe(1); // served straight from cache, not rebuilt
+
+    const jsonRes = makeRes();
+    await handler(
+      makeReq({ path: '/actv', headers: new Headers({ accept: 'application/json' }) }) as any,
+      jsonRes,
+    ); // cache hit, JSON fast path
+    expect(dormantCheckCalls).toBe(0); // still never queried
+    expect(jsonRes.captured.body).toEqual({ n: 1 });
+
+    await fs.rm(tmpDir, { recursive: true });
+  });
+});
+
+describe("dynamic bake='user' + live fields warning (Task 8 fix)", () => {
+  async function captureWarningsAsync(fn: () => Promise<void>): Promise<string[]> {
+    const original = console.warn;
+    const warnings: string[] = [];
+    console.warn = (msg?: any) => { warnings.push(String(msg)); };
+    try {
+      await fn();
+    } finally {
+      console.warn = original;
+    }
+    return warnings;
+  }
+
+  it("warns when a dynamic-pattern page declares bake='user' with a LiveProp field", async () => {
+    // This is exactly the silently-broken combination: bakeByPattern (built
+    // at registration, keyed by page.pattern) can never match the concrete
+    // request pathname for a dynamic route, so the /__kiln/fsr SSE + snapshot
+    // handlers silently fall back to the shared ('') identity key instead of
+    // scoping to the subscribing user.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-dynuser-warn-'));
+    const { LiveProp } = await import('@kiln/core');
+    const pageModule = {
+      bake: 'user',
+      load: async () => ({ count: new LiveProp(1) }),
+      default: ({ count }: any) => null,
+    };
+    const identity = (req: any) => (req.locals as any).user ?? null;
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/users/:id', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      undefined,
+      {} as any, // watcher: truthy is enough to arm the gate; no live-list methods needed for a scalar field
+      undefined,
+      identity as any,
+    );
+    const warnings = await captureWarningsAsync(async () => {
+      await handler(makeReq({ path: '/users/5', locals: { user: 'tom' } }) as any, makeRes());
+    });
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain('/users/:id');
+    expect(warnings[0]).toContain("bake='user'");
+    expect(warnings[0]).toContain('dynamic path segment');
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it("does not warn for a static bake='user' page with a LiveProp field (this combination works correctly)", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-statuser-nowarn-'));
+    const { LiveProp } = await import('@kiln/core');
+    const pageModule = {
+      bake: 'user',
+      load: async () => ({ count: new LiveProp(1) }),
+      default: ({ count }: any) => null,
+    };
+    const identity = (req: any) => (req.locals as any).user ?? null;
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/profile', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      undefined,
+      {} as any,
+      undefined,
+      identity as any,
+    );
+    const warnings = await captureWarningsAsync(async () => {
+      await handler(makeReq({ path: '/profile', locals: { user: 'tom' } }) as any, makeRes());
+    });
+    expect(warnings).toEqual([]);
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it("does not warn for a dynamic bake='user' page with NO live fields (nothing to break)", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-dynuser-nolive-nowarn-'));
+    const pageModule = {
+      bake: 'user',
+      load: async () => ({ name: 'static value' }),
+      default: ({ name }: any) => null,
+    };
+    const identity = (req: any) => (req.locals as any).user ?? null;
+    const handler = buildPageHandler(
+      pageModule,
+      { pattern: '/users/:id', layouts: [], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      [],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      undefined,
+      {} as any,
+      undefined,
+      identity as any,
+    );
+    const warnings = await captureWarningsAsync(async () => {
+      await handler(makeReq({ path: '/users/5', locals: { user: 'tom' } }) as any, makeRes());
+    });
+    expect(warnings).toEqual([]);
+    await fs.rm(tmpDir, { recursive: true });
   });
 });
 
@@ -1144,6 +1546,144 @@ describe('startKiln islands manifest route', () => {
     expect(res.headers['cache-control']).toBe('no-store');
     expect(res.captured?.type).toBe('json');
     expect(res.captured?.body).toEqual({ version: 'none', islands: {} });
+    await fs.rm(pagesDir, { recursive: true, force: true });
+  });
+});
+
+describe('__kiln/fsr SSE subscribe', () => {
+  it('marks the (route, user) snapshot active on subscribe (Task 7)', async () => {
+    // A page someone has open in a browser tab should get eager patches even
+    // though nobody is re-requesting it — the SSE subscribe itself must ping
+    // store.markActive so the watcher's activeWindowSecs gate (Task 6) treats
+    // the route as active.
+    const pagesDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-pages-'));
+    const sseRoutes = new Map<string, (req: any, res: any) => Promise<void>>();
+    const markActiveCalls: [string, string][] = [];
+    const fakeStore: any = {
+      markActive: async (route: string, userKey = '') => {
+        markActiveCalls.push([route, userKey]);
+      },
+    };
+    const adapter: any = {
+      registerPage: () => {},
+      registerAction: () => {},
+      registerSSE: (p: string, h: any) => { sseRoutes.set(p, h); },
+      registerAsset: () => {},
+      applyMiddleware: () => {},
+      applyServerHooks: async () => {},
+      listen: async () => {},
+    };
+    await startKiln(adapter, { cache: { provider: 'filesystem' } } as any, pagesDir, { store: fakeStore } as any);
+
+    const handler = sseRoutes.get('/__kiln/fsr');
+    expect(handler).toBeDefined();
+    const res = makeRes();
+    await handler!(makeReq({ path: '/__kiln/fsr', query: { route: '/dash', slots: '' } }) as any, res);
+
+    expect(markActiveCalls).toEqual([['/dash', '']]);
+    await fs.rm(pagesDir, { recursive: true, force: true });
+  });
+
+  it('pins the (route, user) snapshot locally active on subscribe, in addition to store.markActive (Important #2)', async () => {
+    // The read path's dormant-staleness check (isDormantStale) consults
+    // FsrWatcher.isLocallyActive to skip its Postgres query for routes this
+    // process already knows are SSE-active — markLocallyActive is what
+    // populates that signal, and it must fire on every subscribe alongside
+    // the existing store.markActive call.
+    const pagesDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-pages-'));
+    const sseRoutes = new Map<string, (req: any, res: any) => Promise<void>>();
+    const markLocallyActiveCalls: [string, string | undefined][] = [];
+    const fakeStore: any = { markActive: async () => {} };
+    const fakeWatcher: any = {
+      markLocallyActive: (route: string, userKey?: string) => {
+        markLocallyActiveCalls.push([route, userKey]);
+      },
+    };
+    const adapter: any = {
+      registerPage: () => {},
+      registerAction: () => {},
+      registerSSE: (p: string, h: any) => { sseRoutes.set(p, h); },
+      registerAsset: () => {},
+      applyMiddleware: () => {},
+      applyServerHooks: async () => {},
+      listen: async () => {},
+    };
+    await startKiln(
+      adapter,
+      { cache: { provider: 'filesystem' } } as any,
+      pagesDir,
+      { store: fakeStore, watcher: fakeWatcher } as any,
+    );
+
+    const handler = sseRoutes.get('/__kiln/fsr');
+    expect(handler).toBeDefined();
+    const res = makeRes();
+    await handler!(makeReq({ path: '/__kiln/fsr', query: { route: '/dash', slots: '' } }) as any, res);
+
+    expect(markLocallyActiveCalls).toEqual([['/dash', '']]);
+    await fs.rm(pagesDir, { recursive: true, force: true });
+  });
+
+  it("scopes sseUserKey to identity only for bake='user' routes; shared routes always get userKey='' (Task 8)", async () => {
+    // Regression: the SSE handler applied identity(req) to compute
+    // sseUserKey for EVERY route regardless of that route's bake mode. With
+    // an identity hook configured, subscribing to a SHARED route incorrectly
+    // narrowed sseUserKey to the caller's identity, so that route's shared
+    // (userKey='') patches never reached the subscriber. bakeByPattern gates
+    // the identity lookup to bake='user' routes only.
+    const pagesDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-pages-'));
+    await fs.writeFile(
+      path.join(pagesDir, 'shared.ts'),
+      "export const bake = 'shared';\nexport default function Page() { return null; }\n",
+    );
+    await fs.writeFile(
+      path.join(pagesDir, 'priv.ts'),
+      "export const bake = 'user';\nexport default function Page() { return null; }\n",
+    );
+
+    const sseRoutes = new Map<string, (req: any, res: any) => Promise<void>>();
+    const markActiveCalls: [string, string][] = [];
+    const fakeStore: any = {
+      markActive: async (route: string, userKey = '') => {
+        markActiveCalls.push([route, userKey]);
+      },
+    };
+    const adapter: any = {
+      registerPage: () => {},
+      registerAction: () => {},
+      registerSSE: (p: string, h: any) => { sseRoutes.set(p, h); },
+      registerAsset: () => {},
+      applyMiddleware: () => {},
+      applyServerHooks: async () => {},
+      listen: async () => {},
+    };
+    const identity = (req: any) => (req.locals as any).user ?? null;
+    await startKiln(
+      adapter,
+      { cache: { provider: 'filesystem' } } as any,
+      pagesDir,
+      { store: fakeStore, identity: identity as any } as any,
+    );
+
+    const handler = sseRoutes.get('/__kiln/fsr');
+    expect(handler).toBeDefined();
+
+    const sharedRes = makeRes();
+    await handler!(
+      makeReq({ path: '/__kiln/fsr', query: { route: '/shared', slots: '' }, locals: { user: 'tom' } }) as any,
+      sharedRes,
+    );
+
+    const userRes = makeRes();
+    await handler!(
+      makeReq({ path: '/__kiln/fsr', query: { route: '/priv', slots: '' }, locals: { user: 'tom' } }) as any,
+      userRes,
+    );
+
+    expect(markActiveCalls).toEqual([
+      ['/shared', ''], // shared route: identity present but bake !== 'user' -> ''
+      ['/priv', 'tom'], // bake='user' route: identity applies
+    ]);
     await fs.rm(pagesDir, { recursive: true, force: true });
   });
 });

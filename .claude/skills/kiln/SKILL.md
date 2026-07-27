@@ -19,13 +19,14 @@ You are writing application code with the Kiln framework. The full, source-verif
    - Auth: `handle` hook, `req.locals`, mounting an auth library → `docs/agents/auth.md`
    - **Always skim** `docs/agents/gotchas.md` before assuming a feature exists.
 
-## Five things to get right
+## Six things to get right
 
 1. A page is a file under `pages/`; export `load()` (data), `default` (UI), optional `actions` (POST).
 2. `load()` doubles as a JSON API via content negotiation or `json_first = true`.
 3. Rendering mode is observed from load() purity; `bake = 'static' | 'shared' | 'user' | false` overrides (absent = auto). 'user' caches per user id via the hooks.ts `identity` export; needs a query-free load().
 4. Real-time data is `LiveProp`/`Live.list` (from `@kiln/core`); interactivity is islands only (from `@kiln/react`) — no full-page hydration.
-5. Several features are typed-but-unwired (`apiDir`, `_loading.tsx`, `memory`/`sqlite` cache providers, i18n) — check `gotchas.md`.
+5. Query Postgres in `load()` through `createKilnSql` (`@kiln/core`), not a plain `new SQL(url)` — it auto-derives live fields' `depends_on` from the tables queried (over-capture is safe; manual `dependsOn` keys still work for row-level precision). Pair with `kiln.config.ts`'s `fsr.triggerTables` + `kiln sync-triggers` (installs the invalidation triggers; `--check` for CI) instead of hand-writing trigger SQL. See `rendering-and-caching.md`.
+6. Several features are typed-but-unwired (`apiDir`, `_loading.tsx`, `memory`/`sqlite` cache providers, i18n) — check `gotchas.md`.
 
 ## Rule
 

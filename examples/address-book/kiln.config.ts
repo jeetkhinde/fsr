@@ -16,5 +16,10 @@ export default defineConfig({
     postgresUrl:
       process.env.DATABASE_URL ??
       'postgresql://postgres:postgres@localhost:5432/postgres',
+    // `kiln sync-triggers` installs/verifies the kiln_emit_event invalidation
+    // trigger on contact_events (run after migrations/0000_init.sql). No
+    // page currently declares a manual dependsOn against it, but the trigger
+    // is kept wired for parity with the audit-log write path in db/contacts.ts.
+    triggerTables: [{ table: 'contact_events', events: ['insert'] }],
   },
 });

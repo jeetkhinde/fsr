@@ -12,6 +12,9 @@ export default defineConfig({
     connectionTtlSecs: 3600,
     keepaliveSecs: 30,
     redisUrl: process.env.REDIS_URL || 'redis://localhost:6379',
-    postgresUrl: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/postgres'
+    postgresUrl: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/postgres',
+    // `kiln sync-triggers` installs/verifies the kiln_emit_event invalidation
+    // trigger on todo_events (run after migrations/0000_init.sql).
+    triggerTables: [{ table: 'todo_events' }]
   }
 });

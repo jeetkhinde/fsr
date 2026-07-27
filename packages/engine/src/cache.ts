@@ -223,6 +223,13 @@ export class KilnCache {
         ? existing.data as Record<string, unknown>
         : existing;
     target[field] = value;
+    // The cached-JSON fast path (Accept: application/json on a baked route)
+    // serves `pageData`, not `data` — without also patching this sibling
+    // object, a live patch would go stale there even though `data` (and the
+    // HTML shell) stayed fresh.
+    if (existing.pageData && typeof existing.pageData === 'object' && !Array.isArray(existing.pageData)) {
+      (existing.pageData as Record<string, unknown>)[field] = value;
+    }
     if ('updatedAt' in existing) existing.updatedAt = new Date().toISOString();
     await this.setJson(route, existing, variant);
   }
@@ -336,7 +343,7 @@ export class RedisCache {
   }
 
   private slotKey(route: string, variant?: string): string {
-    return `${this.keyPrefix}:slot:${route}`;
+    return variant ? `${this.keyPrefix}:slot:${route}:v:${safeVariant(variant)}` : `${this.keyPrefix}:slot:${route}`;
   }
 
   private jsonKey(route: string, variant?: string): string {
@@ -379,8 +386,11 @@ export class RedisCache {
     }
   }
 
-  async getSlots(route: string): Promise<Record<string, string>> {
-    const result = await this.client.send('HGETALL', [this.slotKey(route)]);
+  // `variant` must be threaded through here for the same reason patchSlot
+  // takes it: slotKey is now variant-scoped, so reading without the variant
+  // would look at the shared hash and never see a per-user slot's value.
+  async getSlots(route: string, variant?: string): Promise<Record<string, string>> {
+    const result = await this.client.send('HGETALL', [this.slotKey(route, variant)]);
     if (!result || typeof result !== 'object' || Array.isArray(result)) {
       if (result != null) {
         console.warn(`[kiln] RedisCache.getSlots: unexpected HGETALL shape for route "${route}", ignoring`);
@@ -418,8 +428,16 @@ export class RedisCache {
     await this.client.publish(this.patchChannel(), JSON.stringify(payload));
   }
 
-  async deleteRouteKeys(route: string): Promise<void> {
-    await this.client.send('DEL', [this.htmlKey(route), this.slotKey(route), this.jsonKey(route)]);
+  // Eviction is per (route, user_key) — purgeInactiveRoutes now returns the
+  // userKey precisely so the caller can name the variant whose keys to drop.
+  // Without it a per-user artifact outlives its own eviction and is only
+  // reclaimed by the artifact TTL (or never, when no TTL is configured).
+  async deleteRouteKeys(route: string, variant?: string): Promise<void> {
+    await this.client.send('DEL', [
+      this.htmlKey(route, variant),
+      this.slotKey(route, variant),
+      this.jsonKey(route, variant),
+    ]);
   }
 
   async disconnect(): Promise<void> {

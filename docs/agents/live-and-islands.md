@@ -37,11 +37,15 @@ Live.list<T>(options)           // see below
 | `'store'` | Updates the client store only (no DOM write) — **required inside islands** |
 | `'dom-and-store'` | Both |
 
-Dependency keys accept either form:
+### Manual dependency keys: the row-level escape hatch
+
+`dependsOn` keys accept either form:
 ```ts
 ['contacts:id=42']
 [{ table: 'contacts', column: 'id', value: '42' }]
 ```
+
+Manual keys remain fully supported alongside [auto-deps](rendering-and-caching.md#auto-derived-dependencies-auto-deps) (`createKilnSql`) — they aren't superseded by it, they compose with it. Auto-deps only ever captures **table names** (best-effort, from `FROM`/`JOIN`/`INTO`/`UPDATE`); it has no way to know a field only cares about one row. A manual `'contacts:id=42'` key is how you express that row-level precision: it still fires from the same trigger machinery (`kiln sync-triggers` / `kiln_emit_event`), but the app decides when to emit that granularity — typically by passing a row-scoped `depKey` in application code rather than relying on the generic table-level trigger, since `kiln sync-triggers`' triggers only ever emit table-level dep keys (`<table>`). If a page's field genuinely needs `contacts:id=42`-shaped invalidation, keep it as an explicit `dependsOn` entry; auto-deps will still union in whatever tables the field's `load()` query touched on top of it.
 
 ## Live.list — real-time collections with row diffing
 

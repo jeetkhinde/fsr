@@ -4,4 +4,5 @@ export * from './i18n.js';
 export * from './list.js';
 export * from './live-prop.js';
 export * from './seed-codec.js';
+export * from './sql.js';
 export * from './types.js';

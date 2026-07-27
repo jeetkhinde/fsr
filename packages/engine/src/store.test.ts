@@ -93,6 +93,27 @@ async function runTests() {
     stale = await store.fetchStaleSlots();
     assert.equal(stale.length, 0);
 
+    // Task 6: a fresh render's re-upsertSlot (boot.ts step 12) must itself
+    // clear staleness — that's how the dormant-rebuild-on-read flow (boot.ts)
+    // "just works" without an extra explicit markFresh call. Re-invalidate
+    // the slot, then upsert it again (as a fresh render would) and confirm
+    // ON CONFLICT resets stale to FALSE.
+    console.log('Testing upsertSlot resets stale on conflict (fresh render)...');
+    await store.invalidateDepKey('dep_key_x');
+    rows = await store.fetchAllForInspect();
+    assert.equal(rows.find(r => r.slot === 'slot_a')?.stale, true, 'precondition: slot is stale again');
+    await store.upsertSlot(
+      '/test-route-1',
+      'slot_a',
+      'SELECT val FROM t WHERE id = $1',
+      { id: 10 },
+      ['dep_key_x'],
+      5,
+      'val'
+    );
+    rows = await store.fetchAllForInspect();
+    assert.equal(rows.find(r => r.slot === 'slot_a')?.stale, false, 'upsertSlot ON CONFLICT clears stale — a fresh render is fresh by definition');
+
     // 5. getPromotedPaths & setBakedPaths
     console.log('Testing setBakedPaths and getPromotedPaths...');
     await store.setBakedPaths('/test-route-1', '/tmp/baked.html', '/tmp/baked.json');
@@ -150,6 +171,22 @@ async function runTests() {
     assert.equal(uSlots[0].userKey, 'u1');
     assert.equal((await store.fetchSlotsForSnapshot('/u-route', [])).length, 0); // shared scope empty
 
+    // owner-scoped invalidation (ADR-018): a depKey change with an owner marks
+    // only that user's per-user row + the shared row stale, not other users'.
+    console.log('Testing owner-scoped invalidation...');
+    await store.ensureRouteRow('/owned', 300, 3600, 'json');            // shared
+    await store.ensureRouteRow('/owned', 300, 3600, 'json', 'u1');
+    await store.ensureRouteRow('/owned', 300, 3600, 'json', 'u2');
+    await store.upsertSlot('/owned', 'feed', null, [], ['posts'], 0, null, '');   // shared slot
+    await store.upsertSlot('/owned', 'feed', null, [], ['posts'], 0, null, 'u1'); // u1 slot
+    await store.upsertSlot('/owned', 'feed', null, [], ['posts'], 0, null, 'u2'); // u2 slot
+    await store.invalidateDepKey('posts', 'u1');
+    const inspect = await store.fetchAllForInspect();
+    const slotOf = (uk: string) => inspect.find(r => r.route === '/owned' && r.slot === 'feed' && r.userKey === uk);
+    assert.equal(slotOf('')?.stale, true);   // shared always invalidated
+    assert.equal(slotOf('u1')?.stale, true);  // owner invalidated
+    assert.equal(slotOf('u2')?.stale, false); // other user untouched
+
     // 9. tombstone & isTombstoned
     console.log('Testing tombstone...');
     assert.equal(await store.isTombstoned('/test-route-1'), false);
@@ -157,7 +194,7 @@ async function runTests() {
     assert.equal(await store.isTombstoned('/test-route-1'), true);
 
     rows = await store.fetchAllForInspect();
-    assert.equal(rows.every(r => r.stale === false), true);
+    assert.equal(rows.filter(r => r.route === '/test-route-1').every(r => r.stale === false), true);
 
     const clearedHtml = await redisCache.getHtml('/test-route-1');
     assert.equal(clearedHtml, null);
@@ -165,6 +202,22 @@ async function runTests() {
     assert.deepEqual(clearedSlots, {});
     const clearedJson = await redisCache.getJson('/test-route-1');
     assert.equal(clearedJson, null);
+
+    // active/dormant tiers (ADR-018)
+    console.log('Testing active/dormant freshness...');
+    await store.ensureRouteRow('/active-r', 300, 3600, 'json');
+    await store.ensureRouteRow('/dormant-r', 300, 3600, 'json');
+    await store.upsertSlot('/active-r', 's', null, [], ['dep_x'], 0);
+    await store.upsertSlot('/dormant-r', 's', null, [], ['dep_x'], 0);
+    await store.invalidateDepKey('dep_x'); // both slots now stale
+    await store.markActive('/active-r');    // only active-r pinged
+    const active = await store.fetchStaleSlots({ activeWindowSecs: 60 });
+    const routes = active.map((s) => s.route);
+    assert.ok(routes.includes('/active-r'), 'active route revalidated eagerly');
+    assert.ok(!routes.includes('/dormant-r'), 'dormant route NOT claimed eagerly');
+    // dormant slot is still individually fetchable for on-read rebuild
+    const dormant = await store.fetchDormantStaleSlot('/dormant-r');
+    assert.equal(dormant?.slot, 's');
 
     console.log('🎉 FsrStore and RedisCache integration tests PASSED!');
   } finally {

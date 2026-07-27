@@ -22,6 +22,15 @@ export interface LiveConfig {
   purgeAfterSeconds: number;
 }
 
+export interface TriggerTableConfig {
+  table: string;
+  /** Dep key emitted on change; defaults to the table name. */
+  depKey?: string;
+  /** Column whose value scopes per-user invalidation (owner in the payload). */
+  ownerColumn?: string;
+  events?: ('insert' | 'update' | 'delete')[];
+}
+
 export interface FsrConfig {
   watcher: 'embedded' | 'external';
   pollIntervalMs: number;
@@ -43,6 +52,16 @@ export interface FsrConfig {
   /** @deprecated Use purgeAfterSeconds. */
   idleThresholdSecs?: number;
   postgresUrl?: string;
+  /** Tables `kiln sync-triggers` installs/verifies `kiln_emit_event` triggers on. */
+  triggerTables?: TriggerTableConfig[];
+  /** Union tables observed via createKilnSql queries during a page's load()
+   * into its live fields' depends_on. Default on; set false to opt out and
+   * rely solely on each field's explicit dependsOn list. */
+  autoDeps?: boolean;
+  /** Only eagerly revalidate stale snapshots on routes active within this
+   * many seconds (last_active_at). Dormant routes' stale snapshots are left
+   * for lazy rebuild-on-read instead. Default 30 when unset (see initFsr). */
+  activeWindowSecs?: number;
 }
 
 export interface ReactRuntimeConfig {

@@ -5,7 +5,8 @@ export const packageJson = (name: string) => `{
   "scripts": {
     "dev": "kiln dev",
     "build": "kiln build",
-    "start": "bun dist/main.js"
+    "start": "bun dist/main.js",
+    "db:sync-triggers": "kiln sync-triggers"
   },
   "dependencies": {
     "@kiln/core": "^0.1.0",
@@ -62,7 +63,12 @@ export default defineConfig({
     connectionTtlSecs: 3600,
     keepaliveSecs: 30,
     redisUrl: process.env.REDIS_URL || 'redis://localhost:6379',
-    postgresUrl: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/postgres'
+    postgresUrl: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/postgres',
+    // \`kiln sync-triggers\` (pnpm db:sync-triggers) installs/verifies the
+    // kiln_emit_event invalidation trigger on each table listed here — run
+    // it after applying migrations/0000_init.sql. depKey defaults to the
+    // table name, which is what the Live.list dependsOn below expects.
+    triggerTables: [{ table: 'todo_events' }]
   }
 });
 `;
@@ -210,11 +216,15 @@ A [Kiln](https://github.com/jeetkhinde/fsr) app, scaffolded with \`create-kiln\`
 2. Set \`DATABASE_URL\` (and optionally \`REDIS_URL\`) in your environment, or edit the
    defaults in \`kiln.config.ts\`.
 
-3. Run migrations:
+3. Run migrations, then install the invalidation triggers:
 
    \`\`\`sh
    psql "$DATABASE_URL" -f migrations/0000_init.sql
+   pnpm db:sync-triggers
    \`\`\`
+
+   \`db:sync-triggers\` is idempotent — safe to re-run after any migration
+   that adds/renames a table listed in \`kiln.config.ts\`'s \`fsr.triggerTables\`.
 
 4. Start the dev server:
 
@@ -248,21 +258,20 @@ FROM (VALUES
 ) AS seed(title, completed)
 WHERE NOT EXISTS (SELECT 1 FROM todos);
 
--- Invalidation function & trigger utility
-CREATE OR REPLACE FUNCTION kiln_notify_change() RETURNS trigger AS $$
-BEGIN
-  PERFORM pg_notify(
-    'kiln_invalidate',
-    json_build_object('depKey', TG_ARGV[0], 'id', NEW.id)::text
-  );
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
+-- Invalidation trigger: run \`pnpm db:sync-triggers\` (after this migration)
+-- to install/verify it. That installs the shared kiln_emit_event() function
+-- (created by FsrStore.initialize() at boot) on each table named in
+-- kiln.config.ts's fsr.triggerTables below — no hand-written trigger
+-- function needed for a table with a plain \`id\` primary key.
+--
+-- Drop any old hand-written trigger/function first if migrating an existing
+-- DB: CREATE OR REPLACE never removes a function, and a stale trigger that
+-- happens to share kiln sync-triggers' naming convention
+-- (<table>_kiln_invalidate) would block it from ever installing the real
+-- one — sync-triggers only checks whether a trigger by that name exists,
+-- not what function it points to.
 DROP TRIGGER IF EXISTS todo_events_kiln_invalidate ON todo_events;
-CREATE TRIGGER todo_events_kiln_invalidate
-AFTER INSERT ON todo_events
-FOR EACH ROW EXECUTE FUNCTION kiln_notify_change('todo_events');
+DROP FUNCTION IF EXISTS kiln_notify_change();
 `;
 
 export const mainRunner = `import { startKiln } from '@kiln/routekit';

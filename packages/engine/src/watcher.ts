@@ -27,6 +27,10 @@ export interface WatcherConfig {
   purgeAfterSeconds: number;
   purgeSweepSeconds?: number;
   revalidateSeconds?: number;
+  /** Only eagerly revalidate stale slots on routes active within this many
+   * seconds (last_active_at). Undefined = revalidate all stale slots
+   * unconditionally (today's behavior, no dormancy tier). */
+  activeWindowSecs?: number;
   /** Directory the watcher's event cursor file lives in. Default '.kiln-cache'. */
   cacheDir?: string;
   scheduledInvalidations: ScheduledInvalidation[];
@@ -56,6 +60,13 @@ interface RegisteredLoaderTarget {
 const loaderKey = (route: string, userKey?: string) => `${route}\u0000${userKey ?? ''}`;
 const variantOf = (userKey?: string) => (userKey ? `u:${userKey}` : undefined);
 
+// Bounds the same-process activity cache (markLocallyActive/isLocallyActive)
+// so a long-running server with high route/user cardinality can't grow it
+// without bound — mirrors the DEDUP_SET_MAX pattern in routekit/boot.ts.
+// Losing an entry just means the next cache hit for that (route, userKey)
+// falls back to the Postgres dormant-staleness check, never incorrect.
+const LOCAL_ACTIVE_MAX = 10_000;
+
 export class FsrWatcher {
   private active = false;
   private abortController = new AbortController();
@@ -64,6 +75,15 @@ export class FsrWatcher {
   private loaderTargets = new Map<string, RegisteredLoaderTarget>();
   private warnedUnregisteredLists = new Set<string>();
   private notificationQueue: Promise<void> = Promise.resolve();
+  // Same-process record of "this (route, userKey) was confirmed active
+  // recently" (SSE subscribe calls markLocallyActive). Lets routekit's read
+  // path skip its own dormant-staleness Postgres query for snapshots this
+  // process already knows the watcher is keeping fresh via pg_notify —
+  // restoring the zero-Postgres cached read path for active snapshots
+  // (Plan 3 review Important #2). Purely a local optimization: a route this
+  // process hasn't seen SSE traffic for (or another process's subscriber)
+  // just falls back to the Postgres check, which is always correct either way.
+  private locallyActiveAt = new Map<string, number>();
 
   constructor(
     private store: FsrStore,
@@ -77,6 +97,31 @@ export class FsrWatcher {
 
   registerLoader(target: RegisteredLoaderTarget): void {
     this.loaderTargets.set(loaderKey(target.route, target.userKey), target);
+  }
+
+  /** Removes the (route, userKey) loader registration — called when its
+   * snapshot is purged/evicted so `loaderTargets` doesn't grow unbounded as
+   * users/routes churn (Plan-2 review #4). */
+  unregisterLoader(route: string, userKey?: string): void {
+    const key = loaderKey(route, userKey);
+    this.loaderTargets.delete(key);
+    this.locallyActiveAt.delete(key);
+  }
+
+  /**
+   * Records that (route, userKey) was just confirmed active in THIS
+   * process — called on SSE subscribe. `isLocallyActive` lets the read path
+   * trust that signal instead of issuing its own Postgres dormant check.
+   */
+  markLocallyActive(route: string, userKey?: string): void {
+    if (this.locallyActiveAt.size >= LOCAL_ACTIVE_MAX) this.locallyActiveAt.clear();
+    this.locallyActiveAt.set(loaderKey(route, userKey), Date.now());
+  }
+
+  /** True if markLocallyActive(route, userKey) was called within windowSecs. */
+  isLocallyActive(route: string, userKey: string | undefined, windowSecs: number): boolean {
+    const at = this.locallyActiveAt.get(loaderKey(route, userKey));
+    return at !== undefined && Date.now() - at < windowSecs * 1000;
   }
 
   async registerLiveList<T>(
@@ -212,8 +257,8 @@ export class FsrWatcher {
   /** Returns a promise so callers (e.g. the DB notification pipeline) can
    * sequence follow-up work — like advancing the event cursor — after the
    * invalidation has actually been persisted. Errors are logged, never thrown. */
-  notifyChange(depKey: string): Promise<void> {
-    return this.store.invalidateDepKey(depKey)
+  notifyChange(depKey: string, owner?: string): Promise<void> {
+    return this.store.invalidateDepKey(depKey, owner)
       .then(async () => {
         if (this.redis) {
           await this.redis.publishInvalidate({
@@ -228,7 +273,11 @@ export class FsrWatcher {
       });
   }
 
-  notifyDelete(depKey: string): Promise<void> {
+  // NOTE: owner is accepted here for call-site symmetry with notifyChange
+  // (db-notify.ts destructures the same payload for both ops), but a DELETE
+  // tombstones the route for every user via tombstoneDependentRoutes, which
+  // isn't owner-scoped — deletes aren't part of this task's scope.
+  notifyDelete(depKey: string, owner?: string): Promise<void> {
     return this.store.tombstoneDependentRoutes(depKey).then(async (routes) => {
       if (this.redis) {
         for (const route of routes) {
@@ -268,6 +317,9 @@ export class FsrWatcher {
 
       for (const event of events) {
         const { depKey, id } = event.payload;
+        // owner-less by design: the events table doesn't yet persist `owner`
+        // in a queryable column, so cursor catch-up conservatively
+        // invalidates route-wide rather than per-owner.
         if (event.eventType === 'DELETE') {
           if (depKey) await this.store.tombstoneDependentRoutes(depKey);
           if (depKey && id !== undefined && id !== null) await this.store.tombstoneDependentRoutes(`${depKey}:${id}`);
@@ -310,8 +362,9 @@ export class FsrWatcher {
           const evicted = await this.store.purgeInactiveRoutes(this.purgeAfterSeconds());
           for (const r of evicted) {
             console.log(`FSR: idle eviction for route ${r.route}`);
+            this.unregisterLoader(r.route, r.userKey);
             if (this.redis) {
-              await this.redis.deleteRouteKeys(r.route).catch(() => {});
+              await this.redis.deleteRouteKeys(r.route, variantOf(r.userKey || undefined)).catch(() => {});
             }
             if (r.htmlPath) {
               await fs.unlink(r.htmlPath).catch(() => {});
@@ -420,7 +473,7 @@ export class FsrWatcher {
   /** Single tick for both polling and Redis modes — Redis-specific steps
    * no-op when no Redis client is configured. */
   private async watcherTick(): Promise<void> {
-    const stale = await this.store.fetchStaleSlots();
+    const stale = await this.store.fetchStaleSlots({ activeWindowSecs: this.config.activeWindowSecs });
     if (stale.length === 0) {
       await this.processStaleLists();
       return;
@@ -494,8 +547,15 @@ export class FsrWatcher {
             existing.data && typeof existing.data === 'object' && !Array.isArray(existing.data)
               ? existing.data
               : existing;
+          // Keep the sibling pageData object (read by the JSON fast path)
+          // patched alongside data — see patchJsonFileBatch above.
+          const pageDataTarget =
+            existing.pageData && typeof existing.pageData === 'object' && !Array.isArray(existing.pageData)
+              ? existing.pageData
+              : null;
           for (const [slot, val] of patches) {
             target[slot] = val;
+            if (pageDataTarget) pageDataTarget[slot] = val;
           }
           if ('updatedAt' in existing) existing.updatedAt = new Date().toISOString();
           await this.redis.setJson(route, existing, variant);
@@ -595,11 +655,18 @@ export class FsrWatcher {
         if (!snapshot && this.redis) snapshot = await this.redis.getJson(route, variant);
         if (!snapshot) continue;
         const data = snapshot.data && typeof snapshot.data === 'object' ? snapshot.data : snapshot;
+        // Keep the sibling pageData object (read by the JSON fast path)
+        // patched alongside data — see patchJsonFileBatch above.
+        const pageData =
+          snapshot.pageData && typeof snapshot.pageData === 'object' && !Array.isArray(snapshot.pageData)
+            ? snapshot.pageData
+            : null;
 
         for (const row of targetRows) {
           const raw = loaded[row.slot] as any;
           const value = raw instanceof LiveProp ? raw.value : raw;
           data[row.slot] = value;
+          if (pageData) pageData[row.slot] = value;
           const patch = createScalarPatch(route, row.slot, value) as any;
           if (userKey) patch.userKey = userKey;
           this.emitter.emit('patch', patch);
@@ -751,8 +818,14 @@ export class FsrWatcher {
         obj = {};
       }
       const target = obj.data && typeof obj.data === 'object' ? obj.data : obj;
+      // pageData is the sibling object the JSON fast path (Accept:
+      // application/json on a baked route) actually reads — must stay in
+      // lockstep with `data` or that path serves stale props.
+      const pageDataTarget =
+        obj.pageData && typeof obj.pageData === 'object' && !Array.isArray(obj.pageData) ? obj.pageData : null;
       for (const [slot, value] of patches) {
         target[slot] = value;
+        if (pageDataTarget) pageDataTarget[slot] = value;
       }
       if ('updatedAt' in obj) obj.updatedAt = new Date().toISOString();
       await atomicWrite(jsonPath, JSON.stringify(obj));

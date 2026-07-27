@@ -11,9 +11,14 @@ Requires local Postgres and Redis.
     cp .env.example .env       # set DATABASE_URL, BETTER_AUTH_SECRET, and a Redis DB index
     bun install                # from the repo root
     bun run auth:migrate       # better-auth tables (user/session/account/verification)
-    bun run db:migrate         # app tables + pg_notify triggers + role model
+    bun run db:migrate         # app tables + touch triggers + role model
+    bun run db:sync-triggers   # installs/verifies the kiln_emit_event invalidation triggers
     bun run bootstrap-superadmin -- you@example.com <password> "Your Name" <handle>
     bun run dev                # http://localhost:3200
+
+Run `db:sync-triggers` again after any migration that adds/renames a table
+listed in `kiln.config.ts`'s `fsr.triggerTables` — it's idempotent (safe to
+re-run; a table whose trigger already exists is a no-op).
 
 Note: from a fresh git worktree, build the framework packages first
 (`bun run --filter '@kiln/*' build` at the repo root) — the `@kiln/*` deps
@@ -43,6 +48,16 @@ All pages are server-rendered: their `load()` reads the session, so the bake
 classifier (ADR-016) keeps them pure SSR automatically. Live updates and the
 drag-and-drop board island arrive in Plan 3.
 
+Cache invalidation is table-level and hands-off: `db/client.ts` uses
+`createKilnSql`, which auto-records the tables a page's `load()` reads (no
+manual dep keys); `kiln.config.ts`'s `fsr.triggerTables` + `kiln
+sync-triggers` install the generic Postgres triggers that fire on writes to
+those tables. `notifications` names `ownerColumn: 'user_id'` so one user's
+notification invalidates only that user's cached data, never every user's.
+`task_labels` is the one exception — its composite primary key has no `id`
+column, so it keeps a hand-written trigger (see the comment above it in
+`migrations/0000_init.sql`).
+
 ## Inviting teammates
 
 Sign in as an admin or superadmin → **Team** → create an invite (role: admin or
@@ -56,6 +71,7 @@ invites are the only way in.
     bun run test:app                                      # spawns the app; needs Postgres + Redis
     bun run test:crud                                     # spawns the app; projects/board/task/activity
     bun run test:purity                                   # spawns the app; cross-user render isolation
+    bun run test:freshness                                # spawns the app; auto-dep + owner-scoped invalidation
 
 ## Auth architecture (short version)
 

@@ -142,70 +142,29 @@ DROP TRIGGER IF EXISTS invites_touch ON invites;
 CREATE TRIGGER invites_touch BEFORE UPDATE ON invites FOR EACH ROW EXECUTE FUNCTION jags_touch_updated_at();
 
 -- ---------------------------------------------------------------------------
--- kiln_invalidate notifications. Contract (packages/engine/src/db-notify.ts):
--- payload {"depKey": string, "op": string}; op='DELETE' tombstones dependent
--- routes, anything else invalidates them. Dep-key matching is EXACT, so we
--- emit full key strings. List-scoped keys always use op 'UPDATE'; only
--- entity-page keys (projects:id=, tasks:id=) pass TG_OP through.
+-- kiln_invalidate notifications.
+--
+-- projects/columns/tasks/subtasks/comments/labels/activity/notifications used
+-- to each have a hand-written jags_notify_<table>() trigger emitting one or
+-- more row-scoped dep keys (e.g. "tasks:project_id=5", "tasks:id=9"). That
+-- granularity is now provided generically by `kiln sync-triggers` (run after
+-- this migration — see README) via packages/engine/src/schema.ts's
+-- kiln_emit_event() trigger function, at table-level depKey granularity
+-- (e.g. "tasks"), matching what createKilnSql's auto-deps records when a
+-- page's load() queries these tables (db/client.ts). Investigation (Task 9)
+-- found the old row-scoped keys were never load-bearing: no jags-list page
+-- uses Live.value/Live.list with an explicit dependsOn, and no page's cached
+-- artifact ever had one of these keys in its `depends_on` column, so
+-- table-level granularity is a safe, behavior-preserving replacement.
+--
+-- task_labels is the one exception and keeps its hand-written trigger below:
+-- its primary key is composite (task_id, label_id) with no surrogate `id`
+-- column, and kiln_emit_event() unconditionally reads NEW.id/OLD.id — it
+-- would raise "record NEW has no field id" the first time the trigger fired.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION jags_notify(dep_key TEXT, op TEXT) RETURNS void AS $$
 BEGIN
   PERFORM pg_notify('kiln_invalidate', json_build_object('depKey', dep_key, 'op', op)::text);
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE FUNCTION jags_notify_projects() RETURNS trigger AS $$
-DECLARE r RECORD;
-BEGIN
-  IF TG_OP = 'DELETE' THEN r := OLD; ELSE r := NEW; END IF;
-  PERFORM jags_notify('projects:all', 'UPDATE');
-  PERFORM jags_notify('projects:id=' || r.id, TG_OP);
-  RETURN r;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE FUNCTION jags_notify_columns() RETURNS trigger AS $$
-DECLARE r RECORD;
-BEGIN
-  IF TG_OP = 'DELETE' THEN r := OLD; ELSE r := NEW; END IF;
-  PERFORM jags_notify('columns:project_id=' || r.project_id, 'UPDATE');
-  RETURN r;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE FUNCTION jags_notify_tasks() RETURNS trigger AS $$
-DECLARE r RECORD;
-BEGIN
-  IF TG_OP = 'DELETE' THEN r := OLD; ELSE r := NEW; END IF;
-  PERFORM jags_notify('tasks:project_id=' || r.project_id, 'UPDATE');
-  PERFORM jags_notify('tasks:id=' || r.id, TG_OP);
-  RETURN r;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE FUNCTION jags_notify_subtasks() RETURNS trigger AS $$
-DECLARE r RECORD;
-BEGIN
-  IF TG_OP = 'DELETE' THEN r := OLD; ELSE r := NEW; END IF;
-  PERFORM jags_notify('subtasks:task_id=' || r.task_id, 'UPDATE');
-  RETURN r;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE FUNCTION jags_notify_comments() RETURNS trigger AS $$
-DECLARE r RECORD;
-BEGIN
-  IF TG_OP = 'DELETE' THEN r := OLD; ELSE r := NEW; END IF;
-  PERFORM jags_notify('comments:task_id=' || r.task_id, 'UPDATE');
-  RETURN r;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE FUNCTION jags_notify_labels() RETURNS trigger AS $$
-BEGIN
-  PERFORM jags_notify('labels:all', 'UPDATE');
-  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
-  RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -222,54 +181,27 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION jags_notify_activity() RETURNS trigger AS $$
-BEGIN
-  PERFORM jags_notify('activity:project_id=' || NEW.project_id, 'UPDATE');
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE FUNCTION jags_notify_notifications() RETURNS trigger AS $$
-DECLARE r RECORD;
-BEGIN
-  IF TG_OP = 'DELETE' THEN r := OLD; ELSE r := NEW; END IF;
-  PERFORM jags_notify('notifications:user_id=' || r.user_id, 'UPDATE');
-  RETURN r;
-END;
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS projects_kiln_invalidate ON projects;
-CREATE TRIGGER projects_kiln_invalidate AFTER INSERT OR UPDATE OR DELETE ON projects
-FOR EACH ROW EXECUTE FUNCTION jags_notify_projects();
-
-DROP TRIGGER IF EXISTS columns_kiln_invalidate ON columns;
-CREATE TRIGGER columns_kiln_invalidate AFTER INSERT OR UPDATE OR DELETE ON columns
-FOR EACH ROW EXECUTE FUNCTION jags_notify_columns();
-
-DROP TRIGGER IF EXISTS tasks_kiln_invalidate ON tasks;
-CREATE TRIGGER tasks_kiln_invalidate AFTER INSERT OR UPDATE OR DELETE ON tasks
-FOR EACH ROW EXECUTE FUNCTION jags_notify_tasks();
-
-DROP TRIGGER IF EXISTS subtasks_kiln_invalidate ON subtasks;
-CREATE TRIGGER subtasks_kiln_invalidate AFTER INSERT OR UPDATE OR DELETE ON subtasks
-FOR EACH ROW EXECUTE FUNCTION jags_notify_subtasks();
-
-DROP TRIGGER IF EXISTS comments_kiln_invalidate ON comments;
-CREATE TRIGGER comments_kiln_invalidate AFTER INSERT OR UPDATE OR DELETE ON comments
-FOR EACH ROW EXECUTE FUNCTION jags_notify_comments();
-
-DROP TRIGGER IF EXISTS labels_kiln_invalidate ON labels;
-CREATE TRIGGER labels_kiln_invalidate AFTER INSERT OR UPDATE OR DELETE ON labels
-FOR EACH ROW EXECUTE FUNCTION jags_notify_labels();
-
 DROP TRIGGER IF EXISTS task_labels_kiln_invalidate ON task_labels;
 CREATE TRIGGER task_labels_kiln_invalidate AFTER INSERT OR UPDATE OR DELETE ON task_labels
 FOR EACH ROW EXECUTE FUNCTION jags_notify_task_labels();
 
+-- Drop the retired per-table functions/triggers from any DB that already ran
+-- the old version of this migration — CREATE OR REPLACE never removes a
+-- function, and a stale trigger left attached would double-fire alongside
+-- the new kiln sync-triggers-managed one.
+DROP TRIGGER IF EXISTS projects_kiln_invalidate ON projects;
+DROP TRIGGER IF EXISTS columns_kiln_invalidate ON columns;
+DROP TRIGGER IF EXISTS tasks_kiln_invalidate ON tasks;
+DROP TRIGGER IF EXISTS subtasks_kiln_invalidate ON subtasks;
+DROP TRIGGER IF EXISTS comments_kiln_invalidate ON comments;
+DROP TRIGGER IF EXISTS labels_kiln_invalidate ON labels;
 DROP TRIGGER IF EXISTS activity_kiln_invalidate ON activity;
-CREATE TRIGGER activity_kiln_invalidate AFTER INSERT ON activity
-FOR EACH ROW EXECUTE FUNCTION jags_notify_activity();
-
 DROP TRIGGER IF EXISTS notifications_kiln_invalidate ON notifications;
-CREATE TRIGGER notifications_kiln_invalidate AFTER INSERT OR UPDATE OR DELETE ON notifications
-FOR EACH ROW EXECUTE FUNCTION jags_notify_notifications();
+DROP FUNCTION IF EXISTS jags_notify_projects();
+DROP FUNCTION IF EXISTS jags_notify_columns();
+DROP FUNCTION IF EXISTS jags_notify_tasks();
+DROP FUNCTION IF EXISTS jags_notify_subtasks();
+DROP FUNCTION IF EXISTS jags_notify_comments();
+DROP FUNCTION IF EXISTS jags_notify_labels();
+DROP FUNCTION IF EXISTS jags_notify_activity();
+DROP FUNCTION IF EXISTS jags_notify_notifications();

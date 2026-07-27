@@ -16,6 +16,25 @@ export default function Page({ post, ts }: Awaited<ReturnType<typeof load>>) { �
 
 `req` carries `params`, `query`, headers, `formData()`, and the request context. Type props with `Awaited<ReturnType<typeof load>>` so the component and loader can't drift.
 
+### Querying Postgres from `load()` — get auto-deps for free
+
+Wrap your DB client with `createKilnSql` (`@kiln/core`) instead of a plain `new SQL(url)`:
+
+```ts
+// db/client.ts
+import { createKilnSql } from '@kiln/core';
+export const sql = createKilnSql(process.env.DATABASE_URL!);
+```
+
+```tsx
+export async function load() {
+  const post = await sql`SELECT * FROM posts WHERE id = ${req.params.id}`;
+  return { post: post[0], views: Live.value(post[0].views) };
+}
+```
+
+Every table a query touches during this `load()` is recorded automatically and unioned into that render's live fields' `depends_on` — no manual dependency bookkeeping. Outside a page render (a one-off script, a migration) `createKilnSql` behaves exactly like `new SQL(url)`. Full recipe, the `triggerTables` config that backs it, and the row-level manual-key escape hatch: [rendering-and-caching.md](rendering-and-caching.md#auto-derived-dependencies-auto-deps) and [live-and-islands.md](live-and-islands.md#manual-dependency-keys-the-row-level-escape-hatch).
+
 ## Every page is also a JSON endpoint
 
 There are **two** ways to get JSON out of a page — you rarely need a separate `api/` folder.
