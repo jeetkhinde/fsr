@@ -14,8 +14,9 @@ Last updated: 2026-07-17
 
 RESOLVED (ADR-016, 2026-07-19): the bake classifier now keeps session-reading
 pages pure SSR automatically; the per-page `promote_after = false` workaround
-exports were removed. Previously this worked around the absent-`promote_after` defect
-(see root [`../../.memory/bugs-active.md`](../../.memory/bugs-active.md) §1; ADR-015).
+exports were removed. Previously this worked around the absent-`promote_after`
+defect (ADR-015); the framework bug entry it used to cite is gone from
+[`../../.memory/bugs-active.md`](../../.memory/bugs-active.md) now that it's fixed.
 
 ## Next
 
