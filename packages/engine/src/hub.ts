@@ -21,7 +21,7 @@ export const defaultHubConfig: FsrHubConfig = {
 // open rather than blocking the SSE stream on a cache outage).
 let activeConnectionsCount = 0;
 
-const REDIS_CONN_COUNT_KEY = 'kiln:fsr:active-connections';
+const REDIS_CONNECTIONS_KEY = 'kiln:fsr:connections';
 
 /** Local-process count. With Redis configured, the *enforced* cross-process
  * limit uses a separate Redis-backed counter this getter doesn't reflect —
@@ -40,27 +40,66 @@ function releaseConnectionLocal(): void {
   activeConnectionsCount = Math.max(0, activeConnectionsCount - 1);
 }
 
+/** How long a connection may go without a heartbeat before another process is
+ * entitled to reclaim its slot. Must comfortably exceed the heartbeat cadence
+ * (which is staleMs/3) or live connections would evict each other. */
+export function connectionStaleMs(keepaliveSecs: number): number {
+  return Math.max(keepaliveSecs, 10) * 3 * 1000;
+}
+
+export interface RedisAdmission {
+  admit(): Promise<boolean>;
+  refresh(): Promise<void>;
+  release(): Promise<void>;
+}
+
 /**
- * Redis-backed admission: atomically increments first and backs out if that
- * pushed the count over the limit — the standard INCR-then-correct pattern
- * (INCR itself is atomic; a connection that loses the race between two
- * processes' INCRs just gets immediately DECRemented back, so the count
- * never permanently overshoots). Only called when a Redis client exists —
- * kept separate from the local-counter path (rather than one function
- * branching internally) so the common no-Redis case stays fully
- * synchronous and doesn't pay an extra microtask hop on every connection.
+ * Cross-process admission backed by a sorted set of connection ids scored by
+ * last heartbeat, rather than a bare counter.
+ *
+ * A counter can only be corrected by the same process that incremented it, so
+ * an ungraceful exit strands its increments forever: the count drifts up across
+ * restarts and eventually refuses every connection app-wide, fixable only by
+ * deleting the key by hand. Scored members need no such cooperation — anything
+ * that stops heartbeating is pruned by the next admission, so crash recovery
+ * happens on its own.
+ *
+ * Only used when a Redis client exists; the no-Redis path stays on the
+ * synchronous local counter and pays no extra hop.
  */
-async function admitConnectionRedis(
+export function createRedisAdmission(
   redis: NonNullable<ReturnType<KilnCache['getClient']>>,
+  key: string,
   maxConnections: number,
-  connCountKey: string
-): Promise<boolean> {
-  const count = await redis.incr(connCountKey);
-  if (count > maxConnections) {
-    await redis.decr(connCountKey);
-    return false;
-  }
-  return true;
+  staleMs: number,
+  connId: string = crypto.randomUUID(),
+): RedisAdmission {
+  const touch = async () => {
+    await redis.send('ZADD', [key, String(Date.now()), connId]);
+    // Backstop TTL so a fully-stopped app doesn't leave the key behind forever
+    // — that permanent orphan is the very leak this replaces. Refreshed on
+    // every heartbeat, so it only matures once nothing is connected at all.
+    await redis.send('EXPIRE', [key, String(Math.ceil((staleMs * 2) / 1000))]);
+  };
+  return {
+    async admit() {
+      await redis.send('ZREMRANGEBYSCORE', [key, '-inf', String(Date.now() - staleMs)]);
+      await touch();
+      const count = Number(await redis.send('ZCARD', [key]));
+      if (count > maxConnections) {
+        // Claim-then-correct, the same shape the old INCR/DECR used: a
+        // connection that loses the race against another process simply hands
+        // the slot straight back, so the set never permanently overshoots.
+        await redis.send('ZREM', [key, connId]);
+        return false;
+      }
+      return true;
+    },
+    refresh: touch,
+    async release() {
+      await redis.send('ZREM', [key, connId]);
+    },
+  };
 }
 
 /**
@@ -127,16 +166,19 @@ export async function* fsrHubStream(options: FsrHubStreamOptions): AsyncGenerato
   // wide cap becomes maxConnections * workerCount). The no-Redis path stays
   // fully synchronous — no added await, no behavior change from before.
   const redisClient = cache?.getClient();
-  // Per-namespace connection counter key (default `kiln:fsr:active-connections`).
-  const connCountKey = cache?.fsrConnectionCountKey() ?? REDIS_CONN_COUNT_KEY;
-  let usedRedis = false;
+  // Per-namespace connection set key (default `kiln:fsr:connections`).
+  const connKey = cache?.fsrConnectionsKey() ?? REDIS_CONNECTIONS_KEY;
+  const staleMs = connectionStaleMs(config.keepaliveSecs);
+  let admission: RedisAdmission | null = null;
   let admitted: boolean;
   if (redisClient) {
     try {
-      admitted = await admitConnectionRedis(redisClient, config.maxConnections, connCountKey);
-      usedRedis = true;
+      const candidate = createRedisAdmission(redisClient, connKey, config.maxConnections, staleMs);
+      admitted = await candidate.admit();
+      admission = candidate;
     } catch (err: any) {
       console.warn('FSR hub: Redis connection-count check failed, falling back to local counter:', err?.message ?? err);
+      admission = null;
       admitted = admitConnectionLocal(config.maxConnections);
     }
   } else {
@@ -193,6 +235,20 @@ export async function* fsrHubStream(options: FsrHubStreamOptions): AsyncGenerato
   };
 
   resetKeepalive();
+
+  // Deliberately NOT folded into resetKeepalive: that timer is restarted on
+  // every patch, so a busy connection can go indefinitely without ever firing
+  // it — and would then be pruned as an orphan while very much alive. The
+  // heartbeat has to live on its own un-reset interval.
+  let heartbeatTimer: NodeJS.Timeout | null = null;
+  if (admission) {
+    const claimed = admission;
+    heartbeatTimer = setInterval(() => {
+      claimed.refresh().catch((err: any) => {
+        console.warn('FSR hub: Redis connection heartbeat failed:', err?.message ?? err);
+      });
+    }, Math.max(1000, Math.floor(staleMs / 3)));
+  }
 
   // Keeps this (route, userKey) in the "active" freshness tier for the whole
   // life of the subscription — see FsrHubStreamOptions.onActivity.
@@ -266,11 +322,13 @@ export async function* fsrHubStream(options: FsrHubStreamOptions): AsyncGenerato
       }
     }
   } finally {
-    if (usedRedis && redisClient) {
+    if (admission) {
       try {
-        await redisClient.decr(connCountKey);
+        await admission.release();
       } catch (err: any) {
-        console.warn('FSR hub: Redis connection-count release failed:', err?.message ?? err);
+        // Not fatal any more: an unreleased member ages out of the set on its
+        // own, so a failure here costs one slot for staleMs, not forever.
+        console.warn('FSR hub: Redis connection release failed:', err?.message ?? err);
       }
     } else {
       releaseConnectionLocal();
@@ -278,6 +336,7 @@ export async function* fsrHubStream(options: FsrHubStreamOptions): AsyncGenerato
     emitter.off('patch', onPatch);
     signal?.removeEventListener('abort', onAbort);
     if (keepaliveTimer) clearInterval(keepaliveTimer);
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
     if (activityTimer) clearInterval(activityTimer);
     clearTimeout(ttlTimer);
   }
