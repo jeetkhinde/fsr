@@ -179,9 +179,21 @@ per-route "has this page ever produced live fields" memo so static pages
 don't pay the query. Omitting `expectedVersion` leaves `stale` untouched
 rather than clearing blind. Both failure directions cost at most one
 redundant rebuild — `markFresh` also bumps `version`, so a benign bump just
-defers the clear to the next render. `markFresh` itself has the same race
-but is bounded by `revalidate_secs` on active routes and unreachable on
-dormant ones; left alone. The read path's
+defers the clear to the next render.
+
+`markFresh` is version-guarded the same way, on the watcher's side of the
+same race: it clears `stale` after a requery, and an invalidation arriving
+between the claim and that write was being swallowed. `StaleSlot` now
+carries the `version` the slot was claimed at (`fetchStaleSlots`,
+`fetchDormantStaleSlot`, `fetchSlotsForSnapshot`), and both watcher call
+sites hand it back. Unlike `upsertSlot`, omitting `expectedVersion` clears
+unconditionally — deliberate asymmetry: `upsertSlot` runs on every render of
+a live-field page and has no inherent claim its data is current, while
+`markFresh` exists *because* the caller just revalidated. `refresh_claimed_until`
+and `last_patched_at` are written either way, so a declined clear still
+releases the claim for the next tick (rather than parking the slot for the
+30s claim window) and still applies the slot's debounce to the retry. The
+read path's
 dormant check (`fetchDormantStaleSlot`) is one **awaited** Postgres SELECT
 per validated cache hit on any route without a local SSE-active mark: the
 "zero-Postgres cached read" guarantee now holds only for actively-watched

@@ -11,6 +11,9 @@ export interface StaleSlot {
   route: string;
   slot: string;
   userKey: string;
+  /** The row's `version` when this slot was read/claimed. Hand it back to
+   * `markFresh` so an invalidation arriving during the requery isn't cleared. */
+  version: number;
   query: string | null;
   queryParams: any;
   dependsOn: string[];
@@ -335,7 +338,7 @@ export class FsrStore {
         FROM candidates c, kiln_fsr r
         WHERE s.route = c.route AND s.slot = c.slot AND s.user_key = c.user_key
           AND r.route = s.route AND r.user_key = s.user_key AND r.slot = ''
-        RETURNING s.route, s.slot, s.user_key as "userKey", s.query, s.query_params as "queryParams",
+        RETURNING s.route, s.slot, s.user_key as "userKey", s.version, s.query, s.query_params as "queryParams",
                   s.depends_on as "dependsOn", (r.html_path IS NOT NULL) as "promoted",
                   s.debounce_secs as "debounceSecs", r.html_path as "htmlPath",
                   r.json_path as "jsonPath", s.column_name as "columnName", r.patch_mode as "patchMode"
@@ -372,7 +375,7 @@ export class FsrStore {
         FROM candidates c, kiln_fsr r
         WHERE s.route = c.route AND s.slot = c.slot AND s.user_key = c.user_key
           AND r.route = s.route AND r.user_key = s.user_key AND r.slot = ''
-        RETURNING s.route, s.slot, s.user_key as "userKey", s.query, s.query_params as "queryParams",
+        RETURNING s.route, s.slot, s.user_key as "userKey", s.version, s.query, s.query_params as "queryParams",
                   s.depends_on as "dependsOn", (r.html_path IS NOT NULL) as "promoted",
                   s.debounce_secs as "debounceSecs", r.html_path as "htmlPath",
                   r.json_path as "jsonPath", s.column_name as "columnName", r.patch_mode as "patchMode"
@@ -383,6 +386,7 @@ export class FsrStore {
       route: r.route,
       slot: r.slot,
       userKey: r.userKey ?? '',
+      version: Number(r.version ?? 0),
       query: r.query,
       queryParams: r.queryParams,
       dependsOn: r.dependsOn || [],
@@ -448,10 +452,38 @@ export class FsrStore {
     }));
   }
 
-  async markFresh(route: string, slot: string, userKey = ''): Promise<void> {
+  /**
+   * @param expectedVersion the slot's `version` as of when the caller CLAIMED
+   * it (`fetchStaleSlots` returns it). `stale` is cleared only if the row
+   * still carries that version — an invalidation landing while the requery
+   * was in flight bumps it, and that write must not be swallowed.
+   *
+   * Unlike `upsertSlot`, omitting it clears unconditionally. The asymmetry is
+   * deliberate: `upsertSlot` runs on every render of a page with live fields
+   * and has no inherent claim that its data is current, so clearing blind
+   * there is simply wrong. `markFresh` exists *because* the caller just
+   * performed a revalidation — "I refreshed this" is its contract, and a
+   * caller that never claimed the slot (a test, a manual freshen) has no
+   * version to offer and still means it.
+   *
+   * `refresh_claimed_until` and `last_patched_at` are updated either way: the
+   * claim must be released even when the flag survives, or the slot sits
+   * unclaimable for the 30s claim window instead of being re-requeried on the
+   * next tick. `last_patched_at` is honest — a patch really was written out,
+   * it just turned out to be superseded — and it makes the slot's debounce
+   * apply to the retry, so a stream of invalidations can't hot-loop the
+   * watcher.
+   */
+  async markFresh(route: string, slot: string, userKey = '', expectedVersion?: number): Promise<void> {
     await this.sql`
       UPDATE kiln_fsr
-      SET stale = FALSE, version = version + 1, last_patched_at = NOW(),
+      SET stale = CASE
+                    WHEN ${expectedVersion ?? null}::int IS NULL
+                      OR version = ${expectedVersion ?? null}::int
+                    THEN FALSE
+                    ELSE stale
+                  END,
+          version = version + 1, last_patched_at = NOW(),
           refresh_claimed_until = NULL
       WHERE route = ${route} AND slot = ${slot} AND user_key = ${userKey}
     `;
@@ -461,7 +493,7 @@ export class FsrStore {
     let rows: any[];
     if (slots.length === 0) {
       rows = await this.sql`
-        SELECT s.route, s.slot, s.user_key as "userKey", s.query, s.query_params as "queryParams", s.depends_on as "dependsOn",
+        SELECT s.route, s.slot, s.user_key as "userKey", s.version, s.query, s.query_params as "queryParams", s.depends_on as "dependsOn",
                (r.html_path IS NOT NULL) as "promoted", s.debounce_secs as "debounceSecs", r.html_path as "htmlPath",
                r.json_path as "jsonPath", s.column_name as "columnName", r.patch_mode as "patchMode"
         FROM kiln_fsr s
@@ -471,7 +503,7 @@ export class FsrStore {
       `;
     } else {
       rows = await this.sql`
-        SELECT s.route, s.slot, s.user_key as "userKey", s.query, s.query_params as "queryParams", s.depends_on as "dependsOn",
+        SELECT s.route, s.slot, s.user_key as "userKey", s.version, s.query, s.query_params as "queryParams", s.depends_on as "dependsOn",
                (r.html_path IS NOT NULL) as "promoted", s.debounce_secs as "debounceSecs", r.html_path as "htmlPath",
                r.json_path as "jsonPath", s.column_name as "columnName", r.patch_mode as "patchMode"
         FROM kiln_fsr s
@@ -485,6 +517,7 @@ export class FsrStore {
       route: r.route,
       slot: r.slot,
       userKey: r.userKey ?? '',
+      version: Number(r.version ?? 0),
       query: r.query,
       queryParams: r.queryParams,
       dependsOn: r.dependsOn || [],
@@ -499,7 +532,7 @@ export class FsrStore {
 
   async fetchDormantStaleSlot(route: string, userKey = ''): Promise<StaleSlot | null> {
     const rows = await this.sql`
-      SELECT s.route, s.slot, s.user_key as "userKey", s.query, s.query_params as "queryParams", s.depends_on as "dependsOn",
+      SELECT s.route, s.slot, s.user_key as "userKey", s.version, s.query, s.query_params as "queryParams", s.depends_on as "dependsOn",
              (r.html_path IS NOT NULL) as "promoted", s.debounce_secs as "debounceSecs", r.html_path as "htmlPath",
              r.json_path as "jsonPath", s.column_name as "columnName", r.patch_mode as "patchMode"
       FROM kiln_fsr s
@@ -513,6 +546,7 @@ export class FsrStore {
       route: r.route,
       slot: r.slot,
       userKey: r.userKey ?? '',
+      version: Number(r.version ?? 0),
       query: r.query,
       queryParams: r.queryParams,
       dependsOn: r.dependsOn || [],

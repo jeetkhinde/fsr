@@ -598,7 +598,10 @@ export class FsrWatcher {
       }
 
       try {
-        await this.store.markFresh(slotRow.route, slotRow.slot, slotRow.userKey);
+        // slotRow.version is the version fetchStaleSlots claimed this slot
+        // at — passing it back keeps an invalidation that arrived during the
+        // requery from being cleared by this write.
+        await this.store.markFresh(slotRow.route, slotRow.slot, slotRow.userKey, slotRow.version);
       } catch (e: any) {
         console.warn(`FSR watcher: failed to mark slot fresh for ${slotRow.route}/${slotRow.slot}:`, e.message);
       }
@@ -670,7 +673,7 @@ export class FsrWatcher {
           const patch = createScalarPatch(route, row.slot, value) as any;
           if (userKey) patch.userKey = userKey;
           this.emitter.emit('patch', patch);
-          await this.store.markFresh(route, row.slot, userKey);
+          await this.store.markFresh(route, row.slot, userKey, row.version);
         }
         if ('updatedAt' in snapshot) snapshot.updatedAt = new Date().toISOString();
         if (paths?.jsonPath) await atomicWrite(paths.jsonPath, JSON.stringify(snapshot));
