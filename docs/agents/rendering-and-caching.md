@@ -51,11 +51,11 @@ A DB mutation fires `pg_notify('kiln_invalidate', …)` → `FsrWatcher` → Red
 
 ## Auto-derived dependencies (auto-deps)
 
-A live field doesn't need a manual `dependsOn` — Kiln can observe which tables `load()` touched and derive it. Swap the page's Postgres client for `createKilnSql` (`@kiln/core`) and every table queried through it during a request is unioned into that render's `LiveProp`/`Live.list` fields' `depends_on`:
+A live field doesn't need a manual `dependsOn` — Kiln can observe which tables `load()` touched and derive it. Swap the page's Postgres client for `createKilnSql` (`@kiln/core/sql`) and every table queried through it during a request is unioned into that render's `LiveProp`/`Live.list` fields' `depends_on`:
 
 ```ts
 // db/client.ts
-import { createKilnSql } from '@kiln/core';
+import { createKilnSql } from '@kiln/core/sql';
 export const sql = createKilnSql(process.env.DATABASE_URL!);
 ```
 
@@ -74,7 +74,7 @@ export async function load() {
 }
 ```
 
-- **What it captures**: `boot.ts` runs every request's real `load()` call inside `withDepCapture` (`@kiln/core`); `createKilnSql` records the table names parsed out of each tagged-template query into that capture scope. When a page's live fields are persisted, the observed tables are unioned into each field's `depends_on` — an explicit `Live.value(x, ['sessions'])` still keeps `'sessions'`, plus whatever was auto-observed.
+- **What it captures**: `boot.ts` runs every request's real `load()` call inside `withDepCapture` (`@kiln/core/sql`); `createKilnSql` records the table names parsed out of each tagged-template query into that capture scope. When a page's live fields are persisted, the observed tables are unioned into each field's `depends_on` — an explicit `Live.value(x, ['sessions'])` still keeps `'sessions'`, plus whatever was auto-observed.
 - **Table-level, not row-level.** Table names are parsed from `FROM`/`JOIN`/`INTO`/`UPDATE` with a best-effort regex — `WHERE` predicates aren't inspected. Over-capture (an extra table the query touched but didn't strictly need) only costs one extra revalidation check; the regex itself only ever over-matches, never misses a table it can see, so a loose regex is the safe failure direction *for the regex*. That's not an absolute "auto-deps can never under-invalidate" guarantee for the capture mechanism as a whole, though: queries run inside ``sql.begin(async tx => tx`...`)`` go through the raw transaction object, which bypasses the capture Proxy entirely, so tables read transactionally inside a `load()` are **not captured at all** — a real, pre-existing under-capture gap (see [gotchas.md](gotchas.md)). For row-scoped precision (`contacts:id=42`), or to cover a `.begin()`-only read, pass a manual dependency key — see [live-and-islands.md](live-and-islands.md#manual-dependency-keys-the-row-level-escape-hatch).
 - **Scope**: auto-deps only populates a live field's `depends_on`. It has no effect on the route's own baked HTML+JSON artifact — that artifact's staleness is TTL/tombstone-driven, unrelated to `depends_on`. A page with no `LiveProp`/`Live.list` fields has nothing to attach the captured tables to.
 - **Opt out**: `fsr.autoDeps = false` in `kiln.config.ts` disables the union entirely; fields fall back to only their explicit `dependsOn`. Default on.

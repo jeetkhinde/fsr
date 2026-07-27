@@ -22,8 +22,10 @@ import {
   type LiveList,
   LiveProp,
   StartupError,
-  withDepCapture,
 } from '@kiln/core';
+// Server-only subpath: the '@kiln/core' barrel must stay client-bundleable
+// (islands import from it), and sql.ts pulls in node:async_hooks + bun.
+import { withDepCapture } from '@kiln/core/sql';
 import {
   KilnCache,
   RedisCache,
