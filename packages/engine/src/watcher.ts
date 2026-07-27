@@ -364,7 +364,7 @@ export class FsrWatcher {
             console.log(`FSR: idle eviction for route ${r.route}`);
             this.unregisterLoader(r.route, r.userKey);
             if (this.redis) {
-              await this.redis.deleteRouteKeys(r.route).catch(() => {});
+              await this.redis.deleteRouteKeys(r.route, variantOf(r.userKey || undefined)).catch(() => {});
             }
             if (r.htmlPath) {
               await fs.unlink(r.htmlPath).catch(() => {});

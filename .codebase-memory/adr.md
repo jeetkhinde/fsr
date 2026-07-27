@@ -150,7 +150,34 @@ Plan-2 review fixes folded in: SSE/snapshot identity scoping gates on
 patched alongside `data` at all 4 write sites; `unregisterLoader` bounds
 `loaderTargets` on eviction; `RedisCache.slotKey` honors `variant`.
 
-**Known limitations:** DELETE-driven tombstoning is **not** owner-scoped
+Merge review fixes folded in: an open SSE subscription re-pings `markActive`
+every `activeWindowSecs / 2` for the life of the connection
+(`fsrHubStream`'s `onActivity`) — a single ping on subscribe let a page
+someone still had open fall into the dormant tier after 30s, at which point
+`fetchStaleSlots` stopped claiming its slots and live patches silently
+stopped arriving on a healthy connection. `sync-triggers` compares the
+installed trigger's definition against config (`pg_get_triggerdef`, event set
+compared unordered since Postgres re-canonicalizes it) and reports
+`outdated` / recreates it, so editing a table's `ownerColumn`, `depKey`, or
+`events` is no longer a silent no-op; trigger events are whitelisted before
+interpolation and the existence probe is scoped by `tgrelid`. `getSlots` and
+`deleteRouteKeys` take `variant`, matching the now variant-scoped `slotKey`.
+The PK-migration guards are scoped by `conrelid`.
+
+**Known limitations:** `upsertSlot`'s `ON CONFLICT … SET stale = FALSE`
+(added here so a rebuild-on-read clears the flag) can race a concurrent
+invalidation: a dependency write landing between a render's `load()` and its
+`upsertSlot` has its `stale = TRUE` overwritten. On an active route the
+time-based `revalidate_secs` branch still recovers it, but a **dormant**
+route has neither tier and would serve that snapshot until the next
+dependency write. Narrow window (one render), unbounded consequence — fix
+wants a version/timestamp guard (`invalidateDepKey` already bumps
+`version`), deliberately not attempted at merge time. The read path's
+dormant check (`fetchDormantStaleSlot`) is one **awaited** Postgres SELECT
+per validated cache hit on any route without a local SSE-active mark: the
+"zero-Postgres cached read" guarantee now holds only for actively-watched
+snapshots, and a purely static, never-subscribed page pays a query per
+request. DELETE-driven tombstoning is **not** owner-scoped
 (`notifyDelete` → `tombstoneDependentRoutes`, pre-existing, deliberately left
 unchanged) — only INSERT/UPDATE are owner-scoped. Auto-deps is proven at the
 capture/trigger/watcher layer and wired into `boot.ts`'s real `load()` path,

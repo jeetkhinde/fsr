@@ -386,8 +386,11 @@ export class RedisCache {
     }
   }
 
-  async getSlots(route: string): Promise<Record<string, string>> {
-    const result = await this.client.send('HGETALL', [this.slotKey(route)]);
+  // `variant` must be threaded through here for the same reason patchSlot
+  // takes it: slotKey is now variant-scoped, so reading without the variant
+  // would look at the shared hash and never see a per-user slot's value.
+  async getSlots(route: string, variant?: string): Promise<Record<string, string>> {
+    const result = await this.client.send('HGETALL', [this.slotKey(route, variant)]);
     if (!result || typeof result !== 'object' || Array.isArray(result)) {
       if (result != null) {
         console.warn(`[kiln] RedisCache.getSlots: unexpected HGETALL shape for route "${route}", ignoring`);
@@ -425,8 +428,16 @@ export class RedisCache {
     await this.client.publish(this.patchChannel(), JSON.stringify(payload));
   }
 
-  async deleteRouteKeys(route: string): Promise<void> {
-    await this.client.send('DEL', [this.htmlKey(route), this.slotKey(route), this.jsonKey(route)]);
+  // Eviction is per (route, user_key) — purgeInactiveRoutes now returns the
+  // userKey precisely so the caller can name the variant whose keys to drop.
+  // Without it a per-user artifact outlives its own eviction and is only
+  // reclaimed by the artifact TTL (or never, when no TTL is configured).
+  async deleteRouteKeys(route: string, variant?: string): Promise<void> {
+    await this.client.send('DEL', [
+      this.htmlKey(route, variant),
+      this.slotKey(route, variant),
+      this.jsonKey(route, variant),
+    ]);
   }
 
   async disconnect(): Promise<void> {

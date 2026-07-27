@@ -192,6 +192,36 @@ async function runTests() {
     // onmessage listener would otherwise pick up as if it were real data.
     assert.deepEqual(heartbeatItems[0], { event: 'keepalive', data: '' });
 
+    // 5. onActivity repeats for the life of the subscription (ADR-018 tiers)
+    //
+    // Regression: the subscribe handler used to ping last_active_at exactly
+    // once. Since a connection lives up to connectionTtlSecs (3600s default)
+    // but the active window is activeWindowSecs (30s default), an open,
+    // healthy subscription fell into the dormant tier 30s in — at which point
+    // fetchStaleSlots stops claiming its slots and the client silently stops
+    // receiving live patches while still connected. The ping must repeat.
+    console.log('Testing onActivity repeat + cleanup...');
+    let activityPings = 0;
+    const genActivity = fsrHubStream({
+      route,
+      slots: [],
+      watcher,
+      config: { maxConnections: 10, connectionTtlSecs: 10, keepaliveSecs: 10 },
+      onActivity: () => { activityPings++; },
+      activityPingSecs: 0.05,
+    });
+    const activityPromise = (async () => { for await (const _ of genActivity) { /* drain */ } })();
+    await new Promise(resolve => setTimeout(resolve, 260));
+    assert.ok(activityPings >= 3, `expected repeated activity pings, got ${activityPings}`);
+
+    // ...and the interval dies with the stream, so a closed connection can
+    // never keep a route pinned in the active tier.
+    await genActivity.return();
+    await activityPromise;
+    const pingsAtClose = activityPings;
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.equal(activityPings, pingsAtClose, 'activity timer must not outlive the stream');
+
     console.log('🎉 FSR SSE Hub and Snapshot tests PASSED!');
   } finally {
     await bunSql.unsafe('DELETE FROM kiln_fsr');

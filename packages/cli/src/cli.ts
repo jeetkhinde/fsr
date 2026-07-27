@@ -317,8 +317,8 @@ const syncTriggersCommand = defineCommand({
     const results = await syncTriggers(sql, tables, { check: args.check });
     for (const r of results) consola.info(`  ${r.table}: ${r.action}`);
     sql.close();
-    if (args.check && results.some((r) => r.action === 'missing')) {
-      consola.error('Missing triggers (run without --check to install).'); process.exit(1);
+    if (args.check && results.some((r) => r.action === 'missing' || r.action === 'outdated')) {
+      consola.error('Missing or outdated triggers (run without --check to install).'); process.exit(1);
     }
     consola.success(args.check ? 'All triggers present.' : 'Triggers synced.');
   },

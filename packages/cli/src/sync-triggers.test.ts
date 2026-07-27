@@ -27,6 +27,34 @@ assert.equal(res[0].action, 'missing');
 const bare = await sql`SELECT 1 FROM pg_trigger WHERE tgname = ${triggerName('synctrig_bare')} AND NOT tgisinternal`;
 assert.equal(bare.length, 0);
 
+// 4. definition drift: adding/removing ownerColumn (or changing depKey/events)
+// in config must NOT read as "exists" — the old trigger is still installed and
+// would keep emitting the old payload shape. --check reports it, a real run
+// recreates it.
+res = await syncTriggers(sql, [{ table: 'synctrig_demo' }], { check: true });
+assert.equal(res[0].action, 'outdated', 'dropping ownerColumn must be detected as drift, not "exists"');
+let def = await sql`SELECT pg_get_triggerdef(oid) AS def FROM pg_trigger WHERE tgname = ${triggerName('synctrig_demo')} AND NOT tgisinternal`;
+assert.ok(String(def[0].def).includes("'owner_id'"), '--check must not have rewritten the trigger');
+
+res = await syncTriggers(sql, [{ table: 'synctrig_demo' }], { check: false });
+assert.equal(res[0].action, 'updated');
+def = await sql`SELECT pg_get_triggerdef(oid) AS def FROM pg_trigger WHERE tgname = ${triggerName('synctrig_demo')} AND NOT tgisinternal`;
+assert.ok(!String(def[0].def).includes("'owner_id'"), 'recreated trigger must drop the stale owner arg');
+
+// 5. narrowing `events` is drift too
+res = await syncTriggers(sql, [{ table: 'synctrig_demo', events: ['insert'] }], { check: true });
+assert.equal(res[0].action, 'outdated');
+res = await syncTriggers(sql, [{ table: 'synctrig_demo', events: ['insert'] }], { check: false });
+assert.equal(res[0].action, 'updated');
+res = await syncTriggers(sql, [{ table: 'synctrig_demo', events: ['insert'] }], { check: false });
+assert.equal(res[0].action, 'exists', 'a matching definition is still idempotent');
+
+// 6. an event value outside the whitelist is rejected before reaching SQL
+await assert.rejects(
+  async () => syncTriggers(sql, [{ table: 'synctrig_demo', events: ['truncate' as any] }], { check: false }),
+  /unsupported trigger event/,
+);
+
 await sql`DROP TABLE IF EXISTS synctrig_demo CASCADE`;
 await sql`DROP TABLE IF EXISTS synctrig_bare CASCADE`;
 await sql.end();

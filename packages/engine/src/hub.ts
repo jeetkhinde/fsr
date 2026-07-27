@@ -86,10 +86,36 @@ export interface FsrHubStreamOptions {
   watcher?: FsrWatcher;
   config?: FsrHubConfig;
   cache?: KilnCache;
+  /**
+   * Called every `activityPingSecs` for as long as the stream stays open —
+   * the REPEAT only; the caller owns the initial ping (this is an async
+   * generator, so nothing in here runs until the adapter starts iterating).
+   *
+   * An open subscription IS the activity signal for ADR-018's active/dormant
+   * tier: without a repeating ping, a client that simply leaves the page open
+   * goes dormant after `activeWindowSecs` and the watcher stops eagerly
+   * revalidating the very snapshot it is watching — so live patches would
+   * silently stop arriving while the connection is still healthy. The
+   * interval is cleared in this generator's `finally`, alongside the
+   * keepalive and TTL timers, so it cannot outlive the connection.
+   */
+  onActivity?: () => void;
+  /** Ping cadence for `onActivity`. Default 15s (half the 30s default window). */
+  activityPingSecs?: number;
 }
 
 export async function* fsrHubStream(options: FsrHubStreamOptions): AsyncGenerator<SSEEvent, void, unknown> {
-  const { route, slots, signal, watcher, config = defaultHubConfig, cache, userKey = '' } = options;
+  const {
+    route,
+    slots,
+    signal,
+    watcher,
+    config = defaultHubConfig,
+    cache,
+    userKey = '',
+    onActivity,
+    activityPingSecs = 15,
+  } = options;
 
   if (!watcher) {
     yield { event: 'error', data: 'FSR watcher not configured' };
@@ -168,6 +194,13 @@ export async function* fsrHubStream(options: FsrHubStreamOptions): AsyncGenerato
 
   resetKeepalive();
 
+  // Keeps this (route, userKey) in the "active" freshness tier for the whole
+  // life of the subscription — see FsrHubStreamOptions.onActivity.
+  let activityTimer: NodeJS.Timeout | null = null;
+  if (onActivity) {
+    activityTimer = setInterval(onActivity, Math.max(0.001, activityPingSecs) * 1000);
+  }
+
   let ttlExpired = false;
   const ttlTimer = setTimeout(() => {
     ttlExpired = true;
@@ -245,6 +278,7 @@ export async function* fsrHubStream(options: FsrHubStreamOptions): AsyncGenerato
     emitter.off('patch', onPatch);
     signal?.removeEventListener('abort', onAbort);
     if (keepaliveTimer) clearInterval(keepaliveTimer);
+    if (activityTimer) clearInterval(activityTimer);
     clearTimeout(ttlTimer);
   }
 }

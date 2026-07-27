@@ -1246,26 +1246,38 @@ export async function startKiln(
       // A subscriber watching this (route, user) snapshot counts as activity
       // — a page someone has open gets eager patches even though nobody is
       // re-requesting it (which is what would otherwise bump last_active_at).
-      // One ping on subscribe is enough to satisfy the tier; connectionTtlSecs
-      // bounds how stale the active flag can get before a client reconnects
-      // and re-pings (fsrHubStream owns the keepalive loop, not this handler).
-      let markedActive = true;
-      if (options.store) {
-        markedActive = await options.store.markActive(route, sseUserKey)
-          .then(() => true)
-          .catch((err: any) => {
-            console.warn(`FSR SSE: markActive failed for ${route}:`, err?.message ?? err);
-            return false;
-          });
-      }
-      // Same-process activity signal (Important #2 review fix): lets the
-      // read path's dormant-staleness check (isDormantStale) skip its own
-      // Postgres query for a route this process already knows is
-      // SSE-active, without waiting on a round trip to see last_active_at.
-      // Only when markActive actually landed — otherwise the watcher's
-      // last_active_at gate won't revalidate this route either, and the local
-      // mark would suppress the one check that would have caught it.
-      if (markedActive) options.watcher?.markLocallyActive?.(route, sseUserKey);
+      //
+      // This has to REPEAT for as long as the connection lives, not fire once
+      // on subscribe: last_active_at only counts as active for
+      // activeWindowSecs (default 30s), while a connection lives up to
+      // connectionTtlSecs (default 3600s). A single ping would let an open,
+      // healthy subscription fall into the dormant tier 30s in, at which
+      // point fetchStaleSlots stops claiming its slots and the client simply
+      // stops receiving live patches. fsrHubStream owns the repeat (and
+      // clears it in its finally), so the timer can't outlive the stream.
+      const activeWindowSecs = config.fsr?.activeWindowSecs ?? 30;
+      const pingActive = async () => {
+        let markedActive = true;
+        if (options.store) {
+          markedActive = await options.store.markActive(route, sseUserKey)
+            .then(() => true)
+            .catch((err: any) => {
+              console.warn(`FSR SSE: markActive failed for ${route}:`, err?.message ?? err);
+              return false;
+            });
+        }
+        // Same-process activity signal (Important #2 review fix): lets the
+        // read path's dormant-staleness check (isDormantStale) skip its own
+        // Postgres query for a route this process already knows is SSE-active.
+        // Only when markActive actually landed — otherwise the watcher's
+        // last_active_at gate won't revalidate this route either, and the
+        // local mark would suppress the one check that would have caught it.
+        if (markedActive) options.watcher?.markLocallyActive?.(route, sseUserKey);
+      };
+      // The first ping happens here, before handing off: fsrHubStream is an
+      // async generator, so nothing inside it runs until the adapter starts
+      // iterating the stream. The hub owns only the repeat.
+      await pingActive();
       const { fsrHubStream } = await import('@kiln/engine' as any);
       const stream = fsrHubStream({
         route,
@@ -1278,7 +1290,11 @@ export async function startKiln(
           keepaliveSecs: config.fsr?.keepaliveSecs ?? 30
         },
         watcher: options.watcher,
-        cache: hubCache
+        cache: hubCache,
+        onActivity: () => { void pingActive(); },
+        // Refresh at half the window so a ping is never the thing that
+        // expires: the mark is at most activeWindowSecs/2 old when read.
+        activityPingSecs: Math.max(1, Math.floor(activeWindowSecs / 2)),
       });
       res.sse(stream);
     });

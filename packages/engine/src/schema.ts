@@ -150,6 +150,7 @@ BEGIN
     SELECT 1 FROM pg_index i
     JOIN pg_constraint c ON c.conindid = i.indexrelid
     WHERE c.conname = 'kiln_fsr_pkey'
+      AND c.conrelid = 'kiln_fsr'::regclass
       AND (SELECT array_agg(attname ORDER BY attname) FROM pg_attribute
            WHERE attrelid = c.conrelid AND attnum = ANY(c.conkey))
           = ARRAY['route','slot','user_key']::name[]
@@ -165,6 +166,7 @@ BEGIN
     SELECT 1 FROM pg_index i
     JOIN pg_constraint c ON c.conindid = i.indexrelid
     WHERE c.conname = 'kiln_fsr_lists_pkey'
+      AND c.conrelid = 'kiln_fsr_lists'::regclass
       AND (SELECT array_agg(attname ORDER BY attname) FROM pg_attribute
            WHERE attrelid = c.conrelid AND attnum = ANY(c.conkey))
           = ARRAY['name','route','user_key']::name[]
