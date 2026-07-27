@@ -331,12 +331,18 @@ async function runTests() {
       scheduledInvalidations: [],
       activeWindowSecs: 60,
     });
-    await mfWatcher.start();
-    await store.invalidateDepKey('mf_dep_key'); // tick claims it, then blocks on pg_sleep
-    await new Promise(resolve => setTimeout(resolve, 300));
-    await store.invalidateDepKey('mf_dep_key'); // lands mid-requery
-    await new Promise(resolve => setTimeout(resolve, 1200)); // let markFresh run
-    await mfWatcher.stop();
+
+    // Exactly ONE tick, via runOnce() rather than start(). The surviving
+    // stale flag is a transient state that the very next tick legitimately
+    // clears — it re-claims at the new version, requeries uncontended, and
+    // marks fresh for real. A polling watcher plus a fixed sleep therefore
+    // races its own recovery: this assertion is only meaningful if no second
+    // tick has run yet. (It was written that way originally and flaked ~50%.)
+    await store.invalidateDepKey('mf_dep_key');
+    const mfTick = mfWatcher.runOnce();               // claims, then blocks on pg_sleep
+    await new Promise(resolve => setTimeout(resolve, 200)); // inside the sleep window
+    await store.invalidateDepKey('mf_dep_key');       // lands mid-requery
+    await mfTick;                                     // markFresh runs with the stale version
 
     const mfRow = (await store.fetchAllForInspect())
       .find(r => r.route === mfRoute && r.slot === 'mf_slot');
@@ -344,6 +350,17 @@ async function runTests() {
       mfRow?.stale,
       true,
       'an invalidation arriving mid-requery must survive the watcher\'s markFresh'
+    );
+
+    // ...and the recovery really does happen on the next tick: the claim was
+    // released, so a second, uncontended pass clears the flag for real.
+    await mfWatcher.runOnce();
+    const mfRowAfter = (await store.fetchAllForInspect())
+      .find(r => r.route === mfRoute && r.slot === 'mf_slot');
+    assert.equal(
+      mfRowAfter?.stale,
+      false,
+      'the next uncontended tick re-requeries and clears the flag'
     );
 
     console.log('Verifying idle eviction (purge)...');
