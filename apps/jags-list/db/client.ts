@@ -1,4 +1,4 @@
-import { createKilnSql } from '@kiln/core';
+import { createKilnSql } from '@kiln/core/sql';
 
 const databaseUrl =
   process.env.DATABASE_URL ?? 'postgresql://localhost:5432/jagslist';

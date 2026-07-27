@@ -976,7 +976,10 @@ describe('buildPageHandler', () => {
   it('auto-derives depends_on from tables read during load()', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-autodep-'));
     const { createElement } = await import('react');
-    const { Live, collectDeps } = await import('@kiln/core');
+    const { Live } = await import('@kiln/core');
+    // collectDeps lives on the server-only subpath — the '@kiln/core'
+    // barrel has to stay client-bundleable (sql.ts imports node:async_hooks).
+    const { collectDeps } = await import('@kiln/core/sql');
     const upserts: any[] = [];
     const store = {
       ensureRouteRow: async () => {},
@@ -1013,7 +1016,10 @@ describe('buildPageHandler', () => {
   it('unions auto-derived tables with an explicit dependsOn, never replacing it', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-autodep-union-'));
     const { createElement } = await import('react');
-    const { Live, collectDeps } = await import('@kiln/core');
+    const { Live } = await import('@kiln/core');
+    // collectDeps lives on the server-only subpath — the '@kiln/core'
+    // barrel has to stay client-bundleable (sql.ts imports node:async_hooks).
+    const { collectDeps } = await import('@kiln/core/sql');
     const upserts: any[] = [];
     const store = {
       ensureRouteRow: async () => {},
@@ -1050,7 +1056,10 @@ describe('buildPageHandler', () => {
   it('skips the auto-derived union when fsr.autoDeps is false, keeping only explicit deps', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-autodep-off-'));
     const { createElement } = await import('react');
-    const { Live, collectDeps } = await import('@kiln/core');
+    const { Live } = await import('@kiln/core');
+    // collectDeps lives on the server-only subpath — the '@kiln/core'
+    // barrel has to stay client-bundleable (sql.ts imports node:async_hooks).
+    const { collectDeps } = await import('@kiln/core/sql');
     const upserts: any[] = [];
     const store = {
       ensureRouteRow: async () => {},

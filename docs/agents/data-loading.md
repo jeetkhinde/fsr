@@ -18,11 +18,11 @@ export default function Page({ post, ts }: Awaited<ReturnType<typeof load>>) { â
 
 ### Querying Postgres from `load()` â€” get auto-deps for free
 
-Wrap your DB client with `createKilnSql` (`@kiln/core`) instead of a plain `new SQL(url)`:
+Wrap your DB client with `createKilnSql` (`@kiln/core/sql`) instead of a plain `new SQL(url)`:
 
 ```ts
 // db/client.ts
-import { createKilnSql } from '@kiln/core';
+import { createKilnSql } from '@kiln/core/sql';
 export const sql = createKilnSql(process.env.DATABASE_URL!);
 ```
 

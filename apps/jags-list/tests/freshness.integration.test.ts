@@ -18,7 +18,7 @@
 // running app's embedded FsrWatcher, which marks the slot stale.
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { fileURLToPath } from 'node:url';
-import { withDepCapture } from '@kiln/core';
+import { withDepCapture } from '@kiln/core/sql';
 import { FsrStore } from '@kiln/engine';
 import { sql } from '../db/client.js';
 
