@@ -144,6 +144,6 @@ export interface LiveFieldMeta {
   name: string;
   revalidate?: number;
   debounce?: number;
-  dependsOn?: string;
+  dependsOn?: string[];
   deliveryTarget: 'dom' | 'dom-and-store' | 'store';
 }

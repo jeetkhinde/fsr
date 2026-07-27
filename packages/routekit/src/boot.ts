@@ -695,7 +695,7 @@ export function buildPageHandler(
       for (const field of liveFields) {
         const dependsOn = Array.from(
           new Set([
-            ...(field.dependsOn ? [field.dependsOn] : []),
+            ...(field.dependsOn ?? []),
             ...(autoDepsEnabled ? observedTables : []),
           ]),
         );
