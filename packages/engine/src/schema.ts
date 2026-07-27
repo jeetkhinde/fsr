@@ -30,14 +30,23 @@ CREATE TABLE IF NOT EXISTS kiln_fsr_events (
 
 CREATE OR REPLACE FUNCTION kiln_emit_event() RETURNS trigger AS $$
 DECLARE
-  record_id BIGINT;
+  -- TEXT, not BIGINT: this is an AFTER ... FOR EACH ROW trigger, so anything
+  -- raised here aborts the APPLICATION's write, not just the invalidation.
+  -- Declaring it BIGINT made a uuid PK fail the cast ("invalid input syntax
+  -- for type bigint") and turned every insert into a hard error.
+  record_id TEXT;
   event_id BIGINT;
   owner_val TEXT;
 BEGIN
+  -- Read through to_jsonb rather than NEW.id: a table with no id column at
+  -- all (composite/natural key) raises 'record "new" has no field "id"' on
+  -- direct field access, while ->> simply yields NULL. A null id costs only
+  -- row-level targeting — consumers skip the depKey:id form and the
+  -- table-level depKey still invalidates, which is the safe direction.
   IF TG_OP = 'DELETE' THEN
-    record_id := OLD.id;
+    record_id := to_jsonb(OLD) ->> 'id';
   ELSE
-    record_id := NEW.id;
+    record_id := to_jsonb(NEW) ->> 'id';
   END IF;
 
   IF TG_NARGS > 1 THEN
