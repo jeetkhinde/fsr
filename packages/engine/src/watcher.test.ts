@@ -300,6 +300,52 @@ async function runTests() {
 
     await awWatcher.stop();
 
+    // 5d. markFresh race guard, end to end through a real watcher tick.
+    //
+    // The watcher claims a stale slot, requeries it, then marks it fresh. An
+    // invalidation arriving in that window must survive — otherwise the slot
+    // is left holding the value from BEFORE the write, with its stale flag
+    // cleared, and (on a dormant route) nothing ever revisits it. The guard
+    // is the version fetchStaleSlots claimed at, handed back to markFresh.
+    //
+    // The window is forced open here by making the requery block: the slot's
+    // query sleeps, and the invalidation fires while it's in flight.
+    console.log('Verifying markFresh race guard through a watcher tick...');
+    const mfRoute = '/test-markfresh-race';
+    await store.ensureRouteRow(mfRoute);
+    await store.upsertSlot(
+      mfRoute,
+      'mf_slot',
+      "SELECT pg_sleep(0.6), val FROM watcher_test_dummy WHERE id = $1",
+      [1],
+      ['mf_dep_key'],
+      0,
+      'val'
+    );
+    await store.markActive(mfRoute);
+
+    const mfWatcher = new FsrWatcher(store, redis, {
+      pollIntervalMs: 200,
+      patchDebounceSecs: 0,
+      purgeAfterSeconds: 3600,
+      scheduledInvalidations: [],
+      activeWindowSecs: 60,
+    });
+    await mfWatcher.start();
+    await store.invalidateDepKey('mf_dep_key'); // tick claims it, then blocks on pg_sleep
+    await new Promise(resolve => setTimeout(resolve, 300));
+    await store.invalidateDepKey('mf_dep_key'); // lands mid-requery
+    await new Promise(resolve => setTimeout(resolve, 1200)); // let markFresh run
+    await mfWatcher.stop();
+
+    const mfRow = (await store.fetchAllForInspect())
+      .find(r => r.route === mfRoute && r.slot === 'mf_slot');
+    assert.equal(
+      mfRow?.stale,
+      true,
+      'an invalidation arriving mid-requery must survive the watcher\'s markFresh'
+    );
+
     console.log('Verifying idle eviction (purge)...');
 
     // Stop watcher first to freeze all background ticks/timers

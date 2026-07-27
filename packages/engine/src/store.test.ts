@@ -87,9 +87,12 @@ async function runTests() {
     assert.deepEqual(stale[0].queryParams, { id: 10 });
     assert.deepEqual(stale[0].dependsOn, ['dep_key_x']);
 
-    // Mark fresh
+    // Mark fresh. fetchStaleSlots hands back the version it claimed the slot
+    // at; markFresh takes it back so an invalidation arriving during the
+    // requery isn't cleared (see the race section below).
     console.log('Testing markFresh...');
-    await store.markFresh('/test-route-1', 'slot_a');
+    assert.equal(typeof stale[0].version, 'number', 'a claimed slot carries its version');
+    await store.markFresh('/test-route-1', 'slot_a', '', stale[0].version);
     stale = await store.fetchStaleSlots();
     assert.equal(stale.length, 0);
 
@@ -289,6 +292,53 @@ async function runTests() {
       (await store.fetchSlotVersions('/race-r'))['brand-new'],
       0,
       'a newly inserted slot starts at version 0',
+    );
+
+    // markFresh runs the same race on the watcher's side: it clears `stale`
+    // after a requery, and an invalidation arriving between the claim and
+    // that write would be swallowed. The claim (fetchStaleSlots) hands back
+    // the version, which is the guard — same shape as upsertSlot's.
+    console.log('Testing markFresh stale/invalidation race guard...');
+    await store.ensureRouteRow('/mf-race', 300, 3600, 'json');
+    await store.upsertSlot('/mf-race', 's', 'SELECT 1 AS val', [], ['mf_dep'], 0, 'val');
+    await store.markActive('/mf-race');
+    await store.invalidateDepKey('mf_dep');
+
+    const claimed = (await store.fetchStaleSlots({ activeWindowSecs: 60 }))
+      .find((s) => s.route === '/mf-race');
+    assert.ok(claimed, 'precondition: the stale slot is claimed');
+    assert.equal(typeof claimed!.version, 'number', 'the claim carries the slot version');
+
+    // ...a dependency write lands while the watcher is requerying...
+    await store.invalidateDepKey('mf_dep');
+    // ...and the requery finishes, marking fresh with its now-outdated version.
+    await store.markFresh('/mf-race', 's', '', claimed!.version);
+    assert.equal(
+      await staleOf('/mf-race', 's'),
+      true,
+      'an invalidation during the requery must survive markFresh',
+    );
+
+    // The claim IS released even when the flag survives, so the next tick can
+    // re-claim and requery — otherwise the slot sits claimed for 30s.
+    const reclaimed = (await store.fetchStaleSlots({ activeWindowSecs: 60 }))
+      .find((s) => s.route === '/mf-race');
+    assert.ok(reclaimed, 'a declined markFresh still releases the refresh claim');
+    await store.markFresh('/mf-race', 's', '', reclaimed!.version);
+    assert.equal(
+      await staleOf('/mf-race', 's'),
+      false,
+      'an uncontended requery still clears stale',
+    );
+
+    // Omitted expectedVersion keeps the old unconditional clear — callers
+    // that never claimed the slot (tests, manual freshening) still work.
+    await store.invalidateDepKey('mf_dep');
+    await store.markFresh('/mf-race', 's');
+    assert.equal(
+      await staleOf('/mf-race', 's'),
+      false,
+      'markFresh without expectedVersion clears unconditionally',
     );
 
     console.log('🎉 FsrStore and RedisCache integration tests PASSED!');
