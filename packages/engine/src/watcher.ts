@@ -209,7 +209,22 @@ export class FsrWatcher {
   }
 
   unregisterRoute(route: string): void {
-    this.loaderTargets.delete(route);
+    // loaderTargets is always keyed via loaderKey(route, userKey), which
+    // appends a userKey suffix even for the shared/no-user case — so a
+    // route can own multiple entries (one shared + one per bake='user'
+    // variant). Clear all of them, not just a bare `route` key that never
+    // matches a real entry. The NUL separator in loaderKey is what makes
+    // the prefix scan safe: a "/foo" prefix cannot match "/foobar".
+    const prefix = loaderKey(route, undefined);
+    for (const key of this.loaderTargets.keys()) {
+      if (key.startsWith(prefix)) this.loaderTargets.delete(key);
+    }
+    // Same keying, same reason unregisterLoader clears it: a leftover
+    // local-active mark would keep boot.ts's read path skipping its
+    // dormant-staleness check for a route that no longer has a loader.
+    for (const key of this.locallyActiveAt.keys()) {
+      if (key.startsWith(prefix)) this.locallyActiveAt.delete(key);
+    }
     for (const [targetKey, target] of this.liveListTargets.entries()) {
       if (target.route === route) {
         this.liveListTargets.delete(targetKey);

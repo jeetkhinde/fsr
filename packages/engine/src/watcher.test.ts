@@ -184,6 +184,41 @@ async function runTests() {
     const uSlotRow = rowsAfterUser.find(r => r.route === uRoute && r.slot === 'greeting');
     assert.equal(uSlotRow?.stale, false);
     assert.equal(uSlotRow?.userKey, 'u1');
+
+    // 5b-1. unregisterRoute must clear loaderTargets for ALL userKey variants
+    // of the route, not just a bare (non-existent) `route` key — loaderTargets
+    // is always keyed via loaderKey(route, userKey), which appends a userKey
+    // suffix even for the shared/no-user case, so a bare-route delete can
+    // never hit a real entry. Prove the loader is actually gone by
+    // invalidating the same dep key again post-unregister and confirming
+    // nothing fires.
+    console.log('Verifying unregisterRoute clears per-user loaderTargets...');
+    watcher.unregisterRoute(uRoute);
+    patches.length = 0;
+    await store.invalidateDepKey('user_dep_key');
+    await new Promise(resolve => setTimeout(resolve, 800));
+    const upAfterUnregister = patches.find(x => x.kind === 'scalar' && x.route === uRoute && (x as any).field === 'greeting');
+    assert.equal(upAfterUnregister, undefined, 'loader should not fire after unregisterRoute');
+    const rowsAfterUnregister = await store.fetchAllForInspect();
+    const uSlotRowAfterUnregister = rowsAfterUnregister.find(r => r.route === uRoute && r.slot === 'greeting');
+    assert.equal(uSlotRowAfterUnregister?.stale, true, 'slot should remain stale since no loader ran to mark it fresh');
+
+    // unregisterRoute must also drop the same route's local-active marks —
+    // they're keyed identically, and a leftover mark keeps boot.ts's read
+    // path skipping its dormant-staleness check for a route that no longer
+    // has a loader keeping it fresh.
+    watcher.markLocallyActive(uRoute, 'u1');
+    watcher.markLocallyActive(uRoute);           // shared variant too
+    watcher.markLocallyActive('/other-route', 'u1');
+    watcher.unregisterRoute(uRoute);
+    assert.equal(watcher.isLocallyActive(uRoute, 'u1', 60), false, 'per-user local-active mark cleared');
+    assert.equal(watcher.isLocallyActive(uRoute, undefined, 60), false, 'shared local-active mark cleared');
+    assert.equal(
+      watcher.isLocallyActive('/other-route', 'u1', 60),
+      true,
+      'a different route is untouched — the prefix scan must not over-match'
+    );
+
     await fs.unlink(uHtmlPath).catch(() => {});
     await fs.unlink(uJsonPath).catch(() => {});
 
