@@ -84,13 +84,13 @@ export function extractLiveFields(loadResult: any): LiveFieldMeta[] {
     if (value && (value instanceof LiveProp || (value as any).constructor?.name === 'LiveProp')) {
       const lp = value as any;
 
-      let dependsOn: string | undefined;
+      let dependsOn: string[] | undefined;
       if (Array.isArray(lp.dependsOn) && lp.dependsOn.length > 0) {
-        dependsOn = lp.dependsOn[0];
-      } else if (typeof lp.dependsOn === 'string') {
         dependsOn = lp.dependsOn;
+      } else if (typeof lp.dependsOn === 'string') {
+        dependsOn = [lp.dependsOn];
       } else if (lp.options?.dependsOn) {
-        dependsOn = lp.options.dependsOn;
+        dependsOn = [lp.options.dependsOn];
       }
 
       const revalidate = lp.revalidateSeconds ?? lp.options?.revalidate;
