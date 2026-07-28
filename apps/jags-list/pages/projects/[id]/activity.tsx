@@ -1,6 +1,5 @@
 import React from 'react';
 import { AppError, type KilnRequest } from '@kiln/core';
-import { requireUser } from '../../../lib/session.js';
 import { projectById } from '../../../db/projects.js';
 import { sql } from '../../../db/client.js';
 
@@ -14,7 +13,9 @@ interface ActivityRow {
 }
 
 export async function load(req: KilnRequest) {
-  requireUser(req);
+  // No requireUser here: hooks.ts `handle` gates this route before load()
+  // runs, and the watcher re-runs this loader with empty locals — reading
+  // identity here would both throw on refresh and block baking (ADR-016).
   const projectId = Number(req.params.id);
   const project = await projectById(projectId);
   if (!project || project.archived_at) throw AppError.notFound('Project not found');
