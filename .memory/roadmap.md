@@ -1,6 +1,6 @@
 # Kiln Project Roadmap
 
-Last updated: 2026-07-08
+Last updated: 2026-07-27
 
 ---
 
@@ -46,3 +46,45 @@ Last updated: 2026-07-08
 2. **External Watcher Process** — `fsr.watcher: 'embedded' | 'external'` is typed but external mode is partially implemented. Decouple watcher from the application thread for high-mutation workloads.
 3. **Fine-Grained Debounce Scheduling** — Per-field invalidation windows instead of coarse sweep intervals.
 4. **`address-book` Layout Migration** — Migrate `ContactsLayout` to pattern-level caching (currently violates ADR-011 load()-scoping rule by reading `req.query.q` / `req.params.id`).
+
+---
+
+## Phase 5: DX & Maintainability Backlog
+
+Raised by the 2026-07-27 source audit at `758eb44`. Correctness defects from the same audit are
+**not** here — they live in [bugs-active.md](bugs-active.md) §1 and should be fixed first.
+
+1. **Precondition checks + actionable errors in `kiln sync-triggers`** — pairs with
+   [bugs-active.md](bugs-active.md) §1.1/§1.5. The command should refuse to install a trigger on a
+   table it cannot support (no bigint-castable `id`) and say why, rather than installing something
+   that breaks writes at runtime. Highest-leverage DX fix in this list.
+
+2. **Cache bound methods in the `createKilnSql` Proxy** — `packages/core/src/sql.ts:61-66` rebinds on
+   every property access, so `sql.unsafe !== sql.unsafe` (a fresh bound function per `get`). Breaks
+   identity comparison/memoization and allocates on every access. Memoize per property.
+
+3. **Break up `boot.ts`** — 1527 lines, ~1.7× the next-largest file (`watcher.ts`, 883). Request
+   path, JSON negotiation, cache tiers, live-field upsert, SSE registration, and `startKiln` wiring
+   all live in one file. Extract cohesive units; it is the main obstacle to reviewing changes here.
+
+4. **Narrow `CacheProvider` to what ships** — the type offers `memory | filesystem | sqlite | redis`;
+   `startKiln` throws a clear boot error for `memory`/`sqlite` (`boot.ts:1097-1100`). Failing loudly
+   is right, but the type shouldn't advertise them at all.
+
+5. **Env-var overrides for deployment-critical config** — `loadConfigFromEnv`
+   (`packages/core/src/config.ts:258-295`) covers only 6 web/backend vars. No override exists for
+   `fsr.postgresUrl`, `fsr.redisUrl`, `cache.url`, or `fsr.buildId`. `buildId` is meant to be a
+   per-deploy git SHA (ADR-018), which is exactly the thing you want from the environment.
+
+6. **Runtime config validation** — `defineConfig` merges without validating values. TS catches typo'd
+   keys, but nothing catches out-of-range values (`images.quality`, ports, unsupported `formats`);
+   they surface as obscure runtime failures. A validation pass with actionable messages would also
+   cover JS-authored configs, where the TS safety net is absent.
+
+7. **Retire the deprecated config surface** — `fsr.idleEvictSecs`, `fsr.idleThresholdSecs`, and the
+   whole `live` block warn on use (`config.ts:228,244-251`) but are still typed and merged. Pick a
+   removal release.
+
+8. **Exercise auto-deps end-to-end in an app** — see [bugs-active.md](bugs-active.md) §1 carry-forward.
+   `jags-list` has no `Live.value`/`Live.list` usage, and both §1.1 and §1.2 are defects that one
+   real live-field page would have surfaced immediately. This is the highest-value *test* gap.
