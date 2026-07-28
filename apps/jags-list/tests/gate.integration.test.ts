@@ -41,6 +41,16 @@ describe.skipIf(!run)('auth gate holds without requireUser in load()', () => {
       VALUES ('Gate Test Project', '', ${memberId}) RETURNING id::int`;
     projectId = p.id;
 
+    // Seed one activity row BEFORE the server starts, so the first render of
+    // this page bakes a NON-EMPTY list. An empty Live.list takes the
+    // markEmptyListSubscriptions path (body-level data-kiln-live-lists) and
+    // never marks a <ul> — and once that empty artifact is cached, a later
+    // insert is not visible to a subsequent fetch within the debounce window.
+    // activity.actor_id is TEXT NOT NULL.
+    await sql`
+      INSERT INTO activity (project_id, actor_id, verb, payload)
+      VALUES (${projectId}, ${memberId}, 'plan3a.marker', '{}'::jsonb)`;
+
     proc = Bun.spawn(['bun', 'src/main.ts'], {
       cwd: new URL('..', import.meta.url).pathname,
       env: { ...process.env, PORT: String(PORT) } as Record<string, string>,
@@ -80,5 +90,15 @@ describe.skipIf(!run)('auth gate holds without requireUser in load()', () => {
       headers: { cookie: memberCookie },
     });
     expect(res.status).toBe(200);
+  });
+
+  it('marks the activity feed as a live list in the served HTML', async () => {
+    // The row was seeded in beforeAll, so every render of this page has a
+    // non-empty list and the marker pass has <li>s to key.
+    const html = await (await fetch(`${BASE}/projects/${projectId}/activity`, {
+      headers: { cookie: memberCookie },
+    })).text();
+    expect(html).toContain('data-kiln-list="events"');
+    expect(html).toMatch(/data-kiln-key="\d+"/);
   });
 });
