@@ -55,7 +55,91 @@ await assert.rejects(
   /unsupported trigger event/,
 );
 
+// 7. A mixed-case table name in config must fold the way Postgres folds an
+// unquoted identifier. Postgres stores `CREATE TABLE SyncTrigMixed` as
+// `synctrigmixed`, and auto-deps' extractTables lowercases what it captures —
+// so a verbatim `SyncTrigMixed` depKey could never match a captured dep, and a
+// verbatim trigger NAME could never match the folded one Postgres actually
+// stored (making the existence probe miss and every run re-CREATE).
+await sql`DROP TABLE IF EXISTS SyncTrigMixed CASCADE`;
+await sql`CREATE TABLE SyncTrigMixed (id BIGSERIAL PRIMARY KEY)`;
+res = await syncTriggers(sql, [{ table: 'SyncTrigMixed' }], { check: false });
+assert.equal(res[0].action, 'created');
+def = await sql`
+  SELECT pg_get_triggerdef(oid) AS def FROM pg_trigger
+  WHERE tgname = 'synctrigmixed_kiln_invalidate' AND NOT tgisinternal`;
+assert.equal(def.length, 1, 'trigger name must be the folded one Postgres stores');
+assert.ok(
+  String(def[0].def).includes("kiln_emit_event('synctrigmixed')"),
+  `default depKey must fold to match what extractTables captures; got ${def[0]?.def}`,
+);
+
+// …and folding must be stable, or every sync re-creates the same trigger.
+res = await syncTriggers(sql, [{ table: 'SyncTrigMixed' }], { check: false });
+assert.equal(res[0].action, 'exists', 'a mixed-case config must still be idempotent');
+
+// An EXPLICIT depKey is an arbitrary user-chosen string, not an identifier —
+// it is matched verbatim against hand-written dependsOn lists, so it must NOT
+// be folded.
+res = await syncTriggers(sql, [{ table: 'SyncTrigMixed', depKey: 'MyCustomKey' }], { check: false });
+assert.equal(res[0].action, 'updated');
+def = await sql`
+  SELECT pg_get_triggerdef(oid) AS def FROM pg_trigger
+  WHERE tgname = 'synctrigmixed_kiln_invalidate' AND NOT tgisinternal`;
+assert.ok(
+  String(def[0].def).includes("kiln_emit_event('MyCustomKey')"),
+  'an explicit depKey must survive verbatim',
+);
+
+// 8. The drift-repair path DROPs then CREATEs. If the CREATE fails, a
+// non-transactional pair leaves the table with NO trigger at all — every write
+// silently stops invalidating until someone happens to run --check. Force the
+// CREATE to fail by renaming the function out from under it (installed triggers
+// reference it by OID, so they follow the rename and keep working), then assert
+// the original trigger is still installed.
+await sql`DROP TABLE IF EXISTS synctrig_tx CASCADE`;
+await sql`CREATE TABLE synctrig_tx (id BIGSERIAL PRIMARY KEY, owner_id TEXT)`;
+res = await syncTriggers(sql, [{ table: 'synctrig_tx', ownerColumn: 'owner_id' }], { check: false });
+assert.equal(res[0].action, 'created');
+
+await sql.unsafe('ALTER FUNCTION kiln_emit_event() RENAME TO kiln_emit_event_bak');
+try {
+  await assert.rejects(
+    async () => syncTriggers(sql, [{ table: 'synctrig_tx' }], { check: false }),
+    /kiln_emit_event/,
+    'a CREATE that cannot resolve the function must surface as an error',
+  );
+  const survived = await sql`
+    SELECT 1 FROM pg_trigger
+    WHERE tgname = 'synctrig_tx_kiln_invalidate'
+      AND tgrelid = 'synctrig_tx'::regclass AND NOT tgisinternal`;
+  assert.equal(
+    survived.length,
+    1,
+    'a failed recreate must roll back to the old trigger, not leave the table triggerless',
+  );
+} finally {
+  // Always restore: this runs against a shared test database.
+  await sql.unsafe('ALTER FUNCTION kiln_emit_event_bak() RENAME TO kiln_emit_event');
+}
+
+// 9. `public.contacts` is a legitimate table name, not a hostile one. Saying
+// "unsafe SQL identifier" sends the reader hunting for an injection problem
+// they don't have; the real answer is that schemas aren't supported yet.
+await assert.rejects(
+  async () => syncTriggers(sql, [{ table: 'public.synctrig_demo' }], { check: false }),
+  /schema-qualified/i,
+  'a schema-qualified name must explain itself, not read as an injection attempt',
+);
+// …while genuinely malformed input must still be rejected as unsafe.
+await assert.rejects(
+  async () => syncTriggers(sql, [{ table: 'foo; DROP TABLE bar' }], { check: false }),
+  /unsafe SQL identifier/,
+);
+
 await sql`DROP TABLE IF EXISTS synctrig_demo CASCADE`;
 await sql`DROP TABLE IF EXISTS synctrig_bare CASCADE`;
+await sql`DROP TABLE IF EXISTS SyncTrigMixed CASCADE`;
+await sql`DROP TABLE IF EXISTS synctrig_tx CASCADE`;
 await sql.end();
 console.log('sync-triggers tests passed');

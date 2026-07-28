@@ -6,8 +6,9 @@ Last updated: 2026-07-27
 
 ## Current State
 
-- Branch: `main` (clean) @ `758eb44`.
-- Recently merged to `main`:
+- Branch: `fix/emit-event-non-bigint-id` — the 2026-07-27 source audit plus fixes for all six of its
+  §1 defects (see [bugs-resolved.md](bugs-resolved.md) §1). Not yet merged.
+- Recently merged to `main` (`758eb44`):
   - PRs #14–#20 — ADR-018 (auto-deps, `sync-triggers`, owner-scoped invalidation, freshness
     tiers) plus its follow-up fixes: SSE keepalive timeout, sync-triggers drift detection, Redis
     variant scoping, `upsertSlot`/`markFresh` stale-flag version guards, `dependsOn` retention,
@@ -36,9 +37,6 @@ Last updated: 2026-07-27
 
 ## Next Priorities (from [roadmap.md](roadmap.md))
 
-0. **Fix [bugs-active.md](bugs-active.md) §1.1 first** — `kiln_emit_event` breaks writes outright on
-   any table without a bigint-castable `id` (UUID PKs, composite keys). Verified against live
-   Postgres on 2026-07-27. Everything else on this list is smaller than that.
 1. **External watcher process** — `fsr.watcher: 'external'` is typed but only partially implemented.
 2. **Fine-grained debounce scheduling** — per-field invalidation windows instead of coarse sweep intervals.
 3. **`address-book` layout migration** — migrate `ContactsLayout` to pattern-level caching (currently violates the ADR-011 `load()`-scoping rule).

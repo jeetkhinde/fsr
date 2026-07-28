@@ -298,11 +298,11 @@ describe('cache namespacing', () => {
     expect(cacheKeyPrefix('jags-list')).toBe('kiln:jags-list');
   });
 
-  it('KilnCache.fsrConnectionCountKey is namespaced so apps do not share a connection cap', () => {
+  it('KilnCache.fsrConnectionsKey is namespaced so apps do not share a connection cap', () => {
     const plain = new KilnCache({ redis: null, cacheDir: '/tmp/x', ttlSecs: 0 });
     const ns = new KilnCache({ redis: null, cacheDir: '/tmp/x', ttlSecs: 0, namespace: 'jags-list' });
-    expect(plain.fsrConnectionCountKey()).toBe('kiln:fsr:active-connections');
-    expect(ns.fsrConnectionCountKey()).toBe('kiln:jags-list:fsr:active-connections');
+    expect(plain.fsrConnectionsKey()).toBe('kiln:fsr:connections');
+    expect(ns.fsrConnectionsKey()).toBe('kiln:jags-list:fsr:connections');
   });
 
   it('RedisCache pub/sub channels are namespaced so publisher and subscriber match per app', () => {

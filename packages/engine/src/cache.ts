@@ -75,11 +75,16 @@ export class KilnCache {
     return this.diskLayoutHtmlPath(pattern).replace(/\.html$/, '.json');
   }
 
-  /** Namespaced key for the cross-process SSE connection counter. Exposed so
-   * the hub increments a per-namespace counter — two apps sharing one Redis
-   * must not share a connection cap. */
-  fsrConnectionCountKey(): string {
-    return `${this.keyPrefix}:fsr:active-connections`;
+  /** Namespaced key for the cross-process SSE connection set. Exposed so the
+   * hub tracks connections per namespace — two apps sharing one Redis must not
+   * share a connection cap.
+   *
+   * A sorted set, not the counter this replaced: see createRedisAdmission. The
+   * key name changed with the type, so the legacy `…:fsr:active-connections`
+   * string is simply abandoned (a stale one can be deleted at leisure — it is
+   * never read again, and reusing the name would only earn a WRONGTYPE). */
+  fsrConnectionsKey(): string {
+    return `${this.keyPrefix}:fsr:connections`;
   }
 
   private redisLayoutHtmlKey(pattern: string): string {
