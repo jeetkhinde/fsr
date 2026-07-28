@@ -2,6 +2,9 @@
 
 App-level bugs only. Framework bugs → repo root [`../../.memory/bugs-active.md`](../../.memory/bugs-active.md).
 
+Last checked: 2026-07-28 (through Plan 2 CRUD + bake-classes dogfooding on
+`pages/index.tsx`) — still none open.
+
 _None open._
 
 ## Integration notes (determined NOT to be framework bugs)
