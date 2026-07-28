@@ -72,6 +72,35 @@ invites are the only way in.
     bun run test:crud                                     # spawns the app; projects/board/task/activity
     bun run test:purity                                   # spawns the app; cross-user render isolation
     bun run test:freshness                                # spawns the app; auto-dep + owner-scoped invalidation
+    bun run test:gate                                     # spawns the app; auth gate + live-list markers
+    bun run test:live                                     # spawns the app; end-to-end SSE live drill
+
+## Live surfaces
+
+| Route | Mechanism | Dep |
+|---|---|---|
+| `/projects/:id/activity` | `Live.list` on `events` | `activity` (explicit — required) |
+
+**Rule: `Live.list` does NOT receive auto-deps — always pass `dependsOn`.**
+Scalar `LiveProp` fields union the request's observed tables; live lists do
+not (`boot.ts` `registerLiveLists` passes `meta.dependsOn` straight through).
+Omit it and you register a list that silently never updates. Proven, not
+assumed: deleting `dependsOn` makes `bun run test:live` fail on a 20s timeout.
+Dep keys are table-level (`'activity'`), matching `kiln.config.ts`'s
+`fsr.triggerTables`.
+
+**Rule: a live page's `load()` must not call `requireUser` or read
+`req.query`.** The auth gate lives in `hooks.ts` `handle`, which runs before
+every Kiln route. The watcher re-runs loaders with **empty locals**
+(`makeLoaderRequest`), so `requireUser` there throws on every refresh — and
+any identity read also blocks baking, with the demotion latching for the life
+of the process. `tests/gate.integration.test.ts` proves the gate still holds
+without it.
+
+**Gotcha:** an empty `Live.list` takes the `markEmptyListSubscriptions` path
+and never marks a `<ul>`, so seed at least one row before the first render if
+you need the markers. Row matching also requires every string-valued field of
+a row to appear inside its `<li>`.
 
 ## Auth architecture (short version)
 
