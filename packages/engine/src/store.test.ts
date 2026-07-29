@@ -9,6 +9,24 @@ async function runTests() {
   const pgConnectionString = process.env.DATABASE_URL || 'postgresql://localhost:5432/kilnjs_test';
   const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 
+  // Unlike list-store.test.ts, this suite has always had a fallback URL, so a
+  // missing DATABASE_URL doesn't announce itself — it surfaces later as an
+  // opaque connection error. Probe first and skip with a clear reason instead.
+  {
+    const probe = new SQL(pgConnectionString);
+    try {
+      await probe`SELECT 1`;
+    } catch (err: any) {
+      console.warn(
+        `[test] skipping FsrStore/RedisCache integration: cannot reach ${pgConnectionString} ` +
+          `(${err?.message ?? err}). Set DATABASE_URL — see test-app/.env.example.`,
+      );
+      return;
+    } finally {
+      probe.close();
+    }
+  }
+
   const bunSql = new SQL(pgConnectionString);
   const store = new FsrStore(bunSql);
   await store.initialize();

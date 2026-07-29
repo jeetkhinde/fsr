@@ -5,7 +5,14 @@ import { FsrStore } from "./store.js";
 async function runTests() {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
-    throw new Error("DATABASE_URL is required");
+    // Skip rather than crash: this is an integration suite and a missing URL
+    // is a configuration state, not a defect. Exiting 0 keeps
+    // `bun run test:integration` usable on a machine without a local Postgres.
+    console.warn(
+      "[test] skipping FsrListStore integration: DATABASE_URL is not set " +
+        "(see test-app/.env.example)",
+    );
+    return;
   }
 
   const sql = new SQL(databaseUrl);
