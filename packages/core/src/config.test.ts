@@ -1,6 +1,42 @@
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import { DEFAULT_CONFIG, defineConfig, loadConfigFromEnv } from './config.js';
 
+describe('defineConfig — value validation', () => {
+  // TS catches typo'd KEYS, but nothing caught out-of-range VALUES; they
+  // surfaced as obscure runtime failures. JS-authored configs have no safety
+  // net at all, which is the case this exists for.
+  it('rejects an out-of-range image quality', () => {
+    expect(() => defineConfig({ images: { quality: 150 } } as any)).toThrow(/quality/i);
+    expect(() => defineConfig({ images: { quality: 0 } } as any)).toThrow(/quality/i);
+  });
+
+  it('rejects a non-numeric or out-of-range port', () => {
+    expect(() => defineConfig({ port: 'nope' } as any)).toThrow(/port/i);
+    expect(() => defineConfig({ port: 70000 } as any)).toThrow(/port/i);
+  });
+
+  it('rejects a negative fsr duration', () => {
+    expect(() => defineConfig({ fsr: { patchDebounceSecs: -1 } } as any)).toThrow(
+      /patchDebounceSecs/i,
+    );
+  });
+
+  it('names the offending key and the received value', () => {
+    expect(() => defineConfig({ images: { quality: 150 } } as any)).toThrow(/150/);
+  });
+
+  it('accepts every config the repo actually uses', () => {
+    expect(() => defineConfig({})).not.toThrow();
+    expect(() =>
+      defineConfig({
+        port: 3200,
+        images: { quality: 75, formats: ['webp', 'jpeg'] },
+        fsr: { patchDebounceSecs: 5, revalidateSeconds: 300, purgeAfterSeconds: 2_592_000 },
+      } as any),
+    ).not.toThrow();
+  });
+});
+
 describe('loadConfigFromEnv — deployment-critical overrides', () => {
   const touched = [
     'KILN_FSR_POSTGRES_URL',

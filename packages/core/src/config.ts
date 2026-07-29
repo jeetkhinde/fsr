@@ -256,7 +256,70 @@ export function defineConfig(config: DeepPartial<KilnConfig>): KilnConfig {
   if (config.port !== undefined) merged.port = config.port;
   if (config.pagesDir !== undefined) merged.pagesDir = config.pagesDir as any;
 
+  validateConfig(merged);
   return merged;
+}
+
+const SUPPORTED_IMAGE_FORMATS = ['webp', 'jpeg', 'png', 'avif'];
+
+/**
+ * Validates merged values, not keys — TypeScript already rejects typo'd keys
+ * in a TS-authored config, but nothing caught out-of-range VALUES, which
+ * surfaced later as obscure runtime failures. A JS-authored config has no
+ * type-level net at all, which is the case this mainly protects.
+ *
+ * Every message names the offending key and the received value, so the fix is
+ * obvious from the error alone.
+ */
+function validateConfig(c: KilnConfig): void {
+  const fail = (key: string, received: unknown, expected: string): never => {
+    throw new Error(
+      `[kiln] invalid config: ${key} = ${JSON.stringify(received)} — expected ${expected}`,
+    );
+  };
+  const port = (key: string, v: unknown) => {
+    if (v === undefined) return;
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > 65535) {
+      fail(key, v, 'an integer between 1 and 65535');
+    }
+  };
+  const nonNegative = (key: string, v: unknown) => {
+    if (v === undefined || v === false) return;
+    if (typeof v !== 'number' || Number.isNaN(v) || v < 0) {
+      fail(key, v, 'a non-negative number');
+    }
+  };
+
+  port('port', c.port);
+  port('web.port', c.web?.port);
+  port('backend.port', c.backend?.port);
+
+  const quality = c.images?.quality;
+  if (quality !== undefined) {
+    if (typeof quality !== 'number' || !Number.isInteger(quality) || quality < 1 || quality > 100) {
+      fail('images.quality', quality, 'an integer between 1 and 100');
+    }
+  }
+  const formats = c.images?.formats;
+  if (formats !== undefined) {
+    if (!Array.isArray(formats)) fail('images.formats', formats, 'an array of format names');
+    for (const f of formats) {
+      if (!SUPPORTED_IMAGE_FORMATS.includes(f)) {
+        fail('images.formats', f, `one of ${SUPPORTED_IMAGE_FORMATS.join(', ')}`);
+      }
+    }
+  }
+
+  // Second-based FSR knobs. `revalidateSeconds` accepts false (never
+  // revalidate), which nonNegative allows through deliberately.
+  nonNegative('fsr.patchDebounceSecs', c.fsr?.patchDebounceSecs);
+  nonNegative('fsr.revalidateSeconds', c.fsr?.revalidateSeconds);
+  nonNegative('fsr.purgeAfterSeconds', c.fsr?.purgeAfterSeconds);
+  nonNegative('fsr.purgeSweepSeconds', c.fsr?.purgeSweepSeconds);
+  nonNegative('fsr.activeWindowSecs', c.fsr?.activeWindowSecs);
+  nonNegative('fsr.connectionTtlSecs', c.fsr?.connectionTtlSecs);
+  nonNegative('fsr.keepaliveSecs', c.fsr?.keepaliveSecs);
+  nonNegative('fsr.maxSseConnections', c.fsr?.maxSseConnections);
 }
 
 export function loadConfigFromEnv(baseConfig: KilnConfig): KilnConfig {
