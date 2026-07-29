@@ -87,23 +87,36 @@ describe('FSR configuration', () => {
     expect(DEFAULT_CONFIG.fsr.purgeSweepSeconds).toBe(3_600);
   });
 
-  it('maps deprecated live and idle fields to canonical fsr fields', () => {
-    const warning = spyOn(console, 'warn').mockImplementation(() => {});
+  // The deprecated surface (config.live, fsr.idleEvictSecs,
+  // fsr.idleThresholdSecs) was removed — it had warned on use since ADR-era
+  // config consolidation. The canonical fields are now the only way in.
+  it('accepts the canonical fsr duration fields', () => {
     const config = defineConfig({
-      live: {
-        patchDebounceSeconds: 11,
-        purgeAfterSeconds: 13,
-      },
       fsr: {
-        idleEvictSecs: 17,
-        idleThresholdSecs: 19,
+        patchDebounceSecs: 11,
+        purgeSweepSeconds: 17,
+        purgeAfterSeconds: 19,
       },
     });
 
     expect(config.fsr.patchDebounceSecs).toBe(11);
-    expect(config.fsr.purgeAfterSeconds).toBe(19);
     expect(config.fsr.purgeSweepSeconds).toBe(17);
-    expect(warning).toHaveBeenCalled();
+    expect(config.fsr.purgeAfterSeconds).toBe(19);
+  });
+
+  it('ignores the removed deprecated keys instead of mapping them', () => {
+    const warning = spyOn(console, 'warn').mockImplementation(() => {});
+    // A stale JS config may still pass these. They must not silently override
+    // the canonical values any more — and must not throw either.
+    const config = defineConfig({
+      fsr: { idleEvictSecs: 17, idleThresholdSecs: 19 },
+      live: { patchDebounceSeconds: 11 },
+    } as any);
+
+    expect(config.fsr.purgeSweepSeconds).toBe(DEFAULT_CONFIG.fsr.purgeSweepSeconds);
+    expect(config.fsr.purgeAfterSeconds).toBe(DEFAULT_CONFIG.fsr.purgeAfterSeconds);
+    expect(config.fsr.patchDebounceSecs).toBe(DEFAULT_CONFIG.fsr.patchDebounceSecs);
+    expect((config as any).live).toBeUndefined();
     warning.mockRestore();
   });
 });

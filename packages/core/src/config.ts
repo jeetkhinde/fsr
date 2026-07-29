@@ -17,11 +17,6 @@ export interface BackendConfig {
   port: number;
 }
 
-export interface LiveConfig {
-  patchDebounceSeconds: number;
-  purgeAfterSeconds: number;
-}
-
 export interface TriggerTableConfig {
   table: string;
   /** Dep key emitted on change; defaults to the table name. */
@@ -47,10 +42,6 @@ export interface FsrConfig {
    * and a mismatch on read forces a re-bake — replaces the manual cache
    * flush across breaking deploys. */
   buildId?: string;
-  /** @deprecated Use purgeSweepSeconds. */
-  idleEvictSecs?: number;
-  /** @deprecated Use purgeAfterSeconds. */
-  idleThresholdSecs?: number;
   postgresUrl?: string;
   /** Tables `kiln sync-triggers` installs/verifies `kiln_emit_event` triggers on. */
   triggerTables?: TriggerTableConfig[];
@@ -137,7 +128,6 @@ export interface KilnConfig {
   i18n: I18nConfig;
   images: ImageConfig;
   client: ClientRuntimeConfig;
-  live: LiveConfig;
   fsr: FsrConfig;
   port?: number;
   pagesDir?: string;
@@ -154,9 +144,9 @@ export const DEFAULT_CONFIG: KilnConfig = {
     host: '127.0.0.1',
     port: 4000,
   },
-  // 'filesystem' is the only fully-implemented cold tier (Redis fronts it
-  // when fsr.redisUrl / cache.url is set); 'memory' and 'sqlite' are typed
-  // but not implemented, and startKiln rejects them at boot.
+  // 'filesystem' is the only cold tier (Redis fronts it when fsr.redisUrl /
+  // cache.url is set). CacheProvider no longer types 'memory'/'sqlite'; a
+  // JS-authored config can still name them and startKiln rejects them at boot.
   cache: {
     provider: 'filesystem',
   },
@@ -189,10 +179,6 @@ export const DEFAULT_CONFIG: KilnConfig = {
       concurrency: 4,
     },
     inlineRuntime: false,
-  },
-  live: {
-    patchDebounceSeconds: 5,
-    purgeAfterSeconds: 2_592_000, // 30 days
   },
   fsr: {
     watcher: 'embedded',
@@ -228,31 +214,12 @@ export function defineConfig(config: DeepPartial<KilnConfig>): KilnConfig {
       react: { ...DEFAULT_CONFIG.client.react, ...config.client.react } as any,
     } as any;
   }
-  if (config.live) {
-    console.warn('[kiln] config.live is deprecated; use config.fsr');
-    merged.live = { ...DEFAULT_CONFIG.live, ...config.live } as any;
-  }
-  // Always produce a fresh object here (not just when config.fsr is passed):
-  // the live→fsr bridging below mutates merged.fsr in place, and if this
-  // stayed conditional, merged.fsr would still alias DEFAULT_CONFIG.fsr
-  // (from the shallow `{ ...DEFAULT_CONFIG }` spread above) whenever only
-  // config.live was set — corrupting the shared DEFAULT_CONFIG singleton
-  // for every future defineConfig() call in the process.
+  // Always produce a fresh object here, not just when config.fsr is passed:
+  // the shallow `{ ...DEFAULT_CONFIG }` spread above aliases DEFAULT_CONFIG.fsr,
+  // so anything that later writes to merged.fsr — loadConfigFromEnv's overrides,
+  // or a caller mutating the returned config — would corrupt the shared
+  // singleton for every future defineConfig() call in the process.
   merged.fsr = { ...DEFAULT_CONFIG.fsr, ...config.fsr } as any;
-  if (config.live && config.fsr?.patchDebounceSecs === undefined) {
-    merged.fsr.patchDebounceSecs = merged.live.patchDebounceSeconds;
-  }
-  if (config.live && config.fsr?.purgeAfterSeconds === undefined) {
-    merged.fsr.purgeAfterSeconds = merged.live.purgeAfterSeconds;
-  }
-  if (config.fsr?.idleEvictSecs !== undefined) {
-    console.warn('[kiln] config.fsr.idleEvictSecs is deprecated; use purgeSweepSeconds');
-    merged.fsr.purgeSweepSeconds = config.fsr.idleEvictSecs;
-  }
-  if (config.fsr?.idleThresholdSecs !== undefined) {
-    console.warn('[kiln] config.fsr.idleThresholdSecs is deprecated; use purgeAfterSeconds');
-    merged.fsr.purgeAfterSeconds = config.fsr.idleThresholdSecs;
-  }
   if (config.port !== undefined) merged.port = config.port;
   if (config.pagesDir !== undefined) merged.pagesDir = config.pagesDir as any;
 

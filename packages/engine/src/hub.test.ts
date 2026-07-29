@@ -27,8 +27,7 @@ async function runTests() {
     patchDebounceSecs: 0,
     purgeAfterSeconds: 3600,
     scheduledInvalidations: [],
-    idleEvictSecs: 0,
-    idleThresholdSecs: 0
+    purgeSweepSeconds: 0
   };
 
   const watcher = new FsrWatcher(store, null, config);
