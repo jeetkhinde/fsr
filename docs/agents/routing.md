@@ -35,6 +35,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
 Layouts bake **once per URL pattern** and are shared by every route beneath them (ADR-011). The root `_layout.tsx` owns `<html>`/`<head>` and must include `<script src="/_silcrow/silcrow.js" defer>` for progressive enhancement.
 
+A layout on a dynamic pattern may read the params **its own** pattern owns, and gets one baked entry per concrete value:
+
+```tsx
+// pages/projects/[id]/_layout.tsx — one bake per project id, shared by
+// /projects/7/board and /projects/7/activity.
+export async function load(req: KilnRequest) {
+  return { project: await projectById(req.params.id) };
+}
+```
+
+What a layout still must not read in `load()`: `req.query`, and any param belonging to a *descendant* page (`[taskId]` under this layout) — neither is in the layout's cache key, so both would serve one request's data to every other request. Push that data into the page's own `load()`. A `Live.list` inside a dynamic-segment layout is not supported yet either (its updates are identified by pattern, so every project would share one list); Kiln warns once per pattern — move the list into the page.
+
 ## Error handling from a route
 
 Throw typed errors from `load()` or actions (`@kiln/core`):

@@ -277,7 +277,7 @@ cache: { provider: 'filesystem' | 'redis' }   // default: 'filesystem'
 3. **Disk** — synchronous fallback for any Redis miss (outage, eviction, cold start)
 
 ### Pattern-level layout caching (ADR-011)
-`_layout.tsx` files bake once per URL pattern (`kiln:layout:html:/dashboard`), shared by all routes beneath. `cache.deleteLayout(pattern)` invalidates with one write.
+`_layout.tsx` files bake once per URL pattern (`kiln:layout:html:v<N>:/dashboard`), shared by all routes beneath. A pattern with dynamic segments gets one entry per concrete value of the params **it** owns (`…:/projects/:id|<token>`) — so `/projects/7/board` and `/projects/7/activity` share a bake but `/projects/8` never sees project 7's chrome. `cache.deleteLayout(pattern)` invalidates with one write (all instances of a dynamic pattern); `deleteLayout(pattern, params)` targets one instance.
 
 ### Cache invalidation
 - Postgres `LISTEN/NOTIFY` → `db-notify.ts` → `FsrWatcher` → Redis pub/sub → SSE hub → `silcrow.js` DOM patch

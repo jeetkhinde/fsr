@@ -158,6 +158,77 @@ describe('KilnCache', () => {
       expect(await cache.getJson('/dashboard/reports')).toEqual({ data: {} });
     });
 
+    it('keys a dynamic layout pattern per concrete param, not per pattern', async () => {
+      // The bug: "/projects/:id" resolved to ONE cache entry shared by every
+      // project, so the first-baked project's chrome leaked into all others.
+      await cache.setLayoutHtml('/projects/:id', '<h1>PROBE-ALPHA</h1>', { id: '1' });
+      await cache.setLayoutJson('/projects/:id', { data: { name: 'PROBE-ALPHA' } }, { id: '1' });
+
+      // A different project must be a cache MISS, not alpha's entry.
+      expect(await cache.getLayoutHtml('/projects/:id', { id: '2' })).toBeNull();
+      expect(await cache.getLayoutJson('/projects/:id', { id: '2' })).toBeNull();
+
+      await cache.setLayoutHtml('/projects/:id', '<h1>PROBE-BETA</h1>', { id: '2' });
+      expect(await cache.getLayoutHtml('/projects/:id', { id: '1' })).toBe('<h1>PROBE-ALPHA</h1>');
+      expect(await cache.getLayoutHtml('/projects/:id', { id: '2' })).toBe('<h1>PROBE-BETA</h1>');
+    });
+
+    it('ignores params a layout pattern does not own, so one bake is shared by its child routes', async () => {
+      // "/projects/7/board" and "/projects/7/activity" both carry the page's
+      // own params; only `id` belongs to the layout, so both must hit the
+      // same entry — that sharing is the whole point of ADR-011.
+      await cache.setLayoutHtml('/projects/:id', '<h1>SEVEN</h1>', { id: '7', taskId: '99' });
+      expect(await cache.getLayoutHtml('/projects/:id', { id: '7' })).toBe('<h1>SEVEN</h1>');
+      expect(await cache.getLayoutHtml('/projects/:id', { id: '7', taskId: '123' })).toBe('<h1>SEVEN</h1>');
+    });
+
+    it('does not collide two param values that sanitise to the same disk-safe string', async () => {
+      await cache.setLayoutHtml('/x/:slug', '<a/>', { slug: 'a/b' });
+      await cache.setLayoutHtml('/x/:slug', '<b/>', { slug: 'a_b' });
+      expect(await cache.getLayoutHtml('/x/:slug', { slug: 'a/b' })).toBe('<a/>');
+      expect(await cache.getLayoutHtml('/x/:slug', { slug: 'a_b' })).toBe('<b/>');
+    });
+
+    it('keeps a param value from escaping the cache directory', () => {
+      const p = cache.diskLayoutHtmlPath('/x/:slug', { slug: '../../../etc/passwd' });
+      expect(p).not.toContain('..');
+      expect(p.startsWith(tmpDir)).toBe(true);
+    });
+
+    it('deleteLayout without params drops every instance of a dynamic pattern', async () => {
+      // The deploy case: the layout's source changed, so no instance's
+      // artifact is valid — and the caller only knows the pattern.
+      await cache.setLayoutHtml('/projects/:id', '<h1>A</h1>', { id: '1' });
+      await cache.setLayoutHtml('/projects/:id', '<h1>B</h1>', { id: '2' });
+      // A nested layout pattern caches in a SUBDIRECTORY of the same dir and
+      // must survive (an rm -r of the pattern dir would take it out).
+      await cache.setLayoutHtml('/projects/:id/settings', '<nav>settings</nav>', { id: '1' });
+
+      await cache.deleteLayout('/projects/:id');
+
+      expect(await cache.getLayoutHtml('/projects/:id', { id: '1' })).toBeNull();
+      expect(await cache.getLayoutHtml('/projects/:id', { id: '2' })).toBeNull();
+      expect(await cache.getLayoutHtml('/projects/:id/settings', { id: '1' })).toBe('<nav>settings</nav>');
+    });
+
+    it('deleteLayout with params drops only that instance', async () => {
+      await cache.setLayoutHtml('/projects/:id', '<h1>A</h1>', { id: '1' });
+      await cache.setLayoutHtml('/projects/:id', '<h1>B</h1>', { id: '2' });
+
+      await cache.deleteLayout('/projects/:id', { id: '1' });
+
+      expect(await cache.getLayoutHtml('/projects/:id', { id: '1' })).toBeNull();
+      expect(await cache.getLayoutHtml('/projects/:id', { id: '2' })).toBe('<h1>B</h1>');
+    });
+
+    it('leaves a static pattern on its historical suffix-free path', () => {
+      // Static layouts own no params, so their key must not change — existing
+      // deployments' entries stay readable across this fix.
+      const p = cache.diskLayoutHtmlPath('/dashboard', { id: '7' });
+      expect(p).toBe(cache.diskLayoutHtmlPath('/dashboard'));
+      expect(p).not.toContain('_i');
+    });
+
     it('normalises the root layout pattern "/" to a safe disk path', () => {
       const htmlPath = cache.diskLayoutHtmlPath('/');
       expect(htmlPath).toContain('layouts');

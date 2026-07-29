@@ -19,6 +19,42 @@ function safeVariant(v: string): string {
   return v.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
 }
 
+/** Path params as the router produces them (`req.params`). */
+export type LayoutParams = Record<string, string | undefined>;
+
+/**
+ * Names of the dynamic segments a layout pattern owns, in order — `:id` →
+ * `id`, catch-all `*` → `*`. Deliberately derived from the LAYOUT's pattern,
+ * not the page's: a descendant page's extra params must not enter the layout's
+ * cache key, or `/projects/:id` would bake separately for `/projects/7/board`
+ * and `/projects/7/activity` and lose the sharing ADR-011 exists for.
+ */
+export function layoutParamNames(pattern: string): string[] {
+  return pattern
+    .split('/')
+    .filter((seg) => seg.startsWith(':') || seg === '*')
+    .map((seg) => (seg === '*' ? '*' : seg.slice(1)));
+}
+
+/**
+ * Stable token identifying one concrete instance of a dynamic layout pattern,
+ * or null for a static pattern (which has exactly one instance and keeps its
+ * historical, suffix-free key).
+ *
+ * The raw joined value is sanitised for disk/Redis safety AND hashed: the
+ * sanitiser maps distinct params onto the same string (`a/b` and `a_b`), so
+ * without the hash two different projects could still share one cache entry —
+ * the very bug this key exists to fix. Both the disk path and the Redis key
+ * derive from this one token so the two key spaces can never disagree about
+ * which instance an entry belongs to.
+ */
+export function layoutInstanceToken(pattern: string, params?: LayoutParams): string | null {
+  const names = layoutParamNames(pattern);
+  if (names.length === 0) return null;
+  const raw = names.map((n) => `${n}=${params?.[n] ?? ''}`).join('&');
+  return `${safeVariant(raw)}-${Bun.hash(raw).toString(36)}`;
+}
+
 /** Root prefix for every Redis key/channel. `kiln` when no namespace is set
  * (backward-compatible), else `kiln:<namespace>`. Shared by KilnCache,
  * RedisCache, and the SSE hub so a given namespace produces one consistent
@@ -49,13 +85,23 @@ export class KilnCache {
   }
 
   // ---------------------------------------------------------------------
-  // Layout-level cache: keyed by the LAYOUT's own pattern (e.g. "/dashboard"),
-  // not by the concrete route being served. A layout that only depends on
-  // its own pattern's params (never req.query, never a descendant page's
-  // params — see docs/layout-caching.md) bakes once and is shared by every
-  // route underneath it, instead of being re-baked into every route's own
-  // page-level cache entry. Invalidating a layout then only touches this one
-  // entry, regardless of how many routes sit under it.
+  // Layout-level cache: keyed by the LAYOUT's own pattern (e.g. "/dashboard")
+  // plus the concrete values of the dynamic segments THAT pattern owns, not
+  // by the concrete route being served. A layout that only depends on its own
+  // pattern's params (never req.query, never a descendant page's params — see
+  // ADR-011) bakes once per distinct value of those params and is shared by
+  // every route underneath it, instead of being re-baked into every route's
+  // own page-level cache entry. A static pattern owns no params, so it keeps
+  // exactly one entry (and the same key it has always had); `/projects/:id`
+  // gets one entry per concrete id, still shared across `/projects/7/board`
+  // and `/projects/7/activity`.
+  //
+  // The params are in the key because ADR-011's rule explicitly licenses a
+  // layout to read its own pattern's `req.params`. Keying on the pattern
+  // string ALONE (as this did until 2026-07-28) contradicted that: the string
+  // is identical for every concrete instance, so one entry was shared by all
+  // of them and the first-baked project's chrome leaked into every other
+  // project's page — bodies correct, layout wrong.
   // ---------------------------------------------------------------------
 
   // Layout entries embed markup conventions (marker attributes, outlet
@@ -66,13 +112,26 @@ export class KilnCache {
   // and re-bake layouts too. Older-version entries are simply orphaned
   // (small; disk under layouts/v<N>, Redis keys age out via server TTL
   // policy or manual cleanup).
-  diskLayoutHtmlPath(pattern: string): string {
+  /** Directory holding every entry for one layout pattern. Nested layout
+   * patterns cache in SUBDIRECTORIES of it (`/projects/:id` and
+   * `/projects/:id/settings`), so this dir is never removed wholesale — see
+   * deleteLayout. */
+  private diskLayoutPatternDir(pattern: string): string {
     const safe = pattern === '/' ? 'index' : pattern.replace(/^\//, '').replace(/\//g, path.sep);
-    return path.join(this.cacheDir, 'layouts', `v${BAKED_RENDER_VERSION}`, safe, 'shell.html');
+    return path.join(this.cacheDir, 'layouts', `v${BAKED_RENDER_VERSION}`, safe);
   }
 
-  diskLayoutJsonPath(pattern: string): string {
-    return this.diskLayoutHtmlPath(pattern).replace(/\.html$/, '.json');
+  diskLayoutHtmlPath(pattern: string, params?: LayoutParams): string {
+    const dir = this.diskLayoutPatternDir(pattern);
+    const token = layoutInstanceToken(pattern, params);
+    // `_i` mirrors the page cache's `_v` variant subdirectory: a fixed
+    // segment that can never collide with a nested layout pattern's own
+    // directory (route segments never start with an underscore).
+    return token ? path.join(dir, '_i', token, 'shell.html') : path.join(dir, 'shell.html');
+  }
+
+  diskLayoutJsonPath(pattern: string, params?: LayoutParams): string {
+    return this.diskLayoutHtmlPath(pattern, params).replace(/\.html$/, '.json');
   }
 
   /** Namespaced key for the cross-process SSE connection set. Exposed so the
@@ -87,67 +146,126 @@ export class KilnCache {
     return `${this.keyPrefix}:fsr:connections`;
   }
 
-  private redisLayoutHtmlKey(pattern: string): string {
-    return `${this.keyPrefix}:layout:html:v${BAKED_RENDER_VERSION}:${pattern}`;
+  private redisLayoutHtmlKey(pattern: string, params?: LayoutParams): string {
+    const token = layoutInstanceToken(pattern, params);
+    const base = `${this.keyPrefix}:layout:html:v${BAKED_RENDER_VERSION}:${pattern}`;
+    return token ? `${base}|${token}` : base;
   }
-  private redisLayoutJsonKey(pattern: string): string {
-    return `${this.keyPrefix}:layout:json:v${BAKED_RENDER_VERSION}:${pattern}`;
+  private redisLayoutJsonKey(pattern: string, params?: LayoutParams): string {
+    const token = layoutInstanceToken(pattern, params);
+    const base = `${this.keyPrefix}:layout:json:v${BAKED_RENDER_VERSION}:${pattern}`;
+    return token ? `${base}|${token}` : base;
   }
 
-  async getLayoutHtml(pattern: string): Promise<string | null> {
+  async getLayoutHtml(pattern: string, params?: LayoutParams): Promise<string | null> {
     if (this.redis) {
       try {
-        const v = await this.redis.get(this.redisLayoutHtmlKey(pattern));
+        const v = await this.redis.get(this.redisLayoutHtmlKey(pattern, params));
         if (v != null) return v;
       } catch (err) { this.warnRedisError('getLayoutHtml', pattern, err); }
     }
-    const f = Bun.file(this.diskLayoutHtmlPath(pattern));
+    const f = Bun.file(this.diskLayoutHtmlPath(pattern, params));
     return (await f.exists()) ? f.text() : null;
   }
 
-  async setLayoutHtml(pattern: string, html: string): Promise<void> {
-    await atomicWrite(this.diskLayoutHtmlPath(pattern), html);
+  async setLayoutHtml(pattern: string, html: string, params?: LayoutParams): Promise<void> {
+    await atomicWrite(this.diskLayoutHtmlPath(pattern, params), html);
     if (this.redis) {
       try {
-        await this.redis.set(this.redisLayoutHtmlKey(pattern), html);
+        await this.redis.set(this.redisLayoutHtmlKey(pattern, params), html);
       } catch (err) { this.warnRedisError('setLayoutHtml', pattern, err); }
     }
   }
 
-  async getLayoutJson(pattern: string): Promise<unknown | null> {
+  async getLayoutJson(pattern: string, params?: LayoutParams): Promise<unknown | null> {
     if (this.redis) {
       try {
-        const v = await this.redis.get(this.redisLayoutJsonKey(pattern));
+        const v = await this.redis.get(this.redisLayoutJsonKey(pattern, params));
         if (v != null) return JSON.parse(v);
       } catch (err) { this.warnRedisError('getLayoutJson', pattern, err); }
     }
-    const f = Bun.file(this.diskLayoutJsonPath(pattern));
+    const f = Bun.file(this.diskLayoutJsonPath(pattern, params));
     if (!(await f.exists())) return null;
     try { return JSON.parse(await f.text()); } catch { return null; }
   }
 
-  async setLayoutJson(pattern: string, data: unknown): Promise<void> {
+  async setLayoutJson(pattern: string, data: unknown, params?: LayoutParams): Promise<void> {
     const json = JSON.stringify(data);
-    await atomicWrite(this.diskLayoutJsonPath(pattern), json);
+    await atomicWrite(this.diskLayoutJsonPath(pattern, params), json);
     if (this.redis) {
       try {
-        await this.redis.set(this.redisLayoutJsonKey(pattern), json);
+        await this.redis.set(this.redisLayoutJsonKey(pattern, params), json);
       } catch (err) { this.warnRedisError('setLayoutJson', pattern, err); }
     }
   }
 
-  /** Invalidate a single layout's cache — e.g. after a deploy that changes
-   * its source. Every route under that layout picks up the change on its
-   * next request; no per-route re-bake needed. */
-  async deleteLayout(pattern: string): Promise<void> {
+  /** Invalidate a layout's cache — e.g. after a deploy that changes its
+   * source. Every route under that layout picks up the change on its next
+   * request; no per-route re-bake needed.
+   *
+   * With `params`, only that one concrete instance is dropped. Without them
+   * (the deploy case), EVERY instance of a dynamic pattern goes: the source
+   * changed, so no instance's artifact is still valid, and a caller who only
+   * knows the pattern has no way to enumerate the ids. */
+  async deleteLayout(pattern: string, params?: LayoutParams): Promise<void> {
+    const isDynamic = layoutParamNames(pattern).length > 0;
+    if (isDynamic && !params) {
+      // Only the `_i` subtree — the pattern dir itself holds NESTED layout
+      // patterns' directories, which an rm -r would wipe along with it.
+      await fs.rm(path.join(this.diskLayoutPatternDir(pattern), '_i'), { recursive: true, force: true }).catch(() => {});
+      // Also the suffix-free entry a pre-instance-key Kiln wrote for this
+      // pattern: nothing reads it any more, but a deploy-time invalidation is
+      // the natural moment to reclaim it.
+      await Promise.allSettled([
+        fs.unlink(path.join(this.diskLayoutPatternDir(pattern), 'shell.html')).catch(() => {}),
+        fs.unlink(path.join(this.diskLayoutPatternDir(pattern), 'shell.json')).catch(() => {}),
+      ]);
+      if (this.redis) {
+        try {
+          await this.redis.send('DEL', [this.redisLayoutHtmlKey(pattern), this.redisLayoutJsonKey(pattern)]);
+        } catch (err) { this.warnRedisError('deleteLayout', pattern, err); }
+        await this.deleteRedisKeysMatching(
+          [`${this.redisLayoutHtmlKey(pattern)}|*`, `${this.redisLayoutJsonKey(pattern)}|*`],
+          pattern,
+        );
+      }
+      return;
+    }
     await Promise.allSettled([
-      fs.unlink(this.diskLayoutHtmlPath(pattern)).catch(() => {}),
-      fs.unlink(this.diskLayoutJsonPath(pattern)).catch(() => {}),
+      fs.unlink(this.diskLayoutHtmlPath(pattern, params)).catch(() => {}),
+      fs.unlink(this.diskLayoutJsonPath(pattern, params)).catch(() => {}),
     ]);
     if (this.redis) {
       try {
-        await this.redis.send('DEL', [this.redisLayoutHtmlKey(pattern), this.redisLayoutJsonKey(pattern)]);
+        await this.redis.send('DEL', [
+          this.redisLayoutHtmlKey(pattern, params),
+          this.redisLayoutJsonKey(pattern, params),
+        ]);
       } catch (err) { this.warnRedisError('deleteLayout', pattern, err); }
+    }
+  }
+
+  /** SCAN + DEL for the glob patterns given. SCAN (never KEYS) so a large
+   * keyspace doesn't block Redis; a cursor that never returns to 0 (a Redis
+   * that keeps rehashing) is bounded by the iteration cap rather than looping
+   * forever — leftovers are re-collected by the next call. */
+  private async deleteRedisKeysMatching(globs: string[], logRoute: string): Promise<void> {
+    const redis = this.redis;
+    if (!redis) return;
+    for (const glob of globs) {
+      let cursor = '0';
+      let iterations = 0;
+      try {
+        do {
+          const reply = (await redis.send('SCAN', [cursor, 'MATCH', glob, 'COUNT', '100'])) as
+            | [string, string[]]
+            | null;
+          if (!Array.isArray(reply)) break;
+          cursor = String(reply[0]);
+          const keys = reply[1] ?? [];
+          if (keys.length > 0) await redis.send('DEL', keys);
+        } while (cursor !== '0' && ++iterations < 1000);
+      } catch (err) { this.warnRedisError('deleteLayout', logRoute, err); }
     }
   }
 
