@@ -27,6 +27,18 @@ export interface TriggerTableConfig {
 }
 
 export interface FsrConfig {
+  /**
+   * 'embedded' (the supported mode) runs the FsrWatcher in the application
+   * process.
+   *
+   * 'external' is NOT IMPLEMENTED. No watcher process, IPC channel or daemon
+   * exists; setting it only changes two things: the read path re-runs load()
+   * on every cache hit (so props are fresh, since nothing patches them), and
+   * `Live.list` throws — its closures cannot cross a process boundary. The net
+   * effect is "no watcher, re-load every time", which forfeits the caching
+   * that live routes exist for. Roadmap Phase 4.2 tracks completing it; until
+   * then treat this value as reserved.
+   */
   watcher: 'embedded' | 'external';
   pollIntervalMs: number;
   patchDebounceSecs: number;
