@@ -113,10 +113,10 @@ export async function startKiln(
   const fsrEnabled = options.fsr === true || !!options.store || !!options.watcher;
 
   // Implemented cache storage: disk ('filesystem'), optionally fronted by a
-  // Redis hot tier ('redis' provider or fsr.redisUrl). Fail loudly on the
-  // providers the config type advertises but the runtime doesn't back,
-  // instead of silently writing to disk anyway.
-  const provider = config.cache?.provider ?? 'filesystem';
+  // Redis hot tier ('redis' provider or fsr.redisUrl). CacheProvider no longer
+  // TYPES 'memory'/'sqlite', but a JS-authored config (or a cast) can still
+  // supply them, so the loud failure stays rather than silently writing to disk.
+  const provider: string = config.cache?.provider ?? 'filesystem';
   if (provider === 'memory' || provider === 'sqlite') {
     throw new StartupError(
       'UnsupportedProvider',

@@ -103,7 +103,11 @@ export interface ServiceWorkerConfig {
   offlineFallback?: string;
 }
 
-export type CacheProvider = 'memory' | 'filesystem' | 'sqlite' | 'redis';
+/** Providers the runtime actually backs. 'memory' and 'sqlite' were
+ * advertised here but never implemented — startKiln threw UnsupportedProvider
+ * for both. The type no longer offers what does not exist; the runtime guard
+ * stays, because a JS-authored config can still pass anything. */
+export type CacheProvider = 'filesystem' | 'redis';
 
 export interface CacheConfig {
   provider: CacheProvider;
