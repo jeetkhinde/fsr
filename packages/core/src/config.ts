@@ -267,6 +267,11 @@ export function loadConfigFromEnv(baseConfig: KilnConfig): KilnConfig {
     ...baseConfig,
     web: { ...baseConfig.web },
     backend: { ...baseConfig.backend },
+    // fsr and cache are copied for the same reason as web/backend above: the
+    // overrides below mutate them, and a shallow spread would alias the
+    // caller's objects (and, when unset, the shared DEFAULT_CONFIG).
+    fsr: { ...baseConfig.fsr },
+    cache: { ...baseConfig.cache },
   };
 
   if (process.env.KILN_WEB_HOST) {
@@ -294,6 +299,23 @@ export function loadConfigFromEnv(baseConfig: KilnConfig): KilnConfig {
       console.warn(`[kiln] KILN_BACKEND_PORT="${process.env.KILN_BACKEND_PORT}" is not a valid number; ignoring`);
     }
   }
-  
+
+  // Deployment-critical values that previously had no override at all. These
+  // are the ones you cannot commit to a config file: connection strings differ
+  // per environment, and fsr.buildId is meant to be the per-deploy git SHA
+  // that self-invalidates older artifacts (ADR-018).
+  if (process.env.KILN_FSR_POSTGRES_URL) {
+    config.fsr.postgresUrl = process.env.KILN_FSR_POSTGRES_URL;
+  }
+  if (process.env.KILN_FSR_REDIS_URL) {
+    config.fsr.redisUrl = process.env.KILN_FSR_REDIS_URL;
+  }
+  if (process.env.KILN_FSR_BUILD_ID) {
+    config.fsr.buildId = process.env.KILN_FSR_BUILD_ID;
+  }
+  if (process.env.KILN_CACHE_URL) {
+    config.cache.url = process.env.KILN_CACHE_URL;
+  }
+
   return config;
 }
