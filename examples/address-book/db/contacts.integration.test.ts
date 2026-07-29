@@ -9,19 +9,50 @@ import {
   updateContact,
 } from "./contacts.js";
 
+// Needs a database carrying THIS example's schema (contacts, contact_events
+// from migrations/0000_init.sql) — not the test-app database the rest of
+// test:integration points at. Skip cleanly rather than crash when either the
+// URL or the schema is absent, so the suite stays runnable for everyone; set
+// DATABASE_URL to a migrated address-book DB to actually exercise it.
 const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) throw new Error("DATABASE_URL is required");
-const db = new SQL(databaseUrl);
+const db = databaseUrl ? new SQL(databaseUrl) : null;
+
+async function schemaPresent(): Promise<boolean> {
+  if (!db) return false;
+  try {
+    // BOTH tables — a database can carry `contacts` from another fixture
+    // while lacking `contact_events`, which is exactly what the test-app
+    // database does.
+    const rows = await db`
+      SELECT to_regclass('public.contacts') IS NOT NULL
+         AND to_regclass('public.contact_events') IS NOT NULL AS ok`;
+    return Boolean(rows[0]?.ok);
+  } catch {
+    return false;
+  }
+}
+
+const runnable = await schemaPresent();
+if (!runnable) {
+  console.warn(
+    "[test] skipping contacts integration: " +
+      (databaseUrl
+        ? "DATABASE_URL points at a database without the address-book schema (run examples/address-book/migrations/0000_init.sql)"
+        : "DATABASE_URL is not set"),
+  );
+}
 
 beforeEach(async () => {
-  await db`DELETE FROM contact_events`;
-  await db`DELETE FROM contacts`;
+  if (!runnable) return;
+  await db!`DELETE FROM contact_events`;
+  await db!`DELETE FROM contacts`;
 });
 
 afterAll(async () => {
-  await db`DELETE FROM contact_events`;
-  await db`DELETE FROM contacts`;
-  await db.close();
+  if (!runnable) return;
+  await db!`DELETE FROM contact_events`;
+  await db!`DELETE FROM contacts`;
+  await db!.close();
 });
 
 const input = {
@@ -38,7 +69,7 @@ const input = {
   notes: "",
 };
 
-describe("contact persistence", () => {
+describe.skipIf(!runnable)("contact persistence", () => {
   it("creates, updates, favorites, and deletes with matching events", async () => {
     const created = await createContact(db, input);
     expect((await listContacts(db)).map((contact) => contact.id)).toEqual([
