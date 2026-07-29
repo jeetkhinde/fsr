@@ -15,15 +15,15 @@ import {
 // URL or the schema is absent, so the suite stays runnable for everyone; set
 // DATABASE_URL to a migrated address-book DB to actually exercise it.
 const databaseUrl = process.env.DATABASE_URL;
-const db = databaseUrl ? new SQL(databaseUrl) : null;
+const maybeDb = databaseUrl ? new SQL(databaseUrl) : null;
 
 async function schemaPresent(): Promise<boolean> {
-  if (!db) return false;
+  if (!maybeDb) return false;
   try {
     // BOTH tables — a database can carry `contacts` from another fixture
     // while lacking `contact_events`, which is exactly what the test-app
     // database does.
-    const rows = await db`
+    const rows = await maybeDb`
       SELECT to_regclass('public.contacts') IS NOT NULL
          AND to_regclass('public.contact_events') IS NOT NULL AS ok`;
     return Boolean(rows[0]?.ok);
@@ -42,17 +42,21 @@ if (!runnable) {
   );
 }
 
+// Narrowed once here rather than at each of the eleven call sites below: the
+// suite is gated on `runnable`, which is only true when maybeDb connected.
+const db = maybeDb as SQL;
+
 beforeEach(async () => {
   if (!runnable) return;
-  await db!`DELETE FROM contact_events`;
-  await db!`DELETE FROM contacts`;
+  await db`DELETE FROM contact_events`;
+  await db`DELETE FROM contacts`;
 });
 
 afterAll(async () => {
   if (!runnable) return;
-  await db!`DELETE FROM contact_events`;
-  await db!`DELETE FROM contacts`;
-  await db!.close();
+  await db`DELETE FROM contact_events`;
+  await db`DELETE FROM contacts`;
+  await db.close();
 });
 
 const input = {
