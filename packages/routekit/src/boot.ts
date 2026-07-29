@@ -3,6 +3,7 @@ import { pathToFileURL, fileURLToPath } from 'url';
 import { KILN_LIVE_CLIENT_SCRIPT } from './live-client-script.js';
 import { applyLiveListMarkers, extractLiveListRowHtml } from './live-list-render.js';
 import { addBounded, warnOnce, DEDUP_SET_MAX } from './dedup.js';
+import { makeLoaderRequest, makeNoopResponse, makePrebakeRequest } from './loader-request.js';
 import {
   applyLivePropMarkers,
   escapeAttribute,
@@ -789,33 +790,6 @@ export function buildPageHandler(
 
 
 /**
- * A stripped request the watcher can safely re-run load() with long after the
- * original request ended. Only the route identity (path/params/query) is
- * kept — the first visitor's headers, cookies, and body must never leak into
- * a cache entry that is served to everyone.
- */
-function makeLoaderRequest(req: KilnRequest, includeLocals = false): KilnRequest {
-  return {
-    path: req.path,
-    method: 'GET',
-    params: { ...req.params },
-    query: { ...req.query },
-    headers: new Headers(),
-    formData: async () => new FormData(),
-    json: async () => ({}),
-    isEnhanced: false,
-    layoutsPresent: [],
-    // Shared cache entries must never embed one visitor's identity, so locals
-    // stay empty by default. bake='user' loaders opt in (includeLocals): the
-    // snapshot being refreshed belongs to exactly this user, and the captured
-    // identity is how the watcher re-runs load() as them. Captured at
-    // registration — role changes propagate on the user's next real request.
-    locals: includeLocals ? structuredClone(req.locals) : {},
-    prebakeNext: () => {},
-  };
-}
-
-/**
  * Map a thrown error to a response: AppError statuses are honored (404/401/
  * 422/500), and the nearest _error.tsx / _not-found.tsx renders the body when
  * one exists for the page's directory.
@@ -1244,35 +1218,6 @@ function nearestSpecialFile(pageRelPath: string, table: Record<string, string>):
     if (key === '') return undefined;
     dir = path.dirname(dir);
   }
-}
-
-function makePrebakeRequest(concretePath: string, params: Record<string, string>): KilnRequest {
-  return {
-    path: concretePath,
-    method: 'GET',
-    params: { ...params },
-    query: {},
-    headers: new Headers(),
-    formData: async () => new FormData(),
-    json: async () => ({}),
-    isEnhanced: false,
-    layoutsPresent: [],
-    locals: {},
-    prebakeNext: () => {},
-  };
-}
-
-/** Response sink for startup prebakes — the handler's side effect (writing
- * the cache) is the point; the rendered body has no recipient. */
-function makeNoopResponse(): KilnResponse {
-  return {
-    status: 200,
-    headers: {},
-    html: () => {},
-    json: () => {},
-    redirect: () => {},
-    sse: () => {},
-  };
 }
 
 async function materializeLiveLists(loadResult: any, store?: FsrStore): Promise<any> {
