@@ -125,10 +125,17 @@ async function isDormantStale(
 // its layouts has since been invalidated (see BakedSnapshot.layoutSignature
 // for the full rationale). Reads the SAME cache entries `deleteLayout()`
 // removes, so it's always consistent with the pattern-level layout cache.
+// `params` must be this request's own path params: without them a dynamic
+// layout's signature would read some other instance's entry, and the promoted
+// page would either never invalidate or invalidate on every request.
 // ---------------------------------------------------------------------------
 
-async function computeLayoutSignature(patterns: string[], cache: KilnCache): Promise<string> {
-  const htmls = await Promise.all(patterns.map((p) => cache.getLayoutHtml(p)));
+async function computeLayoutSignature(
+  patterns: string[],
+  cache: KilnCache,
+  params: Record<string, string>,
+): Promise<string> {
+  const htmls = await Promise.all(patterns.map((p) => cache.getLayoutHtml(p, params)));
   return htmls
     .map((html, i) => `${patterns[i]}:${html ? Bun.hash(html).toString(36) : 'MISSING'}`)
     .join('|');
@@ -334,7 +341,7 @@ export function buildPageHandler(
     // — without this check a promoted route would never notice and would
     // keep serving old header/footer/sidebar chrome indefinitely.
     if (materialized && layoutPatterns.length > 0) {
-      const currentSignature = await computeLayoutSignature(layoutPatterns, cache);
+      const currentSignature = await computeLayoutSignature(layoutPatterns, cache, req.params);
       const cachedSignature = (cachedSnapshot as { layoutSignature?: string } | null)?.layoutSignature;
       if (currentSignature !== cachedSignature) {
         materialized = null;
@@ -407,13 +414,16 @@ export function buildPageHandler(
     );
 
     // 5. Resolve each layout's baked HTML, and load the page's own props, in
-    // parallel. Layouts are cached PER PATTERN (e.g. "/dashboard"), not per
-    // concrete route: a layout's load() may only depend on params owned by
-    // its own pattern (never req.query, never a descendant page's params —
-    // see docs/layout-caching.md), which makes it always safe to bake once
-    // and share across every route underneath it. This is what lets a
-    // change to shared chrome (header/footer/sidebar) invalidate with a
-    // single cache entry instead of requiring every route to re-bake.
+    // parallel. Layouts are cached PER PATTERN (e.g. "/dashboard") plus the
+    // concrete values of the params that pattern owns, not per concrete
+    // route: a layout's load() may only depend on params owned by its own
+    // pattern (never req.query, never a descendant page's params — ADR-011),
+    // which makes it safe to bake once per distinct value of those params and
+    // share across every route underneath it. This is what lets a change to
+    // shared chrome (header/footer/sidebar) invalidate with a single cache
+    // entry instead of requiring every route to re-bake — and, for
+    // "/projects/:id", still shares one bake between that project's /board
+    // and /activity pages without leaking it to a different project.
     const layoutPropsArr: any[] = new Array(layoutEntries.length).fill({});
     const rawLayoutPropsArr: any[] = new Array(layoutEntries.length).fill({});
     const layoutBaked: { html: string }[] = new Array(layoutEntries.length);
@@ -435,9 +445,9 @@ export function buildPageHandler(
         const layoutPattern = layoutPatterns[idx] ?? '/';
         const cachedHtml = impureLayouts.has(layoutPattern)
           ? null
-          : await cache.getLayoutHtml(layoutPattern);
+          : await cache.getLayoutHtml(layoutPattern, req.params);
         if (cachedHtml) {
-          const cachedJson = await cache.getLayoutJson(layoutPattern);
+          const cachedJson = await cache.getLayoutJson(layoutPattern, req.params);
           layoutBaked[idx] = { html: materializeBakedShell(cachedHtml, cachedJson) ?? cachedHtml };
           layoutFromCache[idx] = true;
           // Propagate the cached layout's data into rawLayoutPropsArr/layoutPropsArr
@@ -470,13 +480,15 @@ export function buildPageHandler(
         );
         layoutBaked[idx] = { html: marked };
         if (layoutPure) {
-          await cache.setLayoutHtml(layoutPattern, marked);
-          await cache.setLayoutJson(layoutPattern, createBakedSnapshot(layoutPropsArr[idx]));
+          await cache.setLayoutHtml(layoutPattern, marked, req.params);
+          await cache.setLayoutJson(layoutPattern, createBakedSnapshot(layoutPropsArr[idx]), req.params);
         } else {
           anyLayoutImpure = true;
           if (!impureLayouts.has(layoutPattern)) {
             impureLayouts.add(layoutPattern);
-            // Self-heal: nuke any artifact a previously-pure version left behind.
+            // Self-heal: nuke any artifact a previously-pure version left
+            // behind — every instance of it, since impurity is a property of
+            // the layout's code, not of the id in the URL that first hit it.
             await cache.deleteLayout(layoutPattern);
           }
         }
@@ -591,7 +603,9 @@ export function buildPageHandler(
     let jsonPath: string | null = null;
     if (shouldBake && !tombstoned) {
       const layoutSignature =
-        layoutPatterns.length > 0 ? await computeLayoutSignature(layoutPatterns, cache) : undefined;
+        layoutPatterns.length > 0
+          ? await computeLayoutSignature(layoutPatterns, cache, req.params)
+          : undefined;
       await cache.setJson(
         req.path,
         createBakedSnapshot(snapshotProps, undefined, layoutSignature, {
@@ -663,13 +677,28 @@ export function buildPageHandler(
       for (let index = 0; index < layoutEntries.length; index++) {
         const layoutRoute = layoutPatterns[index] ?? '/';
         const layoutOptions = extractPageOptions(layoutEntries[index].module);
+        // The layout's baked HTML is now cached per concrete param value, but
+        // a Live.list inside it is still identified to the store/hub by the
+        // PATTERN alone (the marker route and the registration route below) —
+        // so two concrete instances of "/projects/:id" would share one list
+        // channel and patch each other's rows. Scalar LiveProp fields are
+        // unaffected (they ride the page's own route). Warn once per pattern
+        // rather than let it fail silently.
+        if ((layoutRoute.includes(':') || layoutRoute.includes('*')) && hasLiveLists(rawLayoutPropsArr[index])) {
+          warnOnce(
+            `dynamic-layout-live-list:${layoutRoute}`,
+            `[kiln] layout "${layoutRoute}" has a dynamic path segment and uses Live.list; ` +
+              `list updates are identified by pattern, so every concrete instance of this ` +
+              `layout shares one list channel. Move the Live.list into the page for now.`,
+          );
+        }
         await registerLiveLists({
           route: layoutRoute,
           pageComponent: layoutEntries[index].module.default,
           pageProps: rawLayoutPropsArr[index],
           finalHtml,
-          htmlPath: cache.diskLayoutHtmlPath(layoutRoute),
-          jsonPath: cache.diskLayoutJsonPath(layoutRoute),
+          htmlPath: cache.diskLayoutHtmlPath(layoutRoute, req.params),
+          jsonPath: cache.diskLayoutJsonPath(layoutRoute, req.params),
           watcher,
           isLayout: true,
           defaultDebounce: layoutOptions.debounce ?? kilnConfig?.fsr?.patchDebounceSecs,

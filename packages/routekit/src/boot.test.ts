@@ -500,6 +500,72 @@ describe('buildPageHandler', () => {
     await fs.rm(tmpDir, { recursive: true });
   });
 
+  it('renders each concrete instance of a dynamic layout with its own data', async () => {
+    // Regression: layouts were cached by PATTERN alone, so "/projects/:id"
+    // had one shared entry and the first project baked leaked its chrome
+    // (name, nav hrefs) into every other project's page. ADR-011 explicitly
+    // allows a layout to read params its own pattern owns, so the key — not
+    // the layout — was the thing that had to change.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
+    const layoutPath = path.join(tmpDir, 'project_layout.tsx');
+    await Bun.write(
+      layoutPath,
+      `export async function load(req) {
+         globalThis.__projectLayoutLoads = (globalThis.__projectLayoutLoads||0)+1;
+         return { name: "PROBE-" + req.params.id };
+       }
+       export default function ProjectLayout({ name, children }) {
+         return [name, children];
+       }`,
+    );
+    (globalThis as any).__projectLayoutLoads = 0;
+
+    const { createElement } = await import('react');
+    const cacheOpts = { cacheDir: tmpDir, ttlSecs: 0, redis: null };
+    const layoutNodes = [
+      { pattern: '/projects/:id', filePath: layoutPath, relativePath: 'project_layout.tsx', hasLoad: true },
+    ];
+    const pageMeta = (pattern: string) => ({
+      pattern, layouts: [layoutPath], liveFields: [], hasEntries: false, filePath: '', relativePath: '',
+    });
+    const activity = buildPageHandler(
+      { default: () => createElement('h2', null, 'ACTIVITY') },
+      pageMeta('/projects/:id/activity'),
+      layoutNodes,
+      cacheOpts,
+    );
+    const board = buildPageHandler(
+      { default: () => createElement('h2', null, 'BOARD') },
+      pageMeta('/projects/:id/board'),
+      layoutNodes,
+      cacheOpts,
+    );
+
+    const alpha = makeRes();
+    await activity(makeReq({ path: '/projects/ALPHA/activity', params: { id: 'ALPHA' } }) as any, alpha);
+    const beta = makeRes();
+    await activity(makeReq({ path: '/projects/BETA/activity', params: { id: 'BETA' } }) as any, beta);
+
+    expect(alpha.captured.body).toContain('PROBE-ALPHA');
+    expect(beta.captured.body).toContain('PROBE-BETA');
+    // The leak, stated directly: beta's page must not carry alpha's chrome.
+    expect(beta.captured.body).not.toContain('PROBE-ALPHA');
+    expect(alpha.captured.body).not.toContain('PROBE-BETA');
+    // Both were fresh bakes — neither could reuse the other's entry.
+    expect((globalThis as any).__projectLayoutLoads).toBe(2);
+
+    // ...and sharing across a SIBLING page of the same project still works,
+    // which is the benefit pattern-scoping exists for: no third load().
+    const alphaBoard = makeRes();
+    await board(makeReq({ path: '/projects/ALPHA/board', params: { id: 'ALPHA' } }) as any, alphaBoard);
+    expect(alphaBoard.captured.body).toContain('PROBE-ALPHA');
+    expect(alphaBoard.captured.body).toContain('BOARD');
+    expect(alphaBoard.headers['x-kiln-layout-cache-hit']).toBe('/projects/:id');
+    expect((globalThis as any).__projectLayoutLoads).toBe(2);
+
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
   it('re-bakes a layout after its cache entry is explicitly invalidated', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
     const layoutPath = path.join(tmpDir, 'section2_layout.tsx');
