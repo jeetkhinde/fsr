@@ -2,6 +2,7 @@ import * as path from 'path';
 import { pathToFileURL, fileURLToPath } from 'url';
 import { KILN_LIVE_CLIENT_SCRIPT } from './live-client-script.js';
 import { applyLiveListMarkers, extractLiveListRowHtml } from './live-list-render.js';
+import { addBounded, warnOnce, DEDUP_SET_MAX } from './dedup.js';
 
 import { discoverRoutes } from './discover.js';
 import { extractPageOptions, extractLiveFields, type BakeMode } from './page-options.js';
@@ -145,15 +146,8 @@ async function computeLayoutSignature(
 // Page handler
 // ---------------------------------------------------------------------------
 
-// Caps process-lifetime dedup Sets (route-ensured markers, one-shot warning
-// keys) so a long-running server with high route/key cardinality can't grow
-// them without bound. Losing an entry just means the next occurrence does a
-// redundant (idempotent) DB write or re-logs a warning — never incorrect.
-const DEDUP_SET_MAX = 10_000;
-function addBounded(set: Set<string>, key: string): void {
-  if (set.size >= DEDUP_SET_MAX) set.clear();
-  set.add(key);
-}
+// addBounded/warnOnce moved to ./dedup.js — both are needed by the request
+// path and by the HTML marker pass, which are now separate modules.
 
 export function buildPageHandler(
   module: any,
@@ -782,12 +776,6 @@ export function buildPageHandler(
   };
 }
 
-const warnedOnce = new Set<string>();
-function warnOnce(key: string, message: string): void {
-  if (warnedOnce.has(key)) return;
-  addBounded(warnedOnce, key);
-  console.warn(message);
-}
 
 /**
  * A stripped request the watcher can safely re-run load() with long after the
