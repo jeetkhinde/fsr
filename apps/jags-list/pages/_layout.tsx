@@ -21,7 +21,7 @@ export default function RootLayout({
             <a href="/projects">Projects</a>
             <a href="/team">Team</a>
           </nav>
-          <form method="post" action="/auth/logout" className="logout-form">
+          <form method="post" action="/login?/signout" className="logout-form">
             <button type="submit">Sign out</button>
           </form>
         </header>
