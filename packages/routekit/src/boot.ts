@@ -254,7 +254,7 @@ export async function startKiln(
     // @kiln/client not installed
   }
   adapter.registerPage('/_kiln/islands.json', [], async (_req, res) => {
-    res.headers['cache-control'] = 'no-store';
+    res.headers.set('cache-control', 'no-store');
     // Dev: the CLI points this at the Vite dev server's manifest.
     if (options.islandsManifestUrl) {
       try {
@@ -282,7 +282,7 @@ export async function startKiln(
   // 7. Serve FSR live client script when FSR is active
   if (fsrEnabled) {
     adapter.registerPage('/_kiln/live.js', [], async (_req, res) => {
-      res.headers['content-type'] = 'application/javascript; charset=utf-8';
+      res.headers.set('content-type', 'application/javascript; charset=utf-8');
       res.html(KILN_LIVE_CLIENT_SCRIPT);
     });
   }
@@ -407,8 +407,8 @@ export async function startKiln(
     const { generateServiceWorker } = await import('./sw-template.js');
     const swContent = generateServiceWorker((config as any).serviceWorker);
     adapter.registerPage('/sw.js', [], async (_req, res) => {
-      res.headers['content-type'] = 'application/javascript; charset=utf-8';
-      res.headers['cache-control'] = 'no-cache';
+      res.headers.set('content-type', 'application/javascript; charset=utf-8');
+      res.headers.set('cache-control', 'no-cache');
       res.html(swContent);
     });
   }
