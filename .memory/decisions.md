@@ -52,13 +52,21 @@ This file documents the major architecture decisions and developer experience (D
 *   **Decision**: Dependency keys are typed and explicit. No magic database wrappers are used. Developers explicitly bind components using `dependsOn` arrays mapping to table structures (e.g., `contacts:id=123`).
 
 ### ADR-011: Layout-Level (Pattern-Scoped) Caching
-*   **Status**: ACTIVE (scoped to `test-app` only; `examples/address-book` not migrated)
+*   **Status**: ACTIVE (`test-app` is the reference implementation; `examples/address-book`, the one known violator, was deleted 2026-07-30)
 *   **Decision**: Layouts (`_layout.tsx`) are cached once per URL *pattern* + the concrete values of the dynamic segments **that pattern owns** (`kiln:layout:html:v<N>:<pattern>` for a static pattern, `…:<pattern>|<instance-token>` for a dynamic one), independent of and shared across every concrete route nested under that pattern, instead of being re-baked into each route's own page-level cache entry. `cache.deleteLayout(pattern)` invalidates a shared layout with a single write — for a dynamic pattern that drops *every* instance, since the source changed; `deleteLayout(pattern, params)` drops one.
 *   **Rule**: A layout's `load()` may only read `req.params` for segments owned by its own pattern — never `req.query`, never a descendant page's params. Genuinely per-request-varying data must be pushed to the page or resolved client-side; universal-but-time-varying data (e.g. a live counter in the header) must use `LiveProp`/`Live.list`, not plain `load()`. This rule is enforced by convention, not a runtime check.
 *   **Own-params amendment (2026-07-28)**: the key originally used the pattern *string* alone, so a layout that exercised the own-params half of the rule above (`/projects/:id` reading `req.params.id`) had ONE entry shared by every id — the first project baked leaked its chrome into every other project's page (page bodies stayed correct; only the layout was wrong). The rule was right and the key was wrong: the key now includes the layout's own params, so `/projects/7/board` and `/projects/7/activity` still share one bake while `/projects/8/*` gets its own. Only the params the *layout's* pattern owns enter the key — a descendant page's params are ignored, or the sharing this ADR exists for would be lost. Regression tests: `cache.test.ts` "keys a dynamic layout pattern per concrete param" and `boot.test.ts` "renders each concrete instance of a dynamic layout with its own data".
 *   **Known gap**: a `Live.list` *inside* a dynamic-segment layout is still identified to the store/hub by pattern alone, so concrete instances share one list channel. `boot.ts` warns once per pattern; put the list in the page until this is fixed.
 *   **Consistency mechanism**: A promoted page's own full-HTML cache entry embeds its layouts' HTML as of bake time, so invalidating the layout cache alone wouldn't reach already-promoted routes. Every page-level `BakedSnapshot` therefore carries a `layoutSignature` (a hash fingerprint of the exact layout cache entries used to assemble it, from `computeLayoutSignature()` in `boot.ts`). On each promoted-cache-hit, the current signature is recomputed and compared; a mismatch forces a full re-bake, same as a missing/corrupt cache entry. Found via a unit test that intentionally exercised `deleteLayout()` against an already-promoted route and asserted the next request reflected the change — it failed until this signature check was added (see `bugs-resolved.md`).
-*   **Not migrated**: `examples/address-book`'s `ContactsLayout` reads `req.query.q`/`req.params.id` and violates the load()-scoping rule; it intentionally still uses the old per-route full-page bake path rather than being refactored to comply.
+*   **Enforcement gap (open)**: the rule above is convention-only, and the purity tracker cannot
+    catch the half that matters most. It treats `locals`/`headers`/`query` as identity fields but
+    deliberately NOT `params` — correct for a layout reading its OWN pattern's params (they are in
+    the key since the 2026-07-28 amendment), wrong for one reading a DESCENDANT's param, and
+    `req.path` is untracked too. Such a layout is silently pattern-cached and serves one instance's
+    chrome for all of them. `examples/address-book`'s `ContactsLayout` was exactly that shape and was
+    safe only because it also read `req.query`; the example was deleted 2026-07-30, which removes the
+    violator but not the gap. Fix: warn or demote when a layout's `load()` reads a param outside
+    `layoutParamNames(pattern)`, or reads `req.path`.
 
 ### ADR-012: `json_first` Page Export for JSON-Default Routes
 *   **Status**: ACTIVE (shipped 2026-07-08, commit `7276441`)

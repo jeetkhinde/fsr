@@ -11,7 +11,7 @@ Last updated: 2026-07-27
 - [x] **Layout-Aware Route Swapping**: `X-PS-Present` headers, `silcrow-target`, layout fragment negotiation
 - [x] **Live Lists (`Live.list`)**: Row-level diffs (replace-row, insert, move, remove) via embedded watcher
 - [x] **Pattern-Level Layout Caching** (ADR-011): `_layout.tsx` baked once per URL pattern, `layoutSignature` staleness detection
-- [x] **Acceptance Testing App**: `examples/address-book` with persistent DB mutations and transactional events
+- [x] ~~**Acceptance Testing App**: `examples/address-book`~~ — served its purpose and was **deleted 2026-07-30**; `apps/jags-list` is now the dogfood/acceptance app.
 
 ### Infrastructure & DX
 - [x] **Git-Based Context Portability**: `.memory/` directory for version-controlled agent context
@@ -60,21 +60,15 @@ Last updated: 2026-07-27
    sweep *timer* is coarse, but slot eligibility is not — which is what this item wanted. It was
    unasserted; `store.test.ts` now proves it, and the test was falsified (replacing the COALESCE
    with the bare global makes it fail).
-4. **`address-book` Layout Migration** — PARTIALLY ADDRESSED 2026-07-29. `ContactsLayout` reads
-   `req.query.q`, a *descendant's* `req.params.id`, and `req.path`. Its own pattern (`/contacts`)
-   has no params, so the layout-instance keying from PR #27 gives it no key suffix — it is safe
-   today only because reading `req.query` trips the purity tracker and demotes it. That is
-   load-bearing and easy to lose in a refactor, so `examples/address-book/tests/routes.test.ts` now
-   asserts the demotion directly plus that the output genuinely varies per request.
-   **Not migrated:** `query`/`selectedId`/`focusDetail` feed `AppShell`'s sidebar (search box,
-   selection highlight), so moving them out is an example redesign with UX decisions rather than a
-   mechanical change.
-   **Latent framework hazard noted:** the purity tracker deliberately does not track `params`
-   ("params derive from the concrete path, which IS the cache key"). That holds for a layout reading
-   its OWN pattern's params, but NOT for one reading a descendant's — and `req.path` is untracked
-   too. A layout that read a descendant param or `req.path` *without* also reading query would be
-   cached wrongly. Worth a targeted guard (warn when a layout's `load()` reads a param outside
-   `layoutParamNames(pattern)`).
+4. ~~**`address-book` Layout Migration**~~ — MOOT 2026-07-30: `examples/address-book` was deleted,
+   so `ContactsLayout` no longer exists. **The framework hazard it exposed is still open**, and is
+   the part worth keeping: the purity tracker deliberately does not track `params` ("params derive
+   from the concrete path, which IS the cache key"). Since PR #27 that holds for a layout reading its
+   OWN pattern's params, but NOT for one reading a DESCENDANT's — and `req.path` is untracked too.
+   Such a layout is pattern-cached and serves one instance's chrome for all of them, the same class
+   of bug PR #27 fixed, one level up. `ContactsLayout` was exactly that shape and was safe only
+   because it also read `req.query`, which trips the tracker. Fix: warn (or demote) when a layout's
+   `load()` reads a param outside `layoutParamNames(pattern)`, or reads `req.path`.
 
 ---
 

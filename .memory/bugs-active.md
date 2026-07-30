@@ -19,15 +19,14 @@ Open **framework** issues only. Resolved history → [bugs-resolved.md](bugs-res
     later as an opaque `Connection closed`; it now probes with `SELECT 1` first. Note both are plain
     scripts, not `bun:test` suites, so the fix is warn-and-return rather than `describe.skipIf`.
 
-*   ~~**Orphaned test file — runs in neither suite**~~ — **FIXED 2026-07-29**. It was NOT stale: it
-    passes 2/2 against a database carrying the address-book schema. It had failed only because
-    `test:integration` points at the test-app database, which has `contacts` from another fixture but
-    no `contact_events`. Now in `test:integration`, guarded on BOTH tables so it skips actionably
-    rather than breaking the suite for anyone without an address-book DB — and invoked with
-    `bun test` rather than `bun <file>`, unlike its neighbours, because it uses hooks.
+*   ~~**Orphaned test file — runs in neither suite**~~ — **MOOT 2026-07-30**: fixed on 2026-07-29
+    (adopted into `test:integration` with a both-tables schema guard, after confirming it was not
+    stale — it passed 2/2 against a migrated address-book DB), then removed entirely when
+    `examples/address-book` was deleted.
 
 ## 3. Playwright E2E Skips
-*   The Playwright testing suite inside `examples/address-book` has an intentional desktop browser skip configured in its test suite that needs monitoring.
+*   ~~The Playwright suite inside `examples/address-book` has an intentional desktop browser skip~~ —
+    **MOOT 2026-07-30**: deleted with the example. No Playwright suite remains in the repo.
 
 ---
 

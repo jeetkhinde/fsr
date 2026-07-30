@@ -2,6 +2,22 @@
 
 Completed-session history for the **Kiln framework**. Current state → [active-work.md](active-work.md). App work logs live under `apps/<app>/.memory/`.
 
+## 2026-07-30 — `examples/address-book` deleted (branch `fix/kiln-framework-backlog`)
+
+Removed the address-book example (34 files) at the maintainer's direction — `apps/jags-list` is now
+the dogfood/acceptance app, and address-book was the last thing requiring a second Postgres schema.
+
+Unwired: dropped from `workspaces`, from the root `build` script's consumer phase, from
+`test:integration` (its contacts test had been adopted there the day before), and its two now-dead
+`--path-ignore-patterns` entries removed from `test:unit`. `examples/` is gone entirely.
+
+`test:unit` 229 → **217 pass / 60 skip / 0 fail** (the 12 removed tests were address-book's);
+`test:integration` exit 0; `bun run build` clean.
+
+Worth keeping in mind: deleting the example removed the only known ADR-011 violator but NOT the
+enforcement gap it exposed — see [decisions.md](decisions.md) § ADR-011 "Enforcement gap (open)"
+and [roadmap.md](roadmap.md) § Phase 4.4.
+
 ## 2026-07-12 — Gemini audit round 2 (branch `fix/gemini-audit-round2`)
 
 Branch `fix/gemini-audit-round2` (worktree off `main` @ `3f6e900`) — fixes for every item confirmed real out of an external (Gemini) 159-item audit, plus the 3 architectural items initially deferred (per-worker connection counter, unbounded list-chunk cache, schema backfill re-running every startup), awaiting merge/PR. See `.memory/bugs-resolved.md` §0 for the full list (2 commits: `1b9da8c`, `841f1c5`).

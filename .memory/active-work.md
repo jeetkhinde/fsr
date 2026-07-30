@@ -32,15 +32,20 @@ Last updated: 2026-07-27
 - Build: `bun run build` in each package before trusting cross-package consumption (`dist/` must be current — stale `dist/` has silently invalidated runs before; see [work-log.md](work-log.md))
 
 ### Infrastructure required for full test suite
-- PostgreSQL: needed for `test:integration` and the `examples/address-book` app
+- PostgreSQL: needed for `test:integration` and `apps/jags-list`
 - Redis: needed for FSR / LiveProp SSE features and related tests
 
 ## Next Priorities (from [roadmap.md](roadmap.md))
 
-1. **External watcher process** — `fsr.watcher: 'external'` is typed but only partially implemented.
-2. **Fine-grained debounce scheduling** — per-field invalidation windows instead of coarse sweep intervals.
-3. **`address-book` layout migration** — migrate `ContactsLayout` to pattern-level caching (currently violates the ADR-011 `load()`-scoping rule).
-4. **DX backlog** — [roadmap.md](roadmap.md) § Phase 5.
+1. **External watcher process** — dev-selectable, default `'embedded'`. NOT implemented: no watcher
+   process, IPC or daemon exists (investigated 2026-07-29). Blocked on how an out-of-process watcher
+   would invoke a `Live.list`'s closures — see [roadmap.md](roadmap.md) § Phase 4.2.
+2. ~~Fine-grained debounce scheduling~~ — DONE (already implemented; asserted 2026-07-29).
+3. ~~`address-book` layout migration~~ — MOOT: `examples/address-book` was deleted 2026-07-30
+   (see [work-log.md](work-log.md)). The latent framework hazard it exposed is still open — the
+   purity tracker does not track `params`, which is wrong for a layout reading a DESCENDANT's param;
+   recorded in [roadmap.md](roadmap.md) § Phase 4.4.
+4. ~~DX backlog~~ — all nine Phase 5 items DONE 2026-07-29.
 
 > `promote_after` was previously priority #1 here. **Resolved** by ADR-016 (2026-07-19): the bake
 > classifier keeps session-reading pages pure SSR automatically and `promote_after` was hard-removed.
