@@ -34,10 +34,6 @@ export interface WatcherConfig {
   /** Directory the watcher's event cursor file lives in. Default '.kiln-cache'. */
   cacheDir?: string;
   scheduledInvalidations: ScheduledInvalidation[];
-  /** @deprecated Use purgeSweepSeconds. */
-  idleEvictSecs?: number;
-  /** @deprecated Use purgeAfterSeconds. */
-  idleThresholdSecs?: number;
 }
 
 export interface SlotPatch {
@@ -397,11 +393,11 @@ export class FsrWatcher {
   }
 
   private purgeSweepSeconds(): number {
-    return this.config.purgeSweepSeconds ?? this.config.idleEvictSecs ?? 3_600;
+    return this.config.purgeSweepSeconds ?? 3_600;
   }
 
   private purgeAfterSeconds(): number {
-    return this.config.purgeAfterSeconds ?? this.config.idleThresholdSecs ?? 2_592_000;
+    return this.config.purgeAfterSeconds ?? 2_592_000;
   }
 
   private spawnSupervisedPollingWatcher(signal: AbortSignal): void {

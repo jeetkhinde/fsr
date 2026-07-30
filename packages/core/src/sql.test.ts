@@ -2,6 +2,19 @@ import assert from 'node:assert';
 import { createKilnSql, withDepCapture } from './sql.js';
 
 const sql = createKilnSql(process.env.DATABASE_URL!);
+
+// Bound methods must be referentially stable. The Proxy's get trap used to
+// re-bind on every access, so `sql.unsafe !== sql.unsafe` — which breaks
+// identity comparison and any caller memoizing on the function reference, and
+// allocated a fresh closure per property read. Needs no database.
+assert.strictEqual(
+  (sql as any).unsafe,
+  (sql as any).unsafe,
+  'sql.unsafe must be the same reference across accesses',
+);
+assert.strictEqual((sql as any).begin, (sql as any).begin, 'sql.begin must be stable');
+console.log('createKilnSql bound-method identity tests passed');
+
 await sql`DROP TABLE IF EXISTS captest CASCADE`;
 await sql`CREATE TABLE captest (id INT)`;
 await sql`INSERT INTO captest VALUES (1)`;

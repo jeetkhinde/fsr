@@ -11,7 +11,7 @@ Last updated: 2026-07-27
 - [x] **Layout-Aware Route Swapping**: `X-PS-Present` headers, `silcrow-target`, layout fragment negotiation
 - [x] **Live Lists (`Live.list`)**: Row-level diffs (replace-row, insert, move, remove) via embedded watcher
 - [x] **Pattern-Level Layout Caching** (ADR-011): `_layout.tsx` baked once per URL pattern, `layoutSignature` staleness detection
-- [x] **Acceptance Testing App**: `examples/address-book` with persistent DB mutations and transactional events
+- [x] ~~**Acceptance Testing App**: `examples/address-book`~~ — served its purpose and was **deleted 2026-07-30**; `apps/jags-list` is now the dogfood/acceptance app.
 
 ### Infrastructure & DX
 - [x] **Git-Based Context Portability**: `.memory/` directory for version-controlled agent context
@@ -43,9 +43,32 @@ Last updated: 2026-07-27
 ## Phase 4: Hardening & Scalability
 
 1. **Cache Partitioning** ✅ — Pages export `cacheKey(req): string`; each variant gets its own disk (`_v/<variant>/`) and Redis (`kiln:html:<route>:v:<variant>`) cache entry. Variant routes skip watcher path registration (re-bake on invalidation). Implemented across `KilnCache`, `PageOptions`, and `buildPageHandler`.
-2. **External Watcher Process** — `fsr.watcher: 'embedded' | 'external'` is typed but external mode is partially implemented. Decouple watcher from the application thread for high-mutation workloads.
-3. **Fine-Grained Debounce Scheduling** — Per-field invalidation windows instead of coarse sweep intervals.
-4. **`address-book` Layout Migration** — Migrate `ContactsLayout` to pattern-level caching (currently violates ADR-011 load()-scoping rule by reading `req.query.q` / `req.params.id`).
+2. **External Watcher Process** — STILL OPEN, and *not* "partially implemented" as previously
+   recorded: investigated 2026-07-29 and there is **no** implementation. The only three references
+   are the type union, a read-path branch that re-runs `load()` on every cache hit, and the
+   `Live.list` guard. No watcher process, IPC channel or daemon. Net behaviour of setting it is
+   "no watcher, re-load every time", which forfeits the caching live routes exist for — the config
+   doc now says so.
+   **Blocked on an architecture decision:** an out-of-process watcher must invoke a `Live.list`'s
+   closures (`keyOf`, `query`, and a `renderRows` callback that SSRs the page component). Closures
+   cannot cross a process boundary, and `renderRows` needs the component graph loaded. Options: RPC
+   back into the app process, or restrict external mode to scalar `Live.value` fields only. Needs a
+   human call before implementation.
+3. **Fine-Grained Debounce Scheduling** ✅ — Already implemented; verified and covered 2026-07-29.
+   `fetchStaleSlots` gates on `COALESCE(s.debounce_secs, <global>)`, so each slot's own window
+   decides eligibility and the global is only a fallback (same for lists in `list-store.ts`). The
+   sweep *timer* is coarse, but slot eligibility is not — which is what this item wanted. It was
+   unasserted; `store.test.ts` now proves it, and the test was falsified (replacing the COALESCE
+   with the bare global makes it fail).
+4. ~~**`address-book` Layout Migration**~~ — MOOT 2026-07-30: `examples/address-book` was deleted,
+   so `ContactsLayout` no longer exists. **The framework hazard it exposed is still open**, and is
+   the part worth keeping: the purity tracker deliberately does not track `params` ("params derive
+   from the concrete path, which IS the cache key"). Since PR #27 that holds for a layout reading its
+   OWN pattern's params, but NOT for one reading a DESCENDANT's — and `req.path` is untracked too.
+   Such a layout is pattern-cached and serves one instance's chrome for all of them, the same class
+   of bug PR #27 fixed, one level up. `ContactsLayout` was exactly that shape and was safe only
+   because it also read `req.query`, which trips the tracker. Fix: warn (or demote) when a layout's
+   `load()` reads a param outside `layoutParamNames(pattern)`, or reads `req.path`.
 
 ---
 
@@ -55,46 +78,47 @@ Raised by the 2026-07-27 source audit at `758eb44`. The correctness defects from
 **not** here — all six were fixed on `fix/emit-event-non-bigint-id` and archived in
 [bugs-resolved.md](bugs-resolved.md) §1.
 
-1. **Warn at sync time when a table has no `id` column** — the remaining slice of the original
-   §1.1/§1.5 DX item. The write-breaking defect is fixed ([bugs-resolved.md](bugs-resolved.md) §1),
-   so a hard install-time failure is no longer warranted — but an `id`-less table now silently gets
-   only table-level invalidation, never the row-level `depKey:id` form. `sync-triggers` should say
-   so once, at install time, instead of leaving it to be discovered. Needs its own test.
+**All nine items below were completed on 2026-07-29** by the framework-backlog run
+(`docs/superpowers/plans/2026-07-29-kiln-framework-backlog.md`). Kept, struck through, so the
+audit's findings and their resolutions stay traceable.
 
-2. **Cache bound methods in the `createKilnSql` Proxy** — `packages/core/src/sql.ts:61-66` rebinds on
-   every property access, so `sql.unsafe !== sql.unsafe` (a fresh bound function per `get`). Breaks
-   identity comparison/memoization and allocates on every access. Memoize per property.
+1. ~~**Warn at sync time when a table has no `id` column**~~ — DONE. `sync-triggers` probes
+   `information_schema.columns` and warns once per table, naming it and stating that only the
+   table-level dep key will be emitted. Tested both directions (composite-PK table warns; a table
+   with an `id` does not).
 
-3. **Break up `boot.ts`** — 1527 lines, ~1.7× the next-largest file (`watcher.ts`, 883). Request
-   path, JSON negotiation, cache tiers, live-field upsert, SSE registration, and `startKiln` wiring
-   all live in one file. Extract cohesive units; it is the main obstacle to reviewing changes here.
+2. ~~**Cache bound methods in the `createKilnSql` Proxy**~~ — DONE. The `get` trap memoizes bound
+   functions per property, so `sql.unsafe === sql.unsafe`. Test needs no database.
 
-4. **Narrow `CacheProvider` to what ships** — the type offers `memory | filesystem | sqlite | redis`;
-   `startKiln` throws a clear boot error for `memory`/`sqlite` (`boot.ts:1097-1100`). Failing loudly
-   is right, but the type shouldn't advertise them at all.
+3. ~~**Break up `boot.ts`**~~ — DONE. 1592 → **470** lines, split into `page-render.ts` (820),
+   `html-markers.ts` (202), `live-registration.ts` (106), `loader-request.ts` (64), plus
+   `dedup.ts` (26) and `handler-types.ts` (18) to break dependency cycles. `./boot.js` keeps its
+   full export surface via re-exports, so consumers and the barrel were untouched. Pure move,
+   verified module-by-module.
 
-5. **Env-var overrides for deployment-critical config** — `loadConfigFromEnv`
-   (`packages/core/src/config.ts:258-295`) covers only 6 web/backend vars. No override exists for
-   `fsr.postgresUrl`, `fsr.redisUrl`, `cache.url`, or `fsr.buildId`. `buildId` is meant to be a
-   per-deploy git SHA (ADR-018), which is exactly the thing you want from the environment.
+4. ~~**Narrow `CacheProvider` to what ships**~~ — DONE. Now `'filesystem' | 'redis'`. The runtime
+   guard stays for JS-authored configs and gained its first test.
 
-6. **Runtime config validation** — `defineConfig` merges without validating values. TS catches typo'd
-   keys, but nothing catches out-of-range values (`images.quality`, ports, unsupported `formats`);
-   they surface as obscure runtime failures. A validation pass with actionable messages would also
-   cover JS-authored configs, where the TS safety net is absent.
+5. ~~**Env-var overrides for deployment-critical config**~~ — DONE. `KILN_FSR_POSTGRES_URL`,
+   `KILN_FSR_REDIS_URL`, `KILN_FSR_BUILD_ID`, `KILN_CACHE_URL`. `fsr`/`cache` are now copied into
+   fresh objects so overrides cannot bleed into `DEFAULT_CONFIG`.
 
-7. **Retire the deprecated config surface** — `fsr.idleEvictSecs`, `fsr.idleThresholdSecs`, and the
-   whole `live` block warn on use (`config.ts:228,244-251`) but are still typed and merged. Pick a
-   removal release.
+6. ~~**Runtime config validation**~~ — DONE. `defineConfig` validates ports, `images.quality`,
+   `images.formats` and the second-based `fsr` knobs, naming the offending key and received value.
+   Verified no in-repo config trips it.
 
-8. **Exercise auto-deps end-to-end in an app** — see [bugs-active.md](bugs-active.md) carry-forward.
-   `jags-list` has no `Live.value`/`Live.list` usage, and two of the six defects fixed on 2026-07-27
-   (the BIGINT id cast and the depKey folding mismatch) would have surfaced immediately from one real
-   live-field page. This is the highest-value *test* gap.
+7. ~~**Retire the deprecated config surface**~~ — DONE. `config.live`, `LiveConfig`,
+   `fsr.idleEvictSecs` and `fsr.idleThresholdSecs` removed — including copies in `FsrWatcher` and
+   four engine test suites. Behaviour-preserving: `idleThresholdSecs` was already dead in every
+   test (the canonical `purgeAfterSeconds` was set alongside it and won).
 
-9. **A fresh clone/worktree cannot build in one pass** (found 2026-07-27) — `test-app`'s build shells
-   out to the `kiln` binary, but `bun install` only creates that bin symlink once
-   `packages/cli/dist/cli.js` exists. So the first `bun run build` in a clean tree fails with
-   `kiln: command not found` and the sequence has to be install → build → install → build. An
-   existing workspace has the symlink from an earlier cycle, which hides this from everyone who
-   already has one. Either bootstrap `@kiln/cli` before the workspace build or invoke it by path.
+8. ~~**Exercise auto-deps end-to-end in an app**~~ — CLOSED EARLIER by PR #24 (Jag's List Plan 3a),
+   not by this run. See the [bugs-active.md](bugs-active.md) carry-forward entry.
+
+9. ~~**A fresh clone/worktree cannot build in one pass**~~ — DONE, and the original diagnosis was
+   incomplete. Invoking the CLI by path (rather than via the `kiln` bin symlink) only turned
+   `command not found` into `Module not found`: the real cause is that `bun run --filter '*' build`
+   does not order by dependency topology, so `@kiln/cli` was built AFTER the app that shells out to
+   it. Declaring `@kiln/cli` as a workspace devDependency (already the case) has no effect. The root
+   build is now two phases — `packages/*` then the consumers. Verified against successive fresh
+   `git clone`s until one passed in a single pass.

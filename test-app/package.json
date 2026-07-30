@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "kiln dev",
-    "build": "kiln build",
+    "build": "bun ../packages/cli/dist/cli.js build",
     "start": "node dist/main.js"
   },
   "dependencies": {

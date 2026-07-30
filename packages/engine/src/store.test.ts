@@ -9,6 +9,24 @@ async function runTests() {
   const pgConnectionString = process.env.DATABASE_URL || 'postgresql://localhost:5432/kilnjs_test';
   const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 
+  // Unlike list-store.test.ts, this suite has always had a fallback URL, so a
+  // missing DATABASE_URL doesn't announce itself — it surfaces later as an
+  // opaque connection error. Probe first and skip with a clear reason instead.
+  {
+    const probe = new SQL(pgConnectionString);
+    try {
+      await probe`SELECT 1`;
+    } catch (err: any) {
+      console.warn(
+        `[test] skipping FsrStore/RedisCache integration: cannot reach ${pgConnectionString} ` +
+          `(${err?.message ?? err}). Set DATABASE_URL — see test-app/.env.example.`,
+      );
+      return;
+    } finally {
+      probe.close();
+    }
+  }
+
   const bunSql = new SQL(pgConnectionString);
   const store = new FsrStore(bunSql);
   await store.initialize();
@@ -240,6 +258,37 @@ async function runTests() {
     // stale=TRUE), so that snapshot would serve the pre-invalidation data
     // until the next dependency write. invalidateDepKey already bumps
     // `version`, so a version captured before load() is the guard.
+    // Phase 4.3 (fine-grained debounce): each slot's OWN debounce_secs gates
+    // whether fetchStaleSlots may claim it, falling back to the process-global
+    // value only when the slot has none. The sweep timer is coarse, but slot
+    // ELIGIBILITY is per-slot — which is what the roadmap item asked for. This
+    // was already implemented and unasserted; the test exists so it cannot
+    // silently regress into a single global window.
+    console.log('Testing per-slot debounce gating...');
+    await store.ensureRouteRow('/deb-r', 300, 3600, 'json');
+    // slot_now: no debounce, claimable the moment it goes stale.
+    await store.upsertSlot('/deb-r', 'slot_now', null, [], ['deb_dep'], 0);
+    // slot_later: a one-hour debounce, and just patched — so even though the
+    // same dep invalidates it, its own window has not elapsed.
+    await store.upsertSlot('/deb-r', 'slot_later', null, [], ['deb_dep'], 3600);
+    await store.markFresh('/deb-r', 'slot_later');
+    await store.invalidateDepKey('deb_dep');
+
+    // fetchAllForInspect also returns the route-level row (empty slot), so
+    // filter to the two actual slots.
+    const debRows = (await store.fetchAllForInspect()).filter(
+      (r) => r.route === '/deb-r' && r.slot,
+    );
+    assert.equal(debRows.length, 2);
+    assert.ok(debRows.every((r) => r.stale === true), 'both slots must be marked stale');
+
+    const debStale = (await store.fetchStaleSlots()).filter((s) => s.route === '/deb-r');
+    assert.deepEqual(
+      debStale.map((s) => s.slot),
+      ['slot_now'],
+      'only the slot whose own debounce has elapsed may be claimed',
+    );
+
     console.log('Testing upsertSlot stale/invalidation race guard...');
     await store.ensureRouteRow('/race-r', 300, 3600, 'json');
     await store.upsertSlot('/race-r', 's', null, [], ['race_dep'], 0);

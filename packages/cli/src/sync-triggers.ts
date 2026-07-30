@@ -54,6 +54,24 @@ export async function syncTriggers(
       }
     }
     const events = eventList.map((e) => e.toUpperCase()).join(' OR ');
+
+    // kiln_emit_event emits a row-scoped `<depKey>:id=<value>` key alongside
+    // the table-level one, but only for tables that HAVE an id column. An
+    // id-less table (e.g. a composite-PK join table) silently gets table-level
+    // invalidation only — correct, but coarser than the author likely expects.
+    // Say so once, here at install time, instead of leaving it to be
+    // discovered. Not fatal: table-level invalidation never under-invalidates.
+    const idCol = await sql`
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = ${table} AND column_name = 'id'
+      LIMIT 1`;
+    if (idCol.length === 0) {
+      console.warn(
+        `[kiln] table "${t.table}" has no \`id\` column: its trigger will emit only the ` +
+          `table-level dep key "${depKey}", never the row-scoped "${depKey}:id=<value>" form. ` +
+          `Invalidation will be coarser than for tables with an id.`,
+      );
+    }
     const args = t.ownerColumn
       ? `'${depKey.replace(/'/g, "''")}', '${t.ownerColumn}'`
       : `'${depKey.replace(/'/g, "''")}'`;

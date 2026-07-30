@@ -17,11 +17,6 @@ export interface BackendConfig {
   port: number;
 }
 
-export interface LiveConfig {
-  patchDebounceSeconds: number;
-  purgeAfterSeconds: number;
-}
-
 export interface TriggerTableConfig {
   table: string;
   /** Dep key emitted on change; defaults to the table name. */
@@ -32,6 +27,18 @@ export interface TriggerTableConfig {
 }
 
 export interface FsrConfig {
+  /**
+   * Where the FsrWatcher runs. **Default and recommended: 'embedded'** — in the
+   * application process.
+   *
+   * 'external' is offered, but choose it with your eyes open: there is no
+   * watcher process, IPC channel or daemon behind it. Setting it changes
+   * exactly two things — the read path re-runs `load()` on every cache hit (so
+   * props are fresh, since nothing patches them), and `Live.list` throws,
+   * because its closures cannot cross a process boundary. The net effect is
+   * "no watcher, re-load every time": correct, but it forfeits the caching
+   * live routes exist for. Roadmap Phase 4.2 tracks making it real.
+   */
   watcher: 'embedded' | 'external';
   pollIntervalMs: number;
   patchDebounceSecs: number;
@@ -47,10 +54,6 @@ export interface FsrConfig {
    * and a mismatch on read forces a re-bake — replaces the manual cache
    * flush across breaking deploys. */
   buildId?: string;
-  /** @deprecated Use purgeSweepSeconds. */
-  idleEvictSecs?: number;
-  /** @deprecated Use purgeAfterSeconds. */
-  idleThresholdSecs?: number;
   postgresUrl?: string;
   /** Tables `kiln sync-triggers` installs/verifies `kiln_emit_event` triggers on. */
   triggerTables?: TriggerTableConfig[];
@@ -103,7 +106,11 @@ export interface ServiceWorkerConfig {
   offlineFallback?: string;
 }
 
-export type CacheProvider = 'memory' | 'filesystem' | 'sqlite' | 'redis';
+/** Providers the runtime actually backs. 'memory' and 'sqlite' were
+ * advertised here but never implemented — startKiln threw UnsupportedProvider
+ * for both. The type no longer offers what does not exist; the runtime guard
+ * stays, because a JS-authored config can still pass anything. */
+export type CacheProvider = 'filesystem' | 'redis';
 
 export interface CacheConfig {
   provider: CacheProvider;
@@ -133,7 +140,6 @@ export interface KilnConfig {
   i18n: I18nConfig;
   images: ImageConfig;
   client: ClientRuntimeConfig;
-  live: LiveConfig;
   fsr: FsrConfig;
   port?: number;
   pagesDir?: string;
@@ -150,9 +156,9 @@ export const DEFAULT_CONFIG: KilnConfig = {
     host: '127.0.0.1',
     port: 4000,
   },
-  // 'filesystem' is the only fully-implemented cold tier (Redis fronts it
-  // when fsr.redisUrl / cache.url is set); 'memory' and 'sqlite' are typed
-  // but not implemented, and startKiln rejects them at boot.
+  // 'filesystem' is the only cold tier (Redis fronts it when fsr.redisUrl /
+  // cache.url is set). CacheProvider no longer types 'memory'/'sqlite'; a
+  // JS-authored config can still name them and startKiln rejects them at boot.
   cache: {
     provider: 'filesystem',
   },
@@ -185,10 +191,6 @@ export const DEFAULT_CONFIG: KilnConfig = {
       concurrency: 4,
     },
     inlineRuntime: false,
-  },
-  live: {
-    patchDebounceSeconds: 5,
-    purgeAfterSeconds: 2_592_000, // 30 days
   },
   fsr: {
     watcher: 'embedded',
@@ -224,35 +226,79 @@ export function defineConfig(config: DeepPartial<KilnConfig>): KilnConfig {
       react: { ...DEFAULT_CONFIG.client.react, ...config.client.react } as any,
     } as any;
   }
-  if (config.live) {
-    console.warn('[kiln] config.live is deprecated; use config.fsr');
-    merged.live = { ...DEFAULT_CONFIG.live, ...config.live } as any;
-  }
-  // Always produce a fresh object here (not just when config.fsr is passed):
-  // the live→fsr bridging below mutates merged.fsr in place, and if this
-  // stayed conditional, merged.fsr would still alias DEFAULT_CONFIG.fsr
-  // (from the shallow `{ ...DEFAULT_CONFIG }` spread above) whenever only
-  // config.live was set — corrupting the shared DEFAULT_CONFIG singleton
-  // for every future defineConfig() call in the process.
+  // Always produce a fresh object here, not just when config.fsr is passed:
+  // the shallow `{ ...DEFAULT_CONFIG }` spread above aliases DEFAULT_CONFIG.fsr,
+  // so anything that later writes to merged.fsr — loadConfigFromEnv's overrides,
+  // or a caller mutating the returned config — would corrupt the shared
+  // singleton for every future defineConfig() call in the process.
   merged.fsr = { ...DEFAULT_CONFIG.fsr, ...config.fsr } as any;
-  if (config.live && config.fsr?.patchDebounceSecs === undefined) {
-    merged.fsr.patchDebounceSecs = merged.live.patchDebounceSeconds;
-  }
-  if (config.live && config.fsr?.purgeAfterSeconds === undefined) {
-    merged.fsr.purgeAfterSeconds = merged.live.purgeAfterSeconds;
-  }
-  if (config.fsr?.idleEvictSecs !== undefined) {
-    console.warn('[kiln] config.fsr.idleEvictSecs is deprecated; use purgeSweepSeconds');
-    merged.fsr.purgeSweepSeconds = config.fsr.idleEvictSecs;
-  }
-  if (config.fsr?.idleThresholdSecs !== undefined) {
-    console.warn('[kiln] config.fsr.idleThresholdSecs is deprecated; use purgeAfterSeconds');
-    merged.fsr.purgeAfterSeconds = config.fsr.idleThresholdSecs;
-  }
   if (config.port !== undefined) merged.port = config.port;
   if (config.pagesDir !== undefined) merged.pagesDir = config.pagesDir as any;
 
+  validateConfig(merged);
   return merged;
+}
+
+const SUPPORTED_IMAGE_FORMATS = ['webp', 'jpeg', 'png', 'avif'];
+
+/**
+ * Validates merged values, not keys — TypeScript already rejects typo'd keys
+ * in a TS-authored config, but nothing caught out-of-range VALUES, which
+ * surfaced later as obscure runtime failures. A JS-authored config has no
+ * type-level net at all, which is the case this mainly protects.
+ *
+ * Every message names the offending key and the received value, so the fix is
+ * obvious from the error alone.
+ */
+function validateConfig(c: KilnConfig): void {
+  const fail = (key: string, received: unknown, expected: string): never => {
+    throw new Error(
+      `[kiln] invalid config: ${key} = ${JSON.stringify(received)} — expected ${expected}`,
+    );
+  };
+  const port = (key: string, v: unknown) => {
+    if (v === undefined) return;
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > 65535) {
+      fail(key, v, 'an integer between 1 and 65535');
+    }
+  };
+  const nonNegative = (key: string, v: unknown) => {
+    if (v === undefined || v === false) return;
+    if (typeof v !== 'number' || Number.isNaN(v) || v < 0) {
+      fail(key, v, 'a non-negative number');
+    }
+  };
+
+  port('port', c.port);
+  port('web.port', c.web?.port);
+  port('backend.port', c.backend?.port);
+
+  const quality = c.images?.quality;
+  if (quality !== undefined) {
+    if (typeof quality !== 'number' || !Number.isInteger(quality) || quality < 1 || quality > 100) {
+      fail('images.quality', quality, 'an integer between 1 and 100');
+    }
+  }
+  const formats = c.images?.formats;
+  if (formats !== undefined) {
+    if (!Array.isArray(formats)) fail('images.formats', formats, 'an array of format names');
+    for (const f of formats) {
+      if (!SUPPORTED_IMAGE_FORMATS.includes(f)) {
+        fail('images.formats', f, `one of ${SUPPORTED_IMAGE_FORMATS.join(', ')}`);
+      }
+    }
+  }
+
+  // Second-based FSR knobs. `revalidateSeconds` accepts false (never
+  // revalidate), which nonNegative allows through deliberately.
+  nonNegative('fsr.patchDebounceSecs', c.fsr?.patchDebounceSecs);
+  nonNegative('fsr.revalidateSeconds', c.fsr?.revalidateSeconds);
+  nonNegative('fsr.purgeAfterSeconds', c.fsr?.purgeAfterSeconds);
+  nonNegative('fsr.purgeSweepSeconds', c.fsr?.purgeSweepSeconds);
+  nonNegative('fsr.activeWindowSecs', c.fsr?.activeWindowSecs);
+  nonNegative('fsr.connectionTtlSecs', c.fsr?.connectionTtlSecs);
+  nonNegative('fsr.keepaliveSecs', c.fsr?.keepaliveSecs);
+  nonNegative('fsr.maxSseConnections', c.fsr?.maxSseConnections);
 }
 
 export function loadConfigFromEnv(baseConfig: KilnConfig): KilnConfig {
@@ -263,6 +309,11 @@ export function loadConfigFromEnv(baseConfig: KilnConfig): KilnConfig {
     ...baseConfig,
     web: { ...baseConfig.web },
     backend: { ...baseConfig.backend },
+    // fsr and cache are copied for the same reason as web/backend above: the
+    // overrides below mutate them, and a shallow spread would alias the
+    // caller's objects (and, when unset, the shared DEFAULT_CONFIG).
+    fsr: { ...baseConfig.fsr },
+    cache: { ...baseConfig.cache },
   };
 
   if (process.env.KILN_WEB_HOST) {
@@ -290,6 +341,23 @@ export function loadConfigFromEnv(baseConfig: KilnConfig): KilnConfig {
       console.warn(`[kiln] KILN_BACKEND_PORT="${process.env.KILN_BACKEND_PORT}" is not a valid number; ignoring`);
     }
   }
-  
+
+  // Deployment-critical values that previously had no override at all. These
+  // are the ones you cannot commit to a config file: connection strings differ
+  // per environment, and fsr.buildId is meant to be the per-deploy git SHA
+  // that self-invalidates older artifacts (ADR-018).
+  if (process.env.KILN_FSR_POSTGRES_URL) {
+    config.fsr.postgresUrl = process.env.KILN_FSR_POSTGRES_URL;
+  }
+  if (process.env.KILN_FSR_REDIS_URL) {
+    config.fsr.redisUrl = process.env.KILN_FSR_REDIS_URL;
+  }
+  if (process.env.KILN_FSR_BUILD_ID) {
+    config.fsr.buildId = process.env.KILN_FSR_BUILD_ID;
+  }
+  if (process.env.KILN_CACHE_URL) {
+    config.cache.url = process.env.KILN_CACHE_URL;
+  }
+
   return config;
 }

@@ -2,7 +2,7 @@
 
 Open **framework** issues only. Resolved history → [bugs-resolved.md](bugs-resolved.md). App-level bugs live under `apps/<app>/.memory/`, not here.
 
-> **Last verified**: 2026-07-27 on `fix/emit-event-non-bigint-id` — `bun run test:unit` 208 pass / 51 skip / 0 fail, `bun run test:integration` exit 0 (live Postgres + Redis), `bun run build` green across all packages.
+> **Last verified**: 2026-07-29 on `worktree-kiln-framework-backlog` — `bun run test:unit` 229 pass / 60 skip / 0 fail, `bun run test:integration` exit 0 (live Postgres + Redis), `bun run build` green across all packages, and a fresh `git clone` builds in a single pass.
 >
 > The six §1 defects found by the 2026-07-27 source audit are **all fixed** — see
 > [bugs-resolved.md](bugs-resolved.md) §1. Nothing from that audit remains open here; the DX and
@@ -12,19 +12,21 @@ Open **framework** issues only. Resolved history → [bugs-resolved.md](bugs-res
 
 ## 2. Infrastructure & Integration Test Issues
 
-*   **Database Invalidation Integration Failures**:
-    *   **File**: `packages/engine/src/list-store.test.ts`
-    *   **Description**: Integration database tests require a live PostgreSQL connection. If `DATABASE_URL` is not provided in the environment (or missing from `.env` in `test-app/`), tests crash.
-    *   **Impact**: `bun run test:integration` crashes if the local database environment is not pre-configured.
+*   ~~**Database Invalidation Integration Failures**~~ — **FIXED 2026-07-29**. Both
+    `packages/engine/src/store.test.ts` and `list-store.test.ts` now skip with exit 0 and an
+    actionable message instead of crashing. `store.test.ts` was the worse of the two: it always had
+    a fallback connection string, so a missing `DATABASE_URL` never announced itself and surfaced
+    later as an opaque `Connection closed`; it now probes with `SELECT 1` first. Note both are plain
+    scripts, not `bun:test` suites, so the fix is warn-and-return rather than `describe.skipIf`.
 
-*   **Orphaned test file — runs in neither suite** (found 2026-07-27):
-    *   **File**: `examples/address-book/db/contacts.integration.test.ts`
-    *   **Description**: excluded from `test:unit` via `--path-ignore-patterns`, but never named in
-        `test:integration` (which lists its files explicitly). It executes in no suite.
-    *   **Fix**: add it to `test:integration`, or delete it if it's superseded.
+*   ~~**Orphaned test file — runs in neither suite**~~ — **MOOT 2026-07-30**: fixed on 2026-07-29
+    (adopted into `test:integration` with a both-tables schema guard, after confirming it was not
+    stale — it passed 2/2 against a migrated address-book DB), then removed entirely when
+    `examples/address-book` was deleted.
 
 ## 3. Playwright E2E Skips
-*   The Playwright testing suite inside `examples/address-book` has an intentional desktop browser skip configured in its test suite that needs monitoring.
+*   ~~The Playwright suite inside `examples/address-book` has an intentional desktop browser skip~~ —
+    **MOOT 2026-07-30**: deleted with the example. No Playwright suite remains in the repo.
 
 ---
 
@@ -34,11 +36,12 @@ Recorded so they aren't re-filed as bugs. Full rationale in `.codebase-memory/ad
 
 *   DELETE-driven tombstoning is not owner-scoped (`notifyDelete` → `tombstoneDependentRoutes`);
     only INSERT/UPDATE are.
-*   Auto-deps is proven at the capture/trigger/watcher layer but **not exercised end-to-end**
-    through a page with live fields in any app — `jags-list` still has zero `Live.value`/`Live.list`
-    usage. This remains the highest-value test gap: two of the six defects fixed on 2026-07-27
-    (the BIGINT id cast and the depKey folding mismatch) would have surfaced immediately from one
-    real live-field page.
+*   ~~Auto-deps not exercised end-to-end through a page with live fields~~ — **CLOSED by PR #24**
+    (Jag's List Plan 3a). `apps/jags-list/pages/projects/[id]/activity.tsx` declares a `Live.list`
+    with `dependsOn: 'activity'`, and `apps/jags-list/tests/live.integration.test.ts` drives the
+    whole chain: real INSERT → `kiln_emit_event` trigger → LISTEN/NOTIFY → `FsrWatcher` → Redis →
+    a subscribed SSE client. Deleting the list's `dependsOn` makes that suite fail on a 20s
+    timeout, so the coverage has teeth.
 *   Dynamic-segment `bake='user'` + live fields falls back to shared-key SSE scoping (warned at
     runtime).
 *   The dormant check costs one awaited Postgres SELECT per validated cache hit on routes with no

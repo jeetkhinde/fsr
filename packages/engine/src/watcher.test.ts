@@ -55,8 +55,7 @@ async function runTests() {
       scheduledInvalidations: [
         { depKey: 'scheduled_dep', intervalMs: 200 }
       ],
-      idleEvictSecs: 1,
-      idleThresholdSecs: 5 // 5 sec threshold for eviction to prevent race condition
+      purgeSweepSeconds: 1
     };
 
     const watcher = new FsrWatcher(store, redis, config);

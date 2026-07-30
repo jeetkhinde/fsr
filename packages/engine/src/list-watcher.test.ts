@@ -10,8 +10,7 @@ const config: WatcherConfig = {
   patchDebounceSecs: 0,
   purgeAfterSeconds: 60,
   scheduledInvalidations: [],
-  idleEvictSecs: 0,
-  idleThresholdSecs: 60
+  purgeSweepSeconds: 0
 };
 
 class FakeListStore {

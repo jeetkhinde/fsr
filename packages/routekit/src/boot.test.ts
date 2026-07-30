@@ -1688,6 +1688,28 @@ describe('islands bootstrap injection', () => {
   });
 });
 
+describe('startKiln cache provider guard', () => {
+  // CacheProvider no longer types 'memory'/'sqlite', so TS blocks them in a
+  // TS-authored config — but a JS-authored config (or a cast) still can, and
+  // the runtime must refuse rather than silently writing to disk. This guard
+  // is now the ONLY protection for that path, so it needs its own test.
+  it.each(['memory', 'sqlite'])('refuses the unimplemented %s provider', async (provider) => {
+    const pagesDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-pages-'));
+    const adapter: any = {
+      registerPage: () => {},
+      registerAction: () => {},
+      registerSSE: () => {},
+      registerAsset: () => {},
+      applyMiddleware: () => {},
+      applyServerHooks: async () => {},
+      listen: async () => {},
+    };
+    await expect(
+      startKiln(adapter, { cache: { provider } } as any, pagesDir),
+    ).rejects.toThrow(/not implemented/i);
+  });
+});
+
 describe('startKiln islands manifest route', () => {
   it('registers /_kiln/islands.json and serves an empty no-store manifest without a build', async () => {
     const pagesDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-pages-'));

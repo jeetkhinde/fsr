@@ -86,10 +86,20 @@ export function createKilnSql(url: string): SQL {
     return (base as any)(strings, ...values);
   };
   // Preserve helpers (.begin, .unsafe, .close, .end, etc.) by proxying misses.
+  // Bound functions are memoized per property: re-binding on every access
+  // made `sql.unsafe !== sql.unsafe`, which breaks identity comparison and
+  // any caller memoizing on the reference, and allocated a closure per read.
+  const boundCache = new Map<string | symbol, unknown>();
   return new Proxy(wrapped as any, {
     get(_t, prop) {
       const v = (base as any)[prop];
-      return typeof v === 'function' ? v.bind(base) : v;
+      if (typeof v !== 'function') return v;
+      let bound = boundCache.get(prop);
+      if (bound === undefined) {
+        bound = v.bind(base);
+        boundCache.set(prop, bound);
+      }
+      return bound;
     },
   }) as unknown as SQL;
 }

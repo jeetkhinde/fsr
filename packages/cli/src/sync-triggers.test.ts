@@ -137,9 +137,49 @@ await assert.rejects(
   /unsafe SQL identifier/,
 );
 
+// --- id-column warning ------------------------------------------------------
+// An id-less table (composite PK, no surrogate id) still gets a working
+// trigger, but only the table-level dep key — never `<depKey>:id=<value>`.
+// sync-triggers must say so once, at install time.
+await sql`DROP TABLE IF EXISTS synctrig_noid CASCADE`;
+await sql`CREATE TABLE synctrig_noid (a INT NOT NULL, b INT NOT NULL, PRIMARY KEY (a, b))`;
+{
+  const origWarn = console.warn;
+  const warnings: string[] = [];
+  console.warn = (...args: unknown[]) => { warnings.push(args.join(' ')); };
+  try {
+    await syncTriggers(sql, [{ table: 'synctrig_noid' }], { check: false });
+  } finally {
+    console.warn = origWarn;
+  }
+  assert.equal(
+    warnings.filter((w) => w.includes('synctrig_noid') && w.includes('no `id` column')).length,
+    1,
+    `expected one id-column warning naming the table; got ${JSON.stringify(warnings)}`,
+  );
+}
+// And a table WITH an id must not warn.
+{
+  const origWarn = console.warn;
+  const warnings: string[] = [];
+  console.warn = (...args: unknown[]) => { warnings.push(args.join(' ')); };
+  try {
+    await syncTriggers(sql, [{ table: 'synctrig_demo' }], { check: false });
+  } finally {
+    console.warn = origWarn;
+  }
+  assert.equal(
+    warnings.filter((w) => w.includes('no `id` column')).length,
+    0,
+    `a table with an id must not warn; got ${JSON.stringify(warnings)}`,
+  );
+}
+console.log('sync-triggers id-column warning tests passed');
+
 await sql`DROP TABLE IF EXISTS synctrig_demo CASCADE`;
 await sql`DROP TABLE IF EXISTS synctrig_bare CASCADE`;
 await sql`DROP TABLE IF EXISTS SyncTrigMixed CASCADE`;
 await sql`DROP TABLE IF EXISTS synctrig_tx CASCADE`;
+await sql`DROP TABLE IF EXISTS synctrig_noid CASCADE`;
 await sql.end();
 console.log('sync-triggers tests passed');

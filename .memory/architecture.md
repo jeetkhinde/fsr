@@ -93,7 +93,17 @@ A layout is only safe to cache once-per-pattern if its `load()` output is identi
 
 Data that is universal but changes *over time* (e.g. a live notification count shown in every page's header) is not a violation of this rule — it should use `LiveProp`/`Live.list` so the layout bakes once and the value is patched in-place via SSE, rather than being re-baked.
 
-This rule is enforced by convention/code review, not by a runtime check. `examples/address-book`'s `ContactsLayout` currently violates it (reads `req.query.q` / `req.params.id`) and was intentionally **not** migrated to pattern-level caching — it still uses the old per-route full-page bake path. Only `test-app`'s demo layouts (`pages/_layout.tsx`, `pages/dashboard/_layout.tsx`, `pages/dashboard/reports/_layout.tsx`) were converted.
+This rule is enforced by convention/code review, not by a runtime check — and the check has a known
+gap. The purity tracker (`packages/routekit/src/purity.ts`) treats `locals`/`headers`/`query` as
+identity fields but deliberately NOT `params`, on the grounds that "params derive from the concrete
+path, which IS the cache key". Since PR #27 that is true for a layout reading its OWN pattern's
+params (they are in the layout's cache key), but it is NOT true for a layout reading a DESCENDANT's
+param, and `req.path` is untracked as well. Such a layout would be pattern-cached and serve one
+instance's chrome for all of them. The former `examples/address-book` `ContactsLayout` was exactly
+this shape and was safe only because it also read `req.query`; it was deleted 2026-07-30. Closing the
+class would mean warning when a layout's `load()` reads a param outside `layoutParamNames(pattern)`.
+`test-app`'s demo layouts (`pages/_layout.tsx`, `pages/dashboard/_layout.tsx`,
+`pages/dashboard/reports/_layout.tsx`) are the converted, compliant examples.
 
 ### Bake/read flow (`boot.ts`, `buildPageHandler`)
 
