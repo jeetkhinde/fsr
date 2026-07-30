@@ -2,6 +2,28 @@
 
 Completed-session history for the **Kiln framework**. Current state → [active-work.md](active-work.md). App work logs live under `apps/<app>/.memory/`.
 
+## 2026-07-30 — ADR-011 layout scoping enforced (branch `fix/adr011-layout-guard`)
+
+Closed the gap the address-book deletion left undefended. `createPurityTracker` gained an opt-in
+layout mode: given `{ layoutPattern, layoutParamNames }` it flags a `load()` that reads a param
+outside the layout's own pattern, reads `req.path`, or enumerates `req.params` (a spread reads
+descendant keys wholesale — caught via the `ownKeys` trap, not just `get`).
+
+A violation counts as impure, so it reuses the existing `deleteLayout` self-heal path: the layout is
+served **uncached** instead of cached wrongly. Correct output, sharing lost — the right trade. Warns
+once per pattern, naming the read and saying what to do.
+
+`scopeViolation()` is deliberately separate from `identityAccessed()`: reading `query` makes a layout
+impure but is not a scoping mistake, and the warning must name the right problem.
+
+Falsified: disabling layout mode makes the new `boot.test.ts` case fail. No false positive on the
+legitimate shape — jags-list's `/projects/:id` layout reads its own param and emits zero warnings.
+
+`test:unit` 217 → **225 pass / 60 skip / 0 fail**; `test:integration` exit 0; jags-list green.
+
+Gotcha for the next fresh worktree: `test-app/.env` is gitignored, so `test:integration` fails with
+`database "jagjeet" does not exist` until it is copied across — same trap as `apps/jags-list/.env`.
+
 ## 2026-07-30 — `examples/address-book` deleted (branch `fix/kiln-framework-backlog`)
 
 Removed the address-book example (34 files) at the maintainer's direction — `apps/jags-list` is now
@@ -15,8 +37,7 @@ Unwired: dropped from `workspaces`, from the root `build` script's consumer phas
 `test:integration` exit 0; `bun run build` clean.
 
 Worth keeping in mind: deleting the example removed the only known ADR-011 violator but NOT the
-enforcement gap it exposed — see [decisions.md](decisions.md) § ADR-011 "Enforcement gap (open)"
-and [roadmap.md](roadmap.md) § Phase 4.4.
+enforcement gap it exposed. **Closed the next day** — see the 2026-07-30 layout-guard entry below.
 
 ## 2026-07-12 — Gemini audit round 2 (branch `fix/gemini-audit-round2`)
 
