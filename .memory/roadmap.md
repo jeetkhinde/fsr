@@ -60,15 +60,11 @@ Last updated: 2026-07-27
    sweep *timer* is coarse, but slot eligibility is not — which is what this item wanted. It was
    unasserted; `store.test.ts` now proves it, and the test was falsified (replacing the COALESCE
    with the bare global makes it fail).
-4. ~~**`address-book` Layout Migration**~~ — MOOT 2026-07-30: `examples/address-book` was deleted,
-   so `ContactsLayout` no longer exists. **The framework hazard it exposed is still open**, and is
-   the part worth keeping: the purity tracker deliberately does not track `params` ("params derive
-   from the concrete path, which IS the cache key"). Since PR #27 that holds for a layout reading its
-   OWN pattern's params, but NOT for one reading a DESCENDANT's — and `req.path` is untracked too.
-   Such a layout is pattern-cached and serves one instance's chrome for all of them, the same class
-   of bug PR #27 fixed, one level up. `ContactsLayout` was exactly that shape and was safe only
-   because it also read `req.query`, which trips the tracker. Fix: warn (or demote) when a layout's
-   `load()` reads a param outside `layoutParamNames(pattern)`, or reads `req.path`.
+4. ~~**`address-book` Layout Migration**~~ — CLOSED 2026-07-30, in the way that mattered. The example
+   itself was deleted, so `ContactsLayout` is gone — but the framework hazard it exposed is now
+   FIXED rather than merely documented: the purity tracker has a layout mode that demotes (and warns
+   about) a layout reading a param its own pattern does not own, `req.path`, or the whole `params`
+   object. See [decisions.md](decisions.md) § ADR-011 "Enforcement gap — CLOSED".
 
 ---
 

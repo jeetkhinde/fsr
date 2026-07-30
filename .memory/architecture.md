@@ -93,17 +93,18 @@ A layout is only safe to cache once-per-pattern if its `load()` output is identi
 
 Data that is universal but changes *over time* (e.g. a live notification count shown in every page's header) is not a violation of this rule — it should use `LiveProp`/`Live.list` so the layout bakes once and the value is patched in-place via SSE, rather than being re-baked.
 
-This rule is enforced by convention/code review, not by a runtime check — and the check has a known
-gap. The purity tracker (`packages/routekit/src/purity.ts`) treats `locals`/`headers`/`query` as
-identity fields but deliberately NOT `params`, on the grounds that "params derive from the concrete
-path, which IS the cache key". Since PR #27 that is true for a layout reading its OWN pattern's
-params (they are in the layout's cache key), but it is NOT true for a layout reading a DESCENDANT's
-param, and `req.path` is untracked as well. Such a layout would be pattern-cached and serve one
-instance's chrome for all of them. The former `examples/address-book` `ContactsLayout` was exactly
-this shape and was safe only because it also read `req.query`; it was deleted 2026-07-30. Closing the
-class would mean warning when a layout's `load()` reads a param outside `layoutParamNames(pattern)`.
-`test-app`'s demo layouts (`pages/_layout.tsx`, `pages/dashboard/_layout.tsx`,
-`pages/dashboard/reports/_layout.tsx`) are the converted, compliant examples.
+This rule is **enforced at runtime** as of 2026-07-30. `createPurityTracker` takes an optional layout
+scope (`{ layoutPattern, layoutParamNames }`); in that mode it flags a `load()` that reads a param
+outside `layoutParamNames(pattern)`, reads `req.path`, or enumerates `req.params`. Such a layout is
+treated as impure, so it is served uncached (correct output, no sharing) and warns once per pattern
+naming the offending read. Reading the layout's OWN params stays pure — they are part of its cache
+key since the 2026-07-28 own-params amendment.
+
+Why the base tracker cannot do this: it treats `params` as pure on the grounds that "params derive
+from the concrete path, which IS the cache key". That holds for a page, and for a layout's own
+params, but not for a layout reading a descendant page's param — the descendant's `:id` is absent
+from the layout's key. `test-app`'s demo layouts (`pages/_layout.tsx`, `pages/dashboard/_layout.tsx`,
+`pages/dashboard/reports/_layout.tsx`) are the compliant reference implementations.
 
 ### Bake/read flow (`boot.ts`, `buildPageHandler`)
 
