@@ -10,7 +10,8 @@ Kiln does **not** ship an auth system, and neither Bun nor Elysia ships a full
 one — they give primitives (`Bun.password`, cookies, JWT plugins). Bring an auth
 library (Jag's List uses **better-auth**) and wire it with **two** Kiln seams:
 
-1. **Mount the auth library's HTTP handler** as raw routes (sign-in/out, session).
+1. **Mount the auth library's HTTP handler** as a raw route (its own catch-all
+   endpoints). Your own login/logout form handlers are ordinary Kiln actions.
 2. **Put your per-request gate in `hooks.ts` → `handle(req, res)`** — resolve the
    session once, stash the user on `req.locals`, and short-circuit anonymous
    requests. `load()`/actions then read `req.locals.user` (no second lookup).
@@ -92,21 +93,60 @@ export function requireAdmin(req: KilnRequest): SessionUser {
 }
 ```
 
-## Mounting the auth library (raw routes)
+## Login and logout are ordinary actions
 
-The auth library's own endpoints and any cookie-setting form handlers are **raw
-adapter routes**, registered on `adapter.app` directly — not Kiln pages/actions.
-Two reasons: (1) they must set `Set-Cookie`, which Kiln actions can't yet do
-(they receive only `req`); (2) being raw routes, `handle` never runs for them,
-so they're **public by construction** (you must be able to reach sign-in without
-a session).
+Actions receive `(req, res)` and can set cookies (ADR-019), so form handlers are
+plain Kiln actions on a page — no raw routes. Because they are Kiln routes,
+`handle` **does** run for them, so the page they live on must be in your public
+list (`/login` below), or sign-in would require a session to reach.
+
+```tsx
+// pages/login.tsx
+import { AppError, type KilnRequest, type KilnResponse } from '@kiln/core';
+import { auth } from '../lib/auth.js';
+
+export const actions = {
+  async signin(req: KilnRequest, res: KilnResponse) {
+    const form = await req.formData();
+    const upstream = await auth.api.signInEmail({
+      body: { email: String(form.get('email') ?? ''), password: String(form.get('password') ?? '') },
+      asResponse: true,
+    });
+    if (!upstream.ok) throw AppError.redirect('/login?error=1');
+
+    // better-auth returns fully-formed Set-Cookie strings — pass them through
+    // verbatim rather than re-serializing. For cookies you own, prefer
+    // res.cookies.set('name', value, { httpOnly: true, sameSite: 'lax' }).
+    for (const cookie of upstream.headers.getSetCookie()) {
+      res.headers.append('set-cookie', cookie);
+    }
+    throw AppError.redirect('/');
+  },
+};
+```
+
+```html
+<form method="post" action="/login?/signin">
+```
+
+Cookies staged on `res` survive `AppError.redirect` — they live in `res.headers`,
+independent of the body — which is what makes the sign-in-then-redirect flow work.
+
+**A logout form in a layout must target a page's action absolutely.** Actions
+register against a *page* pattern and layouts have none, so a logout form in
+`_layout.tsx` posts to `/login?/signout` rather than a relative action.
+
+### The auth library's own handler is still a raw route
 
 ```ts
 // src/main.ts
 const adapter = new ElysiaAdapter();
 adapter.app.all('/api/auth/*', (ctx) => auth.handler(ctx.request)); // better-auth
-adapter.app.post('/auth/login', async (ctx) => { /* signInEmail → Set-Cookie */ });
 ```
+
+It's a catch-all owned by the library, not a Kiln page, so it stays mounted on
+`adapter.app` — and being a raw route, `handle` never runs for it (public by
+construction).
 
 ## Gotchas
 
@@ -121,12 +161,12 @@ adapter.app.post('/auth/login', async (ctx) => { /* signInEmail → Set-Cookie *
 - **Per-user pages are never baked automatically** — their `load()` reads `req.locals`, so the classifier keeps them pure SSR (ADR-016); no export needed. To CACHE them per user, export `bake = 'user'` and add an `identity` export to hooks.ts (`(req) => req.locals.user?.id ?? null` — ADR-017); only for query-free loads. `export const bake = false`
   on any page whose `load()` reads `req.locals.user`, or one user's baked HTML is
   served to everyone. See [`rendering-and-caching.md`](rendering-and-caching.md).
-- **Raw auth routes still need CSRF origin headers** on form POSTs — Kiln's csrf
-  middleware checks `origin`.
+- **Form POSTs need CSRF origin headers** — Kiln's csrf middleware checks
+  `origin`. This applies to action-based login too, not just raw routes.
 
 ## Related
 
 - [`data-loading.md`](data-loading.md) — `load()`, content negotiation (the 401-JSON
   vs 302-redirect branch in `handle` mirrors it).
-- [`gotchas.md`](gotchas.md) — actions can't set cookies (why login is a raw route).
+- [`gotchas.md`](gotchas.md) — action/response gotchas.
 - `.memory/decisions.md` ADR-015 — the architectural rationale for `handle`+`locals`.

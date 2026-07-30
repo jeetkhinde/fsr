@@ -954,11 +954,13 @@ If login now 403s, check CSRF: `applyMiddleware` gates POSTs by origin, and the 
 
 - [ ] **Step 7: Run the regression guards**
 
+Run them **one file at a time** — a single `bun test tests/` invocation fails with `PostgresError: Connection closed` because each suite spawns its own server and the connections collide. That is pre-existing (verified identical on unmodified `main` @ `f5fa13a`), not something this work caused.
+
 ```bash
-cd apps/jags-list && RUN_APP_TESTS=1 bun test tests/
+cd apps/jags-list && for f in tests/*.test.ts; do RUN_APP_TESTS=1 bun test "$f"; done
 ```
 
-Expected: PASS. These suites (`gate`, `crud`, `purity`, `live`) sign in via `auth.api.signInEmail` directly, so they do **not** exercise the new login route — they only confirm the rest of the app is unaffected. Do not report them as evidence the action-based login works.
+Expected: all seven PASS. These suites (`gate`, `crud`, `purity`, `live`) sign in via `auth.api.signInEmail` directly, so they do **not** exercise the new login route — they only confirm the rest of the app is unaffected. Do not report them as evidence the action-based login works.
 
 - [ ] **Step 8: Full framework verification**
 
