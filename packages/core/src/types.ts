@@ -66,6 +66,20 @@ export interface KilnResponse {
  */
 export type KilnHandle = (req: KilnRequest, res: KilnResponse) => void | Promise<void>;
 
+/**
+ * A page action: the named handlers a page exports as `actions`. Receives the
+ * same (req, res) pair as every other Kiln handler, so an action can set
+ * cookies, headers and a custom status.
+ *
+ * Return a value and Kiln sends it as JSON. Alternatively commit a response
+ * yourself (res.html/json/redirect/binary) and Kiln sends that instead —
+ * the same rule KilnHandle uses. Doing both warns; the return value loses.
+ */
+export type KilnAction = (
+  req: KilnRequest,
+  res: KilnResponse,
+) => unknown | Promise<unknown>;
+
 /** Resolves the stable user key for per-user caching (bake = 'user').
  * Runs after `handle`, so req.locals is populated. Return null for
  * anonymous requests — 'user' pages then fall back to pure SSR.

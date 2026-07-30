@@ -27,12 +27,15 @@ function makeRes(): any {
   const headers = new Headers();
   const res: any = { status: 200, headers, cookies: createCookies(headers), captured: null };
   res.html = (b: string) => {
+    res.bodyType = 'html';
     res.captured = { type: 'html', body: b };
   };
   res.json = (b: unknown) => {
+    res.bodyType = 'json';
     res.captured = { type: 'json', body: b };
   };
   res.redirect = (url: string) => {
+    res.bodyType = 'redirect';
     res.captured = { type: 'redirect', url };
   };
   res.sse = () => {};
@@ -316,6 +319,122 @@ describe('buildPageHandler', () => {
     expect(adamAfter.captured.body).toContain('before-adam');
     expect(loads).toBe(3);
     await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it('passes res to the action, so it can set cookies', async () => {
+    const { buildActionHandler } = await import('./boot.js');
+    const handler = buildActionHandler({
+      signin: async (_req: any, res: any) => {
+        res.cookies.set('sid', 'abc', { httpOnly: true });
+        return { ok: true };
+      },
+    });
+
+    const res = makeRes();
+    await handler(
+      makeReq({ path: '/login', method: 'POST', query: { '/signin': '' } as any }) as any,
+      res,
+    );
+
+    expect(res.headers.getSetCookie()).toEqual(['sid=abc; Path=/; HttpOnly']);
+    expect(res.captured).toEqual({ type: 'json', body: { ok: true } });
+  });
+
+  it('preserves a status the action set, so 409 is reachable', async () => {
+    const { buildActionHandler } = await import('./boot.js');
+    const handler = buildActionHandler({
+      claim: async (_req: any, res: any) => {
+        res.status = 409;
+        return { error: 'already claimed' };
+      },
+    });
+
+    const res = makeRes();
+    await handler(
+      makeReq({ path: '/t', method: 'POST', query: { '/claim': '' } as any }) as any,
+      res,
+    );
+
+    expect(res.status).toBe(409);
+    expect(res.captured).toEqual({ type: 'json', body: { error: 'already claimed' } });
+  });
+
+  it('keeps cookies staged before an AppError.redirect', async () => {
+    const { buildActionHandler } = await import('./boot.js');
+    const { AppError } = await import('@kiln/core');
+    const handler = buildActionHandler({
+      signout: async (_req: any, res: any) => {
+        res.cookies.delete('sid');
+        throw AppError.redirect('/login');
+      },
+    });
+
+    const res = makeRes();
+    await handler(
+      makeReq({ path: '/login', method: 'POST', query: { '/signout': '' } as any }) as any,
+      res,
+    );
+
+    expect(res.captured).toEqual({ type: 'redirect', url: '/login' });
+    expect(res.headers.getSetCookie()).toEqual(['sid=; Path=/; Max-Age=0']);
+  });
+
+  it('does not overwrite a body the action committed itself', async () => {
+    const { buildActionHandler } = await import('./boot.js');
+    const handler = buildActionHandler({
+      csv: async (_req: any, res: any) => {
+        res.headers.set('content-type', 'text/csv');
+        res.html('a,b\n1,2');
+      },
+    });
+
+    const res = makeRes();
+    await handler(
+      makeReq({ path: '/t', method: 'POST', query: { '/csv': '' } as any }) as any,
+      res,
+    );
+
+    expect(res.captured).toEqual({ type: 'html', body: 'a,b\n1,2' });
+  });
+
+  it('warns when an action both commits a body and returns a value', async () => {
+    const { buildActionHandler } = await import('./boot.js');
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (msg: string) => warnings.push(String(msg));
+    try {
+      const handler = buildActionHandler({
+        both: async (_req: any, res: any) => {
+          res.html('committed');
+          return { ignored: true };
+        },
+      });
+      const res = makeRes();
+      await handler(
+        makeReq({ path: '/warn-both', method: 'POST', query: { '/both': '' } as any }) as any,
+        res,
+      );
+      expect(res.captured).toEqual({ type: 'html', body: 'committed' });
+    } finally {
+      console.warn = original;
+    }
+
+    expect(warnings.some((w) => w.includes('both wrote to res and returned a value'))).toBe(true);
+  });
+
+  it('still supports a one-argument action', async () => {
+    const { buildActionHandler } = await import('./boot.js');
+    const handler = buildActionHandler({
+      legacy: async (_req: any) => ({ greeting: 'hi' }),
+    });
+
+    const res = makeRes();
+    await handler(
+      makeReq({ path: '/t', method: 'POST', query: { '/legacy': '' } as any }) as any,
+      res,
+    );
+
+    expect(res.captured).toEqual({ type: 'json', body: { greeting: 'hi' } });
   });
 
   it('materializes the latest JSON into an immutable promoted shell', async () => {
