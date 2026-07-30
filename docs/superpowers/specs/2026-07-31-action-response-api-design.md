@@ -132,17 +132,44 @@ unconditionally.
 
 Cookie serialization lives in `@kiln/core` alongside the types.
 
-### 2.3 Implementation risk to resolve first
+### 2.3 How the adapter emits multiple `Set-Cookie` values
 
 The Elysia adapter emits headers by mutating `ctx.set.headers`, a plain record
 (`packages/adapter-elysia/src/context.ts:95`, `packages/adapter-elysia/src/adapter.ts:70,76`),
-which cannot carry two `Set-Cookie` values.
+which cannot hold two `Set-Cookie` values in one string slot.
 
-**Whether Elysia accepts an array at `ctx.set.headers['set-cookie']`, or whether
-`handleElysiaResponse` must return a real `Response` object instead, is unresolved and must be
-settled by a spike as task 1 of the implementation plan** — before anything else is built on it.
-This is stated as an open question rather than guessed at. Everything else in this design is
-independent of how it lands; only the adapter's emit path depends on the answer.
+Elysia 1.4.28 (the installed version) supports two ways out, both read from its source:
+
+1. **An array at `set.headers['set-cookie']`** — typed as `'set-cookie'?: string | string[]` in
+   `dist/types.d.ts`, and `handleSet` converts an array via
+   `parseSetCookies(new Headers(set.headers), set.headers['set-cookie'])` in
+   `dist/adapter/utils.js`.
+2. **`set.headers` being a `Headers` instance** — `dist/adapter/utils.js` branches on
+   `set.headers instanceof Headers` and passes `set` straight to `new Response(response, set)`;
+   its `mergeHeaders` has a dedicated branch that iterates `getSetCookie()` and appends each value.
+
+**Decision: use the array (option 1).** Option 2 is superficially tidier given `KilnResponse.headers`
+is becoming a `Headers`, but it carries a silent-failure risk. Kiln writes `ctx.set.headers['x'] = y`
+record-style outside the translation function — `packages/adapter-elysia/src/context.ts:46,63,69,77`
+and `packages/adapter-elysia/src/middleware/compression.ts:22-24`. Against a `Headers` instance
+those writes would set a plain JS property rather than a header and be **dropped with no type error
+and no runtime error**. Option 2 would require converting every such write, in Kiln and in any
+middleware added later; option 1 keeps `ctx.set.headers` a record, so all existing writes stay
+correct and the change is confined to `handleElysiaResponse`.
+
+Concretely, `handleElysiaResponse` reads the new `Headers` and writes the record: `.get()` for
+single-valued names, plus `ctx.set.headers['set-cookie'] = res.headers.getSetCookie()` when any
+cookies are present.
+
+Related, and checked because it would have invalidated the above: `handleSet` overwrites
+`set.headers['set-cookie']` from Elysia's own cookie jar whenever `set.cookie` is populated
+(`dist/adapter/utils.js`). Kiln never uses that jar — there is no `ctx.cookie` or `set.cookie`
+anywhere in `packages/adapter-elysia/src` — so it cannot clobber the array. Anyone reaching for
+Elysia's native cookie API later must revisit this.
+
+The above is read from Elysia's source, not executed. The plan's first task is therefore an
+adapter-level test asserting two `Set-Cookie` headers actually reach the wire, which settles it
+empirically before the rest is built on top.
 
 The SSE path (`packages/adapter-elysia/src/adapter.ts:70,76`) iterates `res.headers` too and must
 be converted alongside it.
@@ -191,7 +218,8 @@ so it is testable on its own. `buildActionHandler`'s precedence logic is testabl
 ## 6. Verification
 
 Tests for each precedence rule and for cookie serialization (attributes, `sameSite`, `delete`
-semantics), plus an adapter-level test that two `Set-Cookie` headers actually reach the wire.
+semantics), plus the adapter-level test from §2.3 that two `Set-Cookie` headers actually reach the
+wire — which runs first, since everything else depends on it.
 
 **The real verification is falsification, not added tests.** Delete the raw Elysia `/auth/login`
 and `/auth/logout` routes from `apps/jags-list/src/main.ts:24-56` and reimplement them as ordinary
