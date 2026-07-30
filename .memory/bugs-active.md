@@ -2,13 +2,55 @@
 
 Open **framework** issues only. Resolved history → [bugs-resolved.md](bugs-resolved.md). App-level bugs live under `apps/<app>/.memory/`, not here.
 
-> **Last verified**: 2026-07-29 on `worktree-kiln-framework-backlog` — `bun run test:unit` 229 pass / 60 skip / 0 fail, `bun run test:integration` exit 0 (live Postgres + Redis), `bun run build` green across all packages, and a fresh `git clone` builds in a single pass.
+> **Last verified**: 2026-07-31 on `main` @ `347ad6d` — `bun run test:unit` 225 pass / 60 skip / 0 fail, `bun run test:integration` exit 0 (live Postgres + Redis), `bun run build` green across all packages, and a fresh `git clone` builds in a single pass. (Count moved 229 → 225 because `examples/address-book` was deleted and the ADR-011 guard added tests.)
 >
 > The six §1 defects found by the 2026-07-27 source audit are **all fixed** — see
 > [bugs-resolved.md](bugs-resolved.md) §1. Nothing from that audit remains open here; the DX and
 > maintainability items it raised alongside them are in [roadmap.md](roadmap.md) § Phase 5.
 
 ---
+
+## 1. Open framework gaps (surveyed from source 2026-07-31)
+
+Full prioritisation and rationale in [active-work.md](active-work.md) § Next Priorities. Recorded
+here so they are tracked as defects rather than living only in a session transcript.
+
+*   **`Live.list` receives no auto-deps, and fails silently without `dependsOn`** — `registerLiveLists`
+    passes `meta.dependsOn` straight through (`packages/routekit/src/live-registration.ts:89,107`),
+    while scalar `LiveProp` unions the request's observed tables. Omitting `dependsOn` registers a
+    list that never updates, with no error. Asymmetric and invisible at the call site.
+    **Treat as a bug, not a gap.** Falsifiable: deleting `dependsOn` in
+    `apps/jags-list/pages/projects/[id]/activity.tsx` makes `bun run test:live` fail on a 20s timeout.
+
+*   **`Live.list` cannot mark non-`<ul>/<li>` markup** — `applyLiveListMarkers` finds rows by
+    scanning for `<li>` inside the nearest `<ul>`/`<ol>`
+    (`packages/routekit/src/live-list-render.ts:90,131`). A div-based board or a table cannot be a
+    live list at all. Independent of islands.
+
+*   **`Live.list` inside an island receives nothing** — `_patchList` early-returns when the list is
+    inside `[data-kiln-island]` (`packages/routekit/src/live-client-script.ts:63`) and, unlike the
+    scalar path, never publishes to the Silcrow store. `LiveListOptions` also has no `target`
+    option, so there is no opt-in either (`packages/live/src/list.ts`).
+
+*   **Actions cannot touch the response** — invoked as `actions[actionName](req)`
+    (`packages/routekit/src/boot.ts:88`). No cookies, no custom status, no headers. Forces auth
+    endpoints onto raw adapter routes, and makes some status codes unreachable: `AppError` offers
+    only 404/401/403/422/500/redirect (`packages/core/src/errors.ts`), so a 409 cannot be returned.
+
+*   **An app that owns its entry point cannot use islands** — `kiln dev`/`kiln start` build their own
+    `ElysiaAdapter` (`packages/cli/src/cli.ts:148,204`) and never load the app's entry, but an app
+    needing cookies must own its entry (see above). `apps/jags-list` is blocked on this and has no
+    islands. A seam exists (`startKiln` accepts `islandsManifestUrl`, `boot.ts:39`) but is
+    undocumented and unsupported.
+
+*   **Four warned-but-surprising combinations** (each a live `warnOnce`): `cacheKey` + live fields
+    (updates skipped); `bake='user'` + `Live.list` (unsupported); `bake='user'` + dynamic segment +
+    live fields (**SSE scoped to the wrong user**); `Live.list` in a dynamic-segment layout (all
+    instances share one channel). The third is the most severe — wrong-user data.
+
+*   **`.env` files are gitignored, so a fresh clone cannot run `test:integration`** — fails with
+    `database "jagjeet" does not exist` until `test-app/.env` is copied in. Ship `.env.example`
+    plus a preflight check.
 
 ## 2. Infrastructure & Integration Test Issues
 
