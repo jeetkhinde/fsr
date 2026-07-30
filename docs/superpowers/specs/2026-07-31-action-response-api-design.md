@@ -223,10 +223,18 @@ wire — which runs first, since everything else depends on it.
 
 **The real verification is falsification, not added tests.** Delete the raw Elysia `/auth/login`
 and `/auth/logout` routes from `apps/jags-list/src/main.ts:24-56` and reimplement them as ordinary
-Kiln actions. jags-list's existing integration suites already drive the full cookie dance —
-`tests/gate.integration.test.ts:21`, `tests/app.integration.test.ts:44,107`,
-`tests/crud.integration.test.ts:19`, `tests/purity.integration.test.ts:25` all read
-`getSetCookie()` — so they pass unchanged only if this genuinely works end to end.
+Kiln actions.
+
+Two different kinds of evidence, which must not be conflated:
+
+- **`tests/app.integration.test.ts:68,89,100` is the falsifying suite.** It is the only one that
+  drives login and logout *over HTTP*. Its URLs change (`/auth/login` → the new action URL), but its
+  assertions — 302, `Set-Cookie` present, the session then works, bad credentials redirect to
+  `/login?error=1` — stay byte-identical. If cookies do not survive the action path, it fails.
+- **`gate`, `crud`, `purity` and `live` are regression guards only.** Each obtains its cookie by
+  calling `auth.api.signInEmail` directly (e.g. `tests/gate.integration.test.ts:19-22`), bypassing
+  the HTTP login route entirely. They prove the rest of the app still works; they prove **nothing**
+  about the action-based login, and must not be cited as if they did.
 
 Per the project's verification discipline: `bun run test:unit`, `bun run test:integration`, **and**
 `bun run build` — tsc and tests alone have missed client-bundle breakage before.
