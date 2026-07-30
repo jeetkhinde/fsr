@@ -45,6 +45,7 @@ import {
   injectKilnScript,
   injectModuleScript,
   materializeBakedShell,
+  layoutParamNames,
 } from '@kiln/engine';
 
 import { addBounded, warnOnce, DEDUP_SET_MAX } from './dedup.js';
@@ -449,9 +450,27 @@ export function buildPageHandler(
         let loaded: any = {};
         let layoutPure = true;
         if (typeof lMod.load === 'function') {
-          const tracker = createPurityTracker(req);
+          // Layout mode (ADR-011): reading this layout's OWN params is fine —
+          // they are in its cache key — but a descendant page's param, or
+          // req.path, is not, and would make one instance's chrome serve for
+          // all of them. A violation counts as impure, so the existing branch
+          // below deletes any artifact and stops caching it: correct output,
+          // just uncached, rather than a silent cross-instance leak.
+          const tracker = createPurityTracker(req, {
+            layoutPattern,
+            layoutParamNames: layoutParamNames(layoutPattern),
+          });
           loaded = await lMod.load(tracker.proxied);
           layoutPure = !tracker.identityAccessed();
+          const violation = tracker.scopeViolation();
+          if (violation) {
+            warnOnce(
+              `layout-scope:${layoutPattern}`,
+              `[kiln] ADR-011: ${violation}. That value is not part of the layout's cache key, so ` +
+                `this layout is being served uncached to stay correct. Move the read into the page ` +
+                `that needs it, or resolve it client-side.`,
+            );
+          }
           assertEmbeddedLiveLists(loaded, kilnConfig);
           loaded = await materializeLiveLists(loaded, store);
         }

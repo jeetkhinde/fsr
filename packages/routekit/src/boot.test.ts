@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it, expect, spyOn } from 'bun:test';
 import { buildPageHandler, applyLivePropMarkers, warnDomLiveInsideIslands, startKiln } from './boot.js';
 import type { KilnRequest, KilnResponse } from '@kiln/core';
 import * as os from 'os';
@@ -563,6 +563,66 @@ describe('buildPageHandler', () => {
     expect(alphaBoard.headers['x-kiln-layout-cache-hit']).toBe('/projects/:id');
     expect((globalThis as any).__projectLayoutLoads).toBe(2);
 
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it('does not share a layout that reads a param its own pattern does not own', async () => {
+    // ADR-011 enforcement. The sibling test above covers a layout reading its
+    // OWN param — allowed, and keyed. This is the inverse: a layout at
+    // "/section" reading req.params.id, which belongs to a DESCENDANT page.
+    // `id` is absent from the layout's cache key, so caching it would serve
+    // the first instance's chrome for every instance — the exact shape the
+    // deleted address-book ContactsLayout had.
+    //
+    // Correct behaviour is to stop caching it, not to cache it wrongly: the
+    // guard marks the layout impure, which routes it through the existing
+    // deleteLayout self-heal. Output stays right; only the sharing is lost.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
+    const layoutPath = path.join(tmpDir, 'stray_layout.tsx');
+    await Bun.write(
+      layoutPath,
+      `export async function load(req) {
+         globalThis.__strayLayoutLoads = (globalThis.__strayLayoutLoads||0)+1;
+         return { tag: "STRAY-" + req.params.id };
+       }
+       export default function StrayLayout({ tag, children }) {
+         return [tag, children];
+       }`,
+    );
+    (globalThis as any).__strayLayoutLoads = 0;
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+
+    const { createElement } = await import('react');
+    const cacheOpts = { cacheDir: tmpDir, ttlSecs: 0, redis: null };
+    // Pattern owns NO params; the descendant page supplies :id.
+    const layoutNodes = [
+      { pattern: '/section', filePath: layoutPath, relativePath: 'stray_layout.tsx', hasLoad: true },
+    ];
+    const detail = buildPageHandler(
+      { default: () => createElement('h2', null, 'DETAIL') },
+      { pattern: '/section/:id', layouts: [layoutPath], liveFields: [], hasEntries: false, filePath: '', relativePath: '' },
+      layoutNodes,
+      cacheOpts,
+    );
+
+    const one = makeRes();
+    await detail(makeReq({ path: '/section/ONE', params: { id: 'ONE' } }) as any, one);
+    const two = makeRes();
+    await detail(makeReq({ path: '/section/TWO', params: { id: 'TWO' } }) as any, two);
+
+    // Each instance renders its own data — no cross-instance leak.
+    expect(one.captured.body).toContain('STRAY-ONE');
+    expect(two.captured.body).toContain('STRAY-TWO');
+    expect(two.captured.body).not.toContain('STRAY-ONE');
+    // Both re-loaded: the layout was never cached, which is the correct
+    // trade for a layout whose output varies by something not in its key.
+    expect((globalThis as any).__strayLayoutLoads).toBe(2);
+    expect(two.headers['x-kiln-layout-cache-hit']).toBeUndefined();
+    // And the developer is told why, naming the offending read.
+    const messages = warn.mock.calls.map((c) => String(c[0]));
+    expect(messages.some((m) => m.includes('ADR-011') && m.includes('params.id'))).toBe(true);
+
+    warn.mockRestore();
     await fs.rm(tmpDir, { recursive: true });
   });
 
