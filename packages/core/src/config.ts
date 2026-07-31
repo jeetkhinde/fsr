@@ -30,18 +30,24 @@ export interface TriggerTableConfig {
 
 export interface FsrConfig {
   /**
-   * Where the FsrWatcher runs. **Default and recommended: 'embedded'** — in the
-   * application process.
+   * Where the FsrWatcher runs. `'embedded'` — in the application process — is
+   * the only mode.
    *
-   * 'external' is offered, but choose it with your eyes open: there is no
-   * watcher process, IPC channel or daemon behind it. Setting it changes
-   * exactly two things — the read path re-runs `load()` on every cache hit (so
-   * props are fresh, since nothing patches them), and `Live.list` throws,
-   * because its closures cannot cross a process boundary. The net effect is
-   * "no watcher, re-load every time": correct, but it forfeits the caching
-   * live routes exist for. Roadmap Phase 4.2 tracks making it real.
+   * `'external'` was typed here for two releases with nothing behind it: no
+   * watcher process, no IPC channel, no daemon. Setting it only made the read
+   * path re-run `load()` on every cache hit and made `Live.list` throw, i.e.
+   * "no watcher, re-load every time" — it silently forfeited the caching live
+   * routes exist for, which is the worst kind of option to leave typed. It is
+   * removed rather than kept as a trap; `validateConfig` rejects it by name.
+   *
+   * Reviving it is a design question, not a coding one. A `Live.list`
+   * registers closures — `keyOf`, `query`, and a `renderRows` callback that
+   * SSRs the page component — and closures cannot cross a process boundary,
+   * so an out-of-process watcher would have to RPC back into an app process
+   * that has the component graph loaded. That is a real feature with a real
+   * protocol; it should arrive as one, not as a config string.
    */
-  watcher: 'embedded' | 'external';
+  watcher: 'embedded';
   pollIntervalMs: number;
   patchDebounceSecs: number;
   purgeAfterSeconds: number;
@@ -322,6 +328,21 @@ function validateConfig(c: KilnConfig): void {
   port('port', c.port);
   port('web.port', c.web?.port);
   port('backend.port', c.backend?.port);
+
+  // Named explicitly rather than caught by a generic enum check: an app that
+  // set this got a silently uncached, re-load-every-request server, and
+  // deserves to be told exactly that when it upgrades.
+  if ((c.fsr?.watcher as string) === 'external') {
+    throw new Error(
+      `[kiln] invalid config: fsr.watcher = "external" — the only mode is "embedded". ` +
+        `The external mode was typed but never implemented: it ran no watcher and re-ran ` +
+        `load() on every cache hit, forfeiting the caching live routes exist for. Remove the ` +
+        `setting (or set "embedded") to get the behaviour you almost certainly wanted.`,
+    );
+  }
+  if (c.fsr?.watcher !== undefined && c.fsr.watcher !== 'embedded') {
+    fail('fsr.watcher', c.fsr.watcher, '"embedded"');
+  }
 
   // A JS-authored config can hand `setup` anything. Catching it here beats a
   // "config.server.setup is not a function" during boot, after the FSR

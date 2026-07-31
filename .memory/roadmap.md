@@ -43,17 +43,20 @@ Last updated: 2026-07-27
 ## Phase 4: Hardening & Scalability
 
 1. **Cache Partitioning** ✅ — Pages export `cacheKey(req): string`; each variant gets its own disk (`_v/<variant>/`) and Redis (`kiln:html:<route>:v:<variant>`) cache entry. Variant routes skip watcher path registration (re-bake on invalidation). Implemented across `KilnCache`, `PageOptions`, and `buildPageHandler`.
-2. **External Watcher Process** — STILL OPEN, and *not* "partially implemented" as previously
-   recorded: investigated 2026-07-29 and there is **no** implementation. The only three references
-   are the type union, a read-path branch that re-runs `load()` on every cache hit, and the
-   `Live.list` guard. No watcher process, IPC channel or daemon. Net behaviour of setting it is
-   "no watcher, re-load every time", which forfeits the caching live routes exist for — the config
-   doc now says so.
-   **Blocked on an architecture decision:** an out-of-process watcher must invoke a `Live.list`'s
-   closures (`keyOf`, `query`, and a `renderRows` callback that SSRs the page component). Closures
-   cannot cross a process boundary, and `renderRows` needs the component graph loaded. Options: RPC
-   back into the app process, or restrict external mode to scalar `Live.value` fields only. Needs a
-   human call before implementation.
+2. **External Watcher Process** — **CLOSED 2026-07-31: option removed, not implemented.**
+   The decision the previous entry was blocked on has been made. `fsr.watcher: 'external'` was
+   typed for two releases with nothing behind it — no watcher process, IPC channel or daemon. Its
+   only effects were a read-path branch that re-ran `load()` on every cache hit and the `Live.list`
+   guard, i.e. "no watcher, re-load every time": it silently forfeited the caching live routes
+   exist for. Leaving a typed option that quietly disables caching is worse than not offering it,
+   so the union is now `'embedded'` only, both dead branches are deleted, and `validateConfig`
+   rejects `'external'` by name with an explanation (an app that set it was running uncached and
+   should be told).
+   **If revived, it is a designed feature, not a config string.** A `Live.list` registers closures
+   (`keyOf`, `query`, and a `renderRows` callback that SSRs the page component); closures cannot
+   cross a process boundary and `renderRows` needs the component graph loaded, so an out-of-process
+   watcher must RPC back into an app process. That protocol is the actual work, and scalar-only
+   external mode (the other option considered) buys too little to justify a second mode.
 3. **Fine-Grained Debounce Scheduling** ✅ — Already implemented; verified and covered 2026-07-29.
    `fetchStaleSlots` gates on `COALESCE(s.debounce_secs, <global>)`, so each slot's own window
    decides eligibility and the global is only a fallback (same for lists in `list-store.ts`). The

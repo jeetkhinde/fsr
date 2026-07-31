@@ -65,7 +65,6 @@ import {
 } from './html-markers.js';
 import { makeLoaderRequest } from './loader-request.js';
 import {
-  assertEmbeddedLiveLists,
   hasLiveLists,
   materializeLiveLists,
   registerLiveLists,
@@ -276,7 +275,6 @@ export function buildPageHandler(
         observedTables = [...tables];
         rawPageProps = result;
         if (tracker.identityAccessed()) renderPure = false;
-        assertEmbeddedLiveLists(rawPageProps, kilnConfig);
         rawPageProps = await materializeLiveLists(rawPageProps, store);
         pageProps = unwrapLiveProps(rawPageProps);
         return pageProps;
@@ -364,10 +362,6 @@ export function buildPageHandler(
       materialized = null;
     }
     if (materialized) {
-      if (kilnConfig?.fsr?.watcher === 'external') {
-        const loaded = await loadPageProps();
-        if (loaded === null) return;
-      }
       if (!watcher || watcher.hasRegisteredRoute(req.path)) {
         respondWithNavigationShape(res, req, layoutPatterns, pageMeta.pattern, materialized);
         return;
@@ -497,7 +491,6 @@ export function buildPageHandler(
                 `that needs it, or resolve it client-side.`,
             );
           }
-          assertEmbeddedLiveLists(loaded, kilnConfig);
           loaded = await materializeLiveLists(loaded, store);
         }
         rawLayoutPropsArr[idx] = loaded;

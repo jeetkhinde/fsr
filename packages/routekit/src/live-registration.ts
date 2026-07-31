@@ -2,7 +2,6 @@
 // Everything here is about getting a Live.list from "declared in load()" to
 // "registered with the watcher and snapshotted", including the re-render
 // callback the watcher invokes to produce replacement row HTML.
-import type { KilnConfig } from '@kiln/core';
 import {
   cloneLiveListRows,
   getLiveListMeta,
@@ -43,23 +42,6 @@ export async function materializeLiveLists(loadResult: any, store?: FsrStore): P
     });
   }
   return next;
-}
-
-export function assertEmbeddedLiveLists(loadResult: any, kilnConfig?: KilnConfig): void {
-  if (kilnConfig?.fsr?.watcher !== 'external' || !hasLiveLists(loadResult)) return;
-  // Why this can't work rather than just that it doesn't: a Live.list carries
-  // three functions — keyOf, query and the renderRows re-render callback (see
-  // registerLiveLists below). An out-of-process watcher would have to CALL
-  // them, and closures cannot cross a process boundary; renderRows in
-  // particular has to SSR the page component, so it can only run somewhere
-  // that has the component graph loaded.
-  throw new Error(
-    'Live.list requires config.fsr.watcher = "embedded". A live list registers ' +
-      'closures (keyOf, query, and a renderRows callback that SSRs the page ' +
-      'component); those cannot be serialized to an out-of-process watcher. ' +
-      'Use the embedded watcher, or replace the Live.list with scalar ' +
-      'Live.value fields, which carry no callbacks.',
-  );
 }
 
 export function hasLiveLists(loadResult: any): boolean {
