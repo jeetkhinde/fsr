@@ -8,10 +8,15 @@ import {
   getLiveListMeta,
   isLiveList,
   type LiveList,
+  type LiveListMeta,
 } from '@kiln/core';
 import { bakeSegment, type FsrStore, type FsrWatcher } from '@kiln/engine';
+// Server-only subpath: withDepCapture pulls in node:async_hooks, so it must
+// never be reached through the client-bundleable '@kiln/core' barrel.
+import { withDepCapture } from '@kiln/core/sql';
 import { applyLiveListMarkers, extractLiveListRowHtml } from './live-list-render.js';
 import { unwrapLiveProps } from './html-markers.js';
+import { warnOnce } from './dedup.js';
 
 export async function materializeLiveLists(loadResult: any, store?: FsrStore): Promise<any> {
   if (!loadResult || typeof loadResult !== 'object') return loadResult;
@@ -26,8 +31,16 @@ export async function materializeLiveLists(loadResult: any, store?: FsrStore): P
       }
       continue;
     }
-    const rows = await store.executeLiveListQuery(meta.query);
-    next[name] = cloneLiveListRows(value as LiveList<unknown>, rows);
+    // Capture the tables THIS list's own query touches, in its own scope: the
+    // page's capture wraps only load(), and `initial` is optional, so a list
+    // that omits it would otherwise contribute nothing. Runs unconditionally —
+    // only the union at registration is gated on fsr.autoDeps.
+    const { result: rows, tables } = await withDepCapture(() =>
+      store.executeLiveListQuery(meta.query),
+    );
+    next[name] = cloneLiveListRows(value as LiveList<unknown>, rows, {
+      autoDeps: [...tables],
+    });
   }
   return next;
 }
@@ -55,6 +68,15 @@ export function hasLiveLists(loadResult: any): boolean {
   );
 }
 
+/** Explicit deps plus the tables captured from the list's own query. Explicit
+ * deps are preserved and never replaced — auto-deps only ever adds, matching
+ * the scalar path's rule (page-render.ts, step 12). */
+export function resolveListDeps(meta: LiveListMeta<any>, autoDepsEnabled: boolean): string[] {
+  return Array.from(
+    new Set([...meta.dependsOn, ...(autoDepsEnabled ? meta.autoDeps ?? [] : [])]),
+  );
+}
+
 export async function registerLiveLists(input: {
   route: string;
   pageComponent: any;
@@ -66,12 +88,34 @@ export async function registerLiveLists(input: {
   isLayout?: boolean;
   defaultDebounce?: number;
   defaultRevalidate?: number | false;
+  /** Mirrors kilnConfig.fsr.autoDeps. Omitted or true = union captured deps. */
+  autoDeps?: boolean;
 }): Promise<void> {
   for (const [name, value] of Object.entries(input.pageProps)) {
     if (!isLiveList(value)) continue;
     const meta = getLiveListMeta(value);
     if (!meta) continue;
     const rows = value as unknown[];
+    const dependsOn = resolveListDeps(meta, input.autoDeps !== false);
+    if (dependsOn.length === 0) {
+      // Branch on the EFFECTIVE revalidate — the same expression used when
+      // building the target below — because a list with no deps is not
+      // necessarily dead: fetchStaleLists also refreshes on
+      // COALESCE(revalidate_secs, 300) > 0. Only revalidate:false (stored as
+      // 0) removes that fallback.
+      const effectiveRevalidate = meta.revalidate ?? input.defaultRevalidate;
+      warnOnce(
+        `live-list-no-deps:${input.route}:${name}`,
+        `[kiln] Live.list "${name}" on route "${input.route}" has no dependencies: none were ` +
+          `declared via dependsOn, and none were captured from its query. ` +
+          (effectiveRevalidate === false
+            ? `With revalidate: false it will never update.`
+            : `It will refresh only on the revalidate timer (~300s by default), not when the ` +
+              `underlying data changes.`) +
+          ` Auto-deps only sees queries made through a createKilnSql client, and cannot see a ` +
+          `dynamically-interpolated table name — give the list an explicit dependsOn if either applies.`,
+      );
+    }
     const rendered = extractLiveListRowHtml(input.finalHtml, name);
     const snapshotRows = rows.map((row) => {
       const key = meta.keyOf(row);
@@ -86,7 +130,7 @@ export async function registerLiveLists(input: {
       {
         route: input.route,
         name,
-        dependsOn: meta.dependsOn,
+        dependsOn,
         debounce: meta.debounce ?? input.defaultDebounce,
         revalidate: meta.revalidate ?? input.defaultRevalidate,
         keyOf: meta.keyOf,
@@ -104,7 +148,7 @@ export async function registerLiveLists(input: {
       {
         route: input.route,
         name,
-        dependsOn: meta.dependsOn,
+        dependsOn,
         debounceSecs: meta.debounce ?? input.defaultDebounce,
         revalidateSecs: meta.revalidate ?? input.defaultRevalidate,
         rows: snapshotRows,

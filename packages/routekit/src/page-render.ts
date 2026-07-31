@@ -660,6 +660,7 @@ export function buildPageHandler(
         watcher,
         defaultDebounce: options.debounce ?? kilnConfig?.fsr?.patchDebounceSecs,
         defaultRevalidate: options.revalidate ?? kilnConfig?.fsr?.revalidateSeconds,
+        autoDeps: kilnConfig?.fsr?.autoDeps !== false,
       });
       for (let index = 0; index < layoutEntries.length; index++) {
         const layoutRoute = layoutPatterns[index] ?? '/';
@@ -690,6 +691,7 @@ export function buildPageHandler(
           isLayout: true,
           defaultDebounce: layoutOptions.debounce ?? kilnConfig?.fsr?.patchDebounceSecs,
           defaultRevalidate: layoutOptions.revalidate ?? kilnConfig?.fsr?.revalidateSeconds,
+          autoDeps: kilnConfig?.fsr?.autoDeps !== false,
         });
       }
     }
@@ -748,7 +750,7 @@ export function buildPageHandler(
     // any client logic — purely so this can be verified from the outside.
     const cacheHitPatterns = layoutPatterns.filter((_, i) => layoutFromCache[i]);
     if (cacheHitPatterns.length > 0) {
-      res.headers['x-kiln-layout-cache-hit'] = cacheHitPatterns.join(',');
+      res.headers.set('x-kiln-layout-cache-hit', cacheHitPatterns.join(','));
     }
 
     respondWithNavigationShape(res, req, layoutPatterns, pageMeta.pattern, finalHtml);

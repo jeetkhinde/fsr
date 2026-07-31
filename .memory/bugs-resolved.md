@@ -4,7 +4,9 @@ Historical record of fixed framework bugs, kept out of the active file to keep s
 
 > **Last full verification**: 2026-07-12 (Gemini-audit round 2). `tsc --noEmit` clean across every package; unit suite 149 pass / 0 fail.
 
-## 0. Fixed 2026-07-31 (branch `fix/sse-user-scoping`)
+## 0. Fixed 2026-07-31
+
+### `fix/sse-user-scoping`
 
 *   **Live updates never reached subscribers on dynamic `bake='user'` routes** — `bakeByPattern` is
     keyed by route pattern (`packages/routekit/src/boot.ts`, the discovery loop), but the SSE and
@@ -39,6 +41,64 @@ Historical record of fixed framework bugs, kept out of the active file to keep s
     dynamic-route case fails (`'' !== 'u1'`) while the static and shared cases still pass.
     Verification: unit 244 pass / 60 skip / 0 fail, `test:integration` exit 0, `bun run build`
     exit 0.
+
+### `fix/live-list-auto-deps`
+
+*   **`Live.list` received no auto-deps** — `registerLiveLists` passed `meta.dependsOn` straight
+    through while scalar `LiveProp` unioned the request's observed tables, so omitting `dependsOn`
+    degraded a list with nothing logged.
+
+    Fixed by capturing each list's **own** query in its own `withDepCapture` scope inside
+    `materializeLiveLists`; the tables ride on `LiveListMeta.autoDeps` and are unioned by
+    `resolveListDeps` at registration, gated on `fsr.autoDeps` as the scalar path is. A list left
+    with no deps at all now emits a `warnOnce`.
+
+    **Correction to the original report:** it claimed a dep-less list "never updates". That is true
+    only with `revalidate: false` (persisted as `revalidate_secs = 0`). Otherwise `fetchStaleLists`
+    still refreshes it via `COALESCE(revalidate_secs, 300) > 0`, so it degrades to ~300s polling
+    rather than dying. Real bug either way; the severity claim was wrong.
+
+    **Why per-list capture rather than reusing the page's `observedTables`:** `initial` is optional
+    and the page's capture wraps only `load()`, so a list omitting `initial` would have captured
+    nothing — preserving the exact silent-failure case being fixed.
+
+    **Proven by falsification, in both directions.** The explicit `dependsOn: 'activity'` was
+    deleted from `apps/jags-list/pages/projects/[id]/activity.tsx` and `bun run test:live` passes.
+    With `live-registration.ts` and `page-render.ts` reverted to `main` and routekit rebuilt
+    (confirmed via `grep -c withDepCapture packages/routekit/dist/live-registration.js` → 0), the
+    same suite fails at 20044ms — so the test genuinely detects the regression rather than merely
+    passing. Resolved deps logged as `["activity", "user"]`: the needed key plus a harmless
+    over-capture from the `LEFT JOIN "user"`.
+
+    Verification at the time: unit 244 pass / 60 skip / 0 fail, `test:integration` exit 0,
+    `bun run build` exit 0, all seven jags-list suites green individually (24 pass / 0 fail).
+### `feat/action-response-api`
+
+*   **Actions could not touch the response** — invoked as `actions[actionName](req)`
+    (`packages/routekit/src/boot.ts`), so an action could set no cookies, no headers and no custom
+    status. This forced jags-list's login/logout onto raw Elysia routes and made 409 unreachable.
+
+    Fixed by passing `res` through as a second argument (`KilnAction` in
+    `packages/core/src/types.ts`), with precedence reusing the rule `KilnHandle` already documented:
+    a committed body wins over the return value, and doing both warns rather than silently
+    discarding.
+
+    **A constraint the original gap survey missed:** `KilnResponse.headers` was
+    `Record<string, string>`, which cannot carry multiple `Set-Cookie` values — so passing `res`
+    alone would not have fixed the driving case. `headers` is now a web `Headers` (matching
+    `KilnRequest.headers`), with a required `res.cookies` façade whose `path` defaults to `/`. The
+    Elysia adapter keeps `ctx.set.headers` a plain record and passes `set-cookie` as a `string[]`;
+    assigning a `Headers` instance there was rejected because the record-style writes in
+    `context.ts`/`middleware/compression.ts` would have been dropped with no error of any kind.
+
+    `AppError.conflict()` (409) added for code too deep in a call stack to reach `res`.
+
+    **Proven by falsification:** the raw `/auth/login` and `/auth/logout` routes were deleted from
+    `apps/jags-list/src/main.ts` and reimplemented as actions;
+    `apps/jags-list/tests/app.integration.test.ts` passes 6/6 with its assertions unchanged (only
+    URLs moved). Full framework verification at the time: unit 248 pass / 60 skip / 0 fail,
+    `test:integration` exit 0, `bun run build` exit 0, and all seven jags-list suites green
+    individually (24 pass / 0 fail). See ADR-019.
 
 ## 1. Fixed in the 2026-07-27 source audit (branch `fix/emit-event-non-bigint-id`)
 

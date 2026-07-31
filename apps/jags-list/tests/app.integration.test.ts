@@ -65,7 +65,7 @@ describe.skipIf(!run)('app auth gate', () => {
 
   it('logs in via the form endpoint, loads home, logs out', async () => {
     const form = new URLSearchParams({ email: EMAIL, password: PASSWORD });
-    const login = await fetch(BASE + '/auth/login', {
+    const login = await fetch(BASE + '/login?/signin', {
       method: 'POST',
       body: form,
       headers: {
@@ -86,7 +86,7 @@ describe.skipIf(!run)('app auth gate', () => {
     expect(home.status).toBe(200);
     expect(await home.text()).toContain('@gatetest');
 
-    const logout = await fetch(BASE + '/auth/logout', {
+    const logout = await fetch(BASE + '/login?/signout', {
       method: 'POST',
       headers: { cookie: cookies, origin: BASE },
       redirect: 'manual',
@@ -97,7 +97,7 @@ describe.skipIf(!run)('app auth gate', () => {
 
   it('rejects a wrong password with a redirect back to /login', async () => {
     const form = new URLSearchParams({ email: EMAIL, password: 'wrong-password' });
-    const res = await fetch(BASE + '/auth/login', {
+    const res = await fetch(BASE + '/login?/signin', {
       method: 'POST',
       body: form,
       headers: { 'content-type': 'application/x-www-form-urlencoded', origin: BASE },
