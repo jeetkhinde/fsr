@@ -714,17 +714,22 @@ Expected: PASS. A 20s timeout here means auto-deps did not reach the watcher —
 
 A passing suite only shows the fix works; it does not show the suite would notice if it stopped working. Confirm the negative, so "this test falsifies the feature" is observed rather than inherited from a memory note:
 
+`git stash` does **not** work here — the fix is already committed by Tasks 2–4, so there is nothing to stash. Revert against `main` instead, and revert `page-render.ts` too, or the build fails on the `autoDeps` argument the reverted signature no longer accepts. jags-list runs against routekit's built `dist/`, so the rebuild is not optional:
+
 ```bash
 cd /Users/jagjeet/Development/workspaces/Kiln/.worktrees/fix-live-list-auto-deps
-git stash push packages/routekit/src/live-registration.ts
+git checkout main -- packages/routekit/src/live-registration.ts packages/routekit/src/page-render.ts
+bun run --filter './packages/routekit' build
+grep -c withDepCapture packages/routekit/dist/live-registration.js   # must print 0
 cd apps/jags-list && bun run test:live
 ```
 
-Expected: **FAIL** on a ~20s timeout — the page has no explicit `dependsOn` and the capture is stashed away, so nothing reaches the watcher. Then restore:
+Expected: **FAIL** on a ~20s timeout. The `grep` matters — `tsc -b` reports errors from the test file (which still references `resolveListDeps`) while still emitting, so confirm from `dist` that the capture is genuinely absent rather than trusting the build's exit code. Then restore:
 
 ```bash
 cd /Users/jagjeet/Development/workspaces/Kiln/.worktrees/fix-live-list-auto-deps
-git stash pop
+git checkout HEAD -- packages/routekit/src/live-registration.ts packages/routekit/src/page-render.ts
+bun run build
 ```
 
 If it *passes* with the fix stashed, the suite is not actually exercising the dependency path and the whole falsification is worthless — stop and report that, rather than proceeding on a test that cannot fail.
