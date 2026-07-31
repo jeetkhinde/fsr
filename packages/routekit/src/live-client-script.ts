@@ -75,9 +75,11 @@ function _patchList(data){
   var row=list.querySelector('[data-kiln-key="'+data.key+'"]');
   if(data.op==='insert'){
     if(!data.html)return;
-    var box=document.createElement('div');
+    // <template> not <div>: a div drops table-context elements (<tr>, <td>)
+    // during parsing, so a table-backed Live.list would silently never insert.
+    var box=document.createElement('template');
     box.innerHTML=data.html;
-    var node=box.firstElementChild;
+    var node=box.content.firstElementChild;
     if(!node)return;
     var rows=list.querySelectorAll('[data-kiln-key]');
     var index=Math.max(0,Math.min(Number(data.index)||0,rows.length));
@@ -97,9 +99,9 @@ function _patchList(data){
   }
   if(data.op==='replace-row'){
     if(!data.html)return;
-    var replaceBox=document.createElement('div');
+    var replaceBox=document.createElement('template');
     replaceBox.innerHTML=data.html;
-    var replaceNode=replaceBox.firstElementChild;
+    var replaceNode=replaceBox.content.firstElementChild;
     if(replaceNode)row.replaceWith(replaceNode);
     return;
   }
