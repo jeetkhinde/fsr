@@ -216,6 +216,35 @@ async function runTests() {
     assert.equal(slotOf('u1')?.stale, true);  // owner invalidated
     assert.equal(slotOf('u2')?.stale, false); // other user untouched
 
+    // 8b. Owner-scoped DELETE tombstoning.
+    // Until 2026-08-01 this fanned out to every user_key: deleting ONE user's
+    // row tombstoned the route for everyone, unlinked their artifacts and
+    // forced a full re-render apiece over data they did not own. INSERT/UPDATE
+    // (8 above) were scoped from the start; DELETE was not.
+    console.log('Testing owner-scoped DELETE tombstoning...');
+    await store.ensureRouteRow('/owned-del', 300, 3600, 'json');
+    await store.upsertSlot('/owned-del', 'feed', null, [], ['comments'], 0, null, '');
+    await store.upsertSlot('/owned-del', 'feed', null, [], ['comments'], 0, null, 'u1');
+    await store.upsertSlot('/owned-del', 'feed', null, [], ['comments'], 0, null, 'u2');
+    await store.tombstoneDependentRoutes('comments', 'u1');
+    {
+      const after = await store.fetchAllForInspect();
+      const row = (uk: string) =>
+        after.find(r => r.route === '/owned-del' && r.slot === 'feed' && r.userKey === uk);
+      assert.equal(row('')?.tombstoned, true,  'shared row is always tombstoned');
+      assert.equal(row('u1')?.tombstoned, true,  'the deleting owner is tombstoned');
+      assert.equal(row('u2')?.tombstoned, false, "another user's row must survive a DELETE they did not make");
+    }
+
+    // No owner (a trigger that emits none) still fans out route-wide — the
+    // pre-existing behaviour, deliberately kept for shared/unowned tables.
+    await store.tombstoneDependentRoutes('comments');
+    {
+      const after = await store.fetchAllForInspect();
+      const u2 = after.find(r => r.route === '/owned-del' && r.slot === 'feed' && r.userKey === 'u2');
+      assert.equal(u2?.tombstoned, true, 'an owner-less DELETE still tombstones every user');
+    }
+
     // 9. tombstone & isTombstoned
     console.log('Testing tombstone...');
     assert.equal(await store.isTombstoned('/test-route-1'), false);

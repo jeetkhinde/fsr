@@ -4,6 +4,60 @@ Historical record of fixed framework bugs, kept out of the active file to keep s
 
 > **Last full verification**: 2026-07-12 (Gemini-audit round 2). `tsc --noEmit` clean across every package; unit suite 149 pass / 0 fail.
 
+## 0. Fixed 2026-08-01
+
+### `fix/known-defects` — the two limitations that outlived the bug ledger
+
+Both were recorded as "known limitations / future work" in
+[decisions.md](decisions.md), not in `bugs-active.md`, so both survived a
+question phrased as "what's open?". Neither was hard once traced; they were
+frozen by an earlier plan's scope, not by difficulty.
+
+*   **DELETE-driven tombstoning was not owner-scoped** — `notifyDelete` already
+    *accepted* an `owner` and dropped it on the floor
+    (`watcher.ts`, with a NOTE saying deletes were out of scope), so
+    `tombstoneDependentRoutes(depKey)` tombstoned every `user_key` matching the
+    dep key. One user deleting one row therefore tombstoned the route for
+    **every** user: their artifacts unlinked, a full re-render each, over data
+    none of them owned. INSERT/UPDATE had been owner-scoped since ADR-018.
+
+    Fixed by threading `owner` through to `FsrStore.tombstoneDependentRoutes`
+    and `FsrListStore.deleteDependentRoutes`, both scoped
+    `(user_key = '' OR user_key = ${owner})` — the same two-branch shape
+    `invalidateDepKey` already used, so there is one idiom rather than two. The
+    artifact unlinks ride the `RETURNING` rows, so scoping the `WHERE` scoped
+    them automatically. An owner-less payload (a trigger that emits none) still
+    fans out route-wide, deliberately unchanged. `InspectRow` gained
+    `tombstoned` so the fan-out is assertable without raw SQL.
+
+*   **Auto-deps could not see queries through any handle bun hands out** —
+    `sql.begin(async tx => ...)`, `tx.savepoint(...)`, `sql.unsafe('...')` and
+    `await sql.reserve()`. The capture Proxy wrapped only the client itself, so
+    a query run through one of those went to bun's own object: no table
+    recorded, and — worse — no warning, because from the wrapper's point of view
+    no query happened at all. Silent under-capture is the one failure direction
+    that serves stale data with nothing logged anywhere.
+
+    Fixed by splitting the wrapper into a reusable `wrapCapturing(base)` and
+    applying it to what each member yields: `.begin`/`.transaction`/`.savepoint`
+    substitute a wrapped handle into the callback (recursively, so a savepoint
+    inside a transaction captures too), `.unsafe` parses the string argument it
+    was already given, and `.reserve()` wraps its resolved connection.
+    Transactions still roll back — the integration suite asserts that
+    explicitly, since a bug in the substitution could break atomicity while
+    every capture assertion still passed.
+
+    **Still under-captures, by construction:** a dynamically-interpolated table
+    name (``sql`SELECT * FROM ${sql(name)}` ``) reaches the template as a bound
+    `?`, leaving nothing to parse. That case warns once per query shape and
+    needs an explicit `dependsOn`.
+
+Falsified both ways: reverting `sql.ts` fails the `begin()` capture assertion;
+neutering only the owner argument in `tombstoneDependentRoutes` fails exactly
+"another user's row must survive a DELETE they did not make".
+
+---
+
 ## 0. Fixed 2026-07-31
 
 ### `fix/framework-dx` — items 0 and 3-7 of the fix-sequencing doc

@@ -284,12 +284,12 @@ export class FsrWatcher {
       });
   }
 
-  // NOTE: owner is accepted here for call-site symmetry with notifyChange
-  // (db-notify.ts destructures the same payload for both ops), but a DELETE
-  // tombstones the route for every user via tombstoneDependentRoutes, which
-  // isn't owner-scoped — deletes aren't part of this task's scope.
+  // Owner-scoped since 2026-08-01, matching notifyChange: a DELETE used to
+  // tombstone the route for EVERY user, destroying artifacts and forcing a
+  // full re-render apiece over one user's deleted row. An owner-less payload
+  // (a trigger that doesn't emit one) still fans out route-wide.
   notifyDelete(depKey: string, owner?: string): Promise<void> {
-    return this.store.tombstoneDependentRoutes(depKey).then(async (routes) => {
+    return this.store.tombstoneDependentRoutes(depKey, owner).then(async (routes) => {
       if (this.redis) {
         for (const route of routes) {
           await this.redis.publishInvalidate({

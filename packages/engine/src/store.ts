@@ -40,6 +40,9 @@ export interface InspectRow {
   stale: boolean;
   version: number;
   promoted: boolean;
+  /** Whether the row is tombstoned. Exposed so owner-scoped DELETE
+   * fan-out can be asserted without dropping to raw SQL in a test. */
+  tombstoned: boolean;
   htmlPath: string | null;
   jsonPath: string | null;
 }
@@ -263,15 +266,30 @@ export class FsrStore {
     return routes;
   }
 
-  async tombstoneDependentRoutes(depKey: string): Promise<string[]> {
-    const rows = await this.sql`
-      UPDATE kiln_fsr
-      SET tombstoned = TRUE, stale = FALSE
-      WHERE ${depKey} = ANY(depends_on)
-      RETURNING route, slot, html_path as "htmlPath", json_path as "jsonPath"
-    `;
+  async tombstoneDependentRoutes(depKey: string, owner?: string): Promise<string[]> {
+    // Owner scoping mirrors invalidateDepKey exactly: undefined → every
+    // user_key (a route-wide change), set → the shared row ('') plus that one
+    // user's rows. Without it a DELETE of one user's row tombstoned the route
+    // for EVERY user — deleting their artifacts and forcing a full re-render
+    // apiece over data none of them owned. INSERT/UPDATE were scoped from the
+    // start; DELETE was left unscoped when tombstone behaviour was frozen.
+    const rows =
+      owner === undefined
+        ? await this.sql`
+            UPDATE kiln_fsr
+            SET tombstoned = TRUE, stale = FALSE
+            WHERE ${depKey} = ANY(depends_on)
+            RETURNING route, slot, html_path as "htmlPath", json_path as "jsonPath"
+          `
+        : await this.sql`
+            UPDATE kiln_fsr
+            SET tombstoned = TRUE, stale = FALSE
+            WHERE ${depKey} = ANY(depends_on)
+              AND (user_key = '' OR user_key = ${owner})
+            RETURNING route, slot, html_path as "htmlPath", json_path as "jsonPath"
+          `;
     const routes = Array.from(new Set(rows.map((r: any) => String(r.route))));
-    const listRoutes = await this.lists.deleteDependentRoutes(depKey);
+    const listRoutes = await this.lists.deleteDependentRoutes(depKey, owner);
     const allRoutes = Array.from(new Set([...routes, ...listRoutes])).sort();
 
     const fs = await import('fs/promises');
@@ -562,7 +580,8 @@ export class FsrStore {
   async fetchAllForInspect(): Promise<InspectRow[]> {
     const rows = await this.sql`
       SELECT route, slot, user_key as "userKey", depends_on as "dependsOn", stale, version,
-             (html_path IS NOT NULL) as "promoted", html_path as "htmlPath", json_path as "jsonPath"
+             tombstoned, (html_path IS NOT NULL) as "promoted",
+             html_path as "htmlPath", json_path as "jsonPath"
       FROM kiln_fsr
       ORDER BY route, user_key, slot
     `;
@@ -574,6 +593,7 @@ export class FsrStore {
       stale: !!r.stale,
       version: r.version,
       promoted: !!r.promoted,
+      tombstoned: !!r.tombstoned,
       htmlPath: r.htmlPath,
       jsonPath: r.jsonPath
     }));

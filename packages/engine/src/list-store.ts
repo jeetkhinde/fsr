@@ -138,12 +138,22 @@ export class FsrListStore {
     `;
   }
 
-  async deleteDependentRoutes(depKey: string): Promise<string[]> {
-    const rows = await this.sql`
-      DELETE FROM kiln_fsr_lists
-      WHERE ${depKey} = ANY(depends_on)
-      RETURNING route
-    `;
+  async deleteDependentRoutes(depKey: string, owner?: string): Promise<string[]> {
+    // Same owner scoping as FsrStore.tombstoneDependentRoutes — undefined
+    // deletes every user_key, set deletes the shared rows plus that user's.
+    const rows =
+      owner === undefined
+        ? await this.sql`
+            DELETE FROM kiln_fsr_lists
+            WHERE ${depKey} = ANY(depends_on)
+            RETURNING route
+          `
+        : await this.sql`
+            DELETE FROM kiln_fsr_lists
+            WHERE ${depKey} = ANY(depends_on)
+              AND (user_key = '' OR user_key = ${owner})
+            RETURNING route
+          `;
     return uniqueSortedRoutes(rows);
   }
 }
