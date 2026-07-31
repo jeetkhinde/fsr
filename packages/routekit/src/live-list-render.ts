@@ -1,4 +1,5 @@
 import { getLiveListMeta, isLiveList } from "@kiln/core";
+import { warnOnce } from "./dedup.js";
 
 interface ListRenderTarget {
   name: string;
@@ -67,14 +68,56 @@ function extractListTargets(loadResult: Record<string, unknown>): ListRenderTarg
   return targets;
 }
 
+/** Rows the app marked itself with data-kiln-row={key}. Returns null when the
+ * page uses no markers at all, so the caller falls back to the <li> scan. */
+function findMarkedRows(
+  html: string,
+  target: ListRenderTarget,
+): { row: unknown; range: Range }[] | null {
+  const byKey = new Map<string, unknown>();
+  for (const row of target.rows) byKey.set(target.keyOf(row), row);
+
+  const matches: { row: unknown; range: Range }[] = [];
+  let sawMarker = false;
+  let offset = 0;
+
+  while (offset < html.length) {
+    const found = findElementByAttribute(html, "data-kiln-row", undefined, offset);
+    if (!found) break;
+    sawMarker = true;
+    const key = readAttribute(html.slice(found.start, found.openEnd), "data-kiln-row");
+    const row = key === null ? undefined : byKey.get(key);
+    if (row !== undefined) {
+      matches.push({ row, range: { start: found.start, openEnd: found.openEnd, end: found.end } });
+    } else if (key !== null) {
+      warnOnce(
+        `live-list-row-key:${target.name}:${key}`,
+        `[kiln] Live.list "${target.name}" has an element with data-kiln-row="${key}" that matches ` +
+          `no row key. The value must equal the list's key(row) — that element will not update.`,
+      );
+    }
+    offset = found.end;
+  }
+
+  return sawMarker ? matches : null;
+}
+
 function markList(html: string, target: ListRenderTarget, route?: string): string {
-  const rowMatches: { row: unknown; range: Range }[] = [];
-  let searchFrom = 0;
-  for (const row of target.rows) {
-    const range = findMatchingRow(html, row, searchFrom);
-    if (!range) return html;
-    rowMatches.push({ row, range });
-    searchFrom = range.end;
+  const marked = findMarkedRows(html, target);
+
+  let rowMatches: { row: unknown; range: Range }[];
+  if (marked !== null) {
+    if (marked.length === 0) return html;
+    rowMatches = marked;
+  } else {
+    rowMatches = [];
+    let searchFrom = 0;
+    for (const row of target.rows) {
+      const range = findMatchingRow(html, row, searchFrom);
+      if (!range) return html;
+      rowMatches.push({ row, range });
+      searchFrom = range.end;
+    }
   }
 
   let result = html;
@@ -86,8 +129,13 @@ function markList(html: string, target: ListRenderTarget, route?: string): strin
     result = result.slice(0, match.range.start) + markedRow + result.slice(match.range.end);
   }
 
-  const firstRowStart = rowMatches[0].range.start;
-  const listOpen = findNearestOpenTag(result, "ul", firstRowStart) ?? findNearestOpenTag(result, "ol", firstRowStart);
+  // Explicitly-marked rows can sit in any container, so discover it; the <li>
+  // path keeps looking for the ul/ol it has always assumed.
+  const firstRowStart = rowMatches[0]!.range.start;
+  const listOpen =
+    marked !== null
+      ? findEnclosingOpenTag(result, firstRowStart)
+      : findNearestOpenTag(result, "ul", firstRowStart) ?? findNearestOpenTag(result, "ol", firstRowStart);
   if (!listOpen || result.slice(listOpen.start, listOpen.openEnd).includes("data-kiln-list=")) {
     return result;
   }
@@ -161,6 +209,46 @@ function rowTextValues(row: unknown): string[] {
   return Object.entries(row)
     .filter(([, value]) => typeof value === "string")
     .map(([, value]) => String(value));
+}
+
+const VOID_ELEMENTS = new Set([
+  "area", "base", "br", "col", "embed", "hr", "img", "input",
+  "link", "meta", "source", "track", "wbr",
+]);
+
+/** The innermost element enclosing `index`. Unlike findNearestOpenTag this
+ * takes no tag name — an explicitly-marked row can sit inside any container,
+ * so the container has to be discovered rather than assumed. Scans forward
+ * keeping a stack, which is what makes "innermost still-open" correct. */
+export function findEnclosingOpenTag(html: string, index: number): Range | null {
+  if (index <= 0) return null;
+  const tagPattern = /<(\/?)([A-Za-z][A-Za-z0-9:-]*)\b[^>]*?(\/?)>/g;
+  const stack: Array<Range & { tagName: string }> = [];
+  let match: RegExpExecArray | null;
+
+  while ((match = tagPattern.exec(html)) !== null) {
+    if (match.index >= index) break;
+    const openEnd = match.index + match[0].length;
+
+    const isClosing = match[1] === "/";
+    const tagName = match[2]!.toLowerCase();
+    const selfClosing = match[3] === "/" || VOID_ELEMENTS.has(tagName);
+
+    if (selfClosing) continue;
+    if (isClosing) {
+      for (let i = stack.length - 1; i >= 0; i--) {
+        if (stack[i]!.tagName === tagName) {
+          stack.length = i;
+          break;
+        }
+      }
+      continue;
+    }
+    stack.push({ start: match.index, openEnd, end: openEnd, tagName });
+  }
+
+  const top = stack[stack.length - 1];
+  return top ? { start: top.start, openEnd: top.openEnd, end: top.end } : null;
 }
 
 function findNextElement(html: string, tagName: string, offset: number): Range | null {

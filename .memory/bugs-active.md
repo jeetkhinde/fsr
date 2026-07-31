@@ -20,10 +20,10 @@ here so they are tracked as defects rather than living only in a session transcr
     unions them at registration; a list with no deps at all warns. See ADR-018's 2026-07-31
     amendment and [bugs-resolved.md](bugs-resolved.md).
 
-*   **`Live.list` cannot mark non-`<ul>/<li>` markup** — `applyLiveListMarkers` finds rows by
-    scanning for `<li>` inside the nearest `<ul>`/`<ol>`
-    (`packages/routekit/src/live-list-render.ts:90,131`). A div-based board or a table cannot be a
-    live list at all. Independent of islands.
+*   ~~**`Live.list` cannot mark non-`<ul>/<li>` markup**~~ — **FIXED 2026-07-31** on
+    `feat/live-list-any-markup`. Rows opt in with `data-kiln-row={key}` and the container is
+    discovered from them; the `<li>` scan remains the fallback. See
+    [bugs-resolved.md](bugs-resolved.md).
 
 *   **`Live.list` inside an island receives nothing** — `_patchList` early-returns when the list is
     inside `[data-kiln-island]` (`packages/routekit/src/live-client-script.ts:63`) and, unlike the

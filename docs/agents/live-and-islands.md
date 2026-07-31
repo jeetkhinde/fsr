@@ -70,6 +70,43 @@ export default function Todos({ todos }: Awaited<ReturnType<typeof load>>) {
 
 The server computes row-level diffs (`insert` / `remove` / `move` / `replace-row`) — changing one row in a list of 1000 sends one patch, not 1000. The returned value is a real `T[]`; metadata rides on a non-enumerable symbol.
 
+### Markup other than `<ul>`/`<li>`
+
+The example above works with no extra markup because Kiln can find `<li>` rows inside a `<ul>`/`<ol>` on its own. For **any other markup** — a div board, a table, a definition list — put `data-kiln-row={key}` on each row element, where the value equals the list's `key(row)`:
+
+```tsx
+// A div-based board
+export default function Board({ cards }: Awaited<ReturnType<typeof load>>) {
+  return (
+    <div className="board">
+      {cards.map((c) => (
+        <article key={c.id} data-kiln-row={c.id}>
+          <h3>{c.title}</h3>
+        </article>
+      ))}
+    </div>
+  );
+}
+```
+
+```tsx
+// A table
+<table>
+  <tbody>
+    {rows.map((r) => (
+      <tr key={r.id} data-kiln-row={r.id}>
+        <td>{r.title}</td>
+      </tr>
+    ))}
+  </tbody>
+</table>
+```
+
+Kiln marks the rows' **enclosing element** as the list container — the `div.board` and the `tbody` above — so you don't declare it. Two things to know:
+
+- **The value must equal `key(row)`.** It is how a marked element is matched to its row. A `data-kiln-row` value matching no row is warned about once and that element simply never updates.
+- **Markers are all-or-nothing per list.** If Kiln sees any `data-kiln-row` for a list it uses only marked elements; without markers it falls back to the `<ul>`/`<li>` scan. Marking some rows and not others means the unmarked ones are not live.
+
 ## Islands — client-side React interactivity
 
 Full-page hydration is prohibited (ADR-014). Interactivity comes from islands: named React components mounted into otherwise-static baked HTML.

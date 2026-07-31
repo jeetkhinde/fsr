@@ -70,10 +70,11 @@ Actions get `(req, res)`; `headers` is a `Headers` with a required `res.cookies`
 `AppError.conflict()` covers 409. jags-list's raw auth routes are deleted. Details in
 [bugs-resolved.md](bugs-resolved.md) §0.
 
-**3. `Live.list` is far narrower than its API suggests.** (M for what remains) Three constraints
-left, none visible at the call site:
-- rows must be `<li>` inside `<ul>`/`<ol>` (`live-list-render.ts:90,131`) — a div board or a table
-  cannot be marked at all;
+**3. `Live.list` is far narrower than its API suggests.** (S for what remains) Two constraints
+left, neither visible at the call site:
+- ~~rows must be `<li>` inside `<ul>`/`<ol>`~~ — **DONE 2026-07-31** (`feat/live-list-any-markup`):
+  rows opt in with `data-kiln-row={key}`, container discovered from them, `<li>` scan kept as
+  fallback. Also fixed the client's `<div>` row parsing, which silently dropped `<tr>` inserts;
 - patches are dropped inside islands (`live-client-script.ts:63`) and, unlike scalars, never
   published to the store — so a list inside an island receives nothing;
 - no `target` option, unlike `LiveProp` (`packages/live/src/list.ts`);

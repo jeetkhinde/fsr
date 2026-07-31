@@ -128,4 +128,20 @@ run('scalar patches are also published to the live: store scope (ADR-014 bridge)
   assert.ok(patchFn.includes('_publishLive(slot,data[slot])'));
 });
 
+run('list rows are parsed with <template>, not a div wrapper', () => {
+  // A <tr> assigned into a div's innerHTML is DISCARDED by the HTML parser, so
+  // a table-backed Live.list would render fine and then silently never insert
+  // or replace a row. <template> parses table-context fragments correctly.
+  // Content assertion rather than a DOM test: this file has no DOM, and the
+  // browser behaviour being relied on is not ours to test.
+  const patchList = KILN_LIVE_CLIENT_SCRIPT.slice(
+    KILN_LIVE_CLIENT_SCRIPT.indexOf('function _patchList('),
+    KILN_LIVE_CLIENT_SCRIPT.indexOf('function _patch('),
+  );
+  assert.ok(patchList.length > 0, '_patchList not found');
+  assert.ok(!patchList.includes("createElement('div')"), 'div wrapper drops <tr> during parsing');
+  assert.equal(patchList.match(/createElement\('template'\)/g)?.length, 2);
+  assert.equal(patchList.match(/content\.firstElementChild/g)?.length, 2);
+});
+
 console.log('\n✓ All FSR live client tests passed.');
