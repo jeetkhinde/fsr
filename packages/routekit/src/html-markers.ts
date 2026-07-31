@@ -35,16 +35,32 @@ export function wrapPageSegment(
   return `<div ${attrs} style="display:contents">${html}</div>`;
 }
 
-export function materializeLayoutSegment(pattern: string, shell: string, child: string): string {
+/**
+ * `live` marks this layout segment as an SSE subscription container.
+ *
+ * silcrow opens one connection per `[data-kiln-live]` element and only
+ * discovers slots inside that element's subtree, so a layout's `s-live` spans
+ * — which sit OUTSIDE the page wrapper, since layouts contain the page — are
+ * invisible to the page's own container. The outermost layout gets the
+ * attribute (route: the page's concrete path, where layout scalar fields are
+ * registered) and covers the whole document.
+ */
+export function materializeLayoutSegment(
+  pattern: string,
+  shell: string,
+  child: string,
+  live?: { route: string } | null,
+): string {
   const slot = `<div data-ps-slot="${escapeAttribute(pattern)}" style="display:contents">${child}</div>`;
   const rendered = shell.replace(OUTLET_TOKEN, slot);
+  const liveAttr = live ? ` data-kiln-live="${escapeAttribute(live.route)}"` : '';
   if (/^\s*(?:<!DOCTYPE html>)?<html\b/i.test(rendered)) {
     return rendered.replace(
       /<body\b/i,
-      `<body data-kiln-layout="${escapeAttribute(pattern)}"`,
+      `<body data-kiln-layout="${escapeAttribute(pattern)}"${liveAttr}`,
     );
   }
-  return `<div data-kiln-layout="${escapeAttribute(pattern)}" style="display:contents">${rendered}</div>`;
+  return `<div data-kiln-layout="${escapeAttribute(pattern)}"${liveAttr} style="display:contents">${rendered}</div>`;
 }
 
 export function respondWithNavigationShape(

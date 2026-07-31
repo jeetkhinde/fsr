@@ -229,6 +229,77 @@ describe('layout scalar live fields', () => {
     await fs.rm(tmpDir, { recursive: true });
   });
 
+  it('wraps the outermost layout in a subscription container for its dom slots', async () => {
+    // silcrow opens one connection per [data-kiln-live] element and only sees
+    // slots inside that element. A layout's s-live span is outside the page
+    // wrapper, so without a container on the layout nothing subscribes to it.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-layout-live-'));
+    const layoutFile = await writeLayout(
+      tmpDir,
+      `export const load = async () => ({ unread: Live.value(3) });\n` +
+        `export default ({ unread, children }) =>\n` +
+        `  createElement('div', null, createElement('span', { 's-live': 'unread' }, String(unread)), children);\n`,
+    );
+    const { createElement } = await import('react');
+    const pageModule = {
+      load: async () => ({ body: 'page' }),
+      default: ({ body }: any) => createElement('p', null, body),
+    };
+
+    const handler = buildPageHandler(
+      pageModule,
+      PAGE_META(layoutFile) as any,
+      [{ filePath: layoutFile, pattern: '/dashboard' } as any],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      fakeStore([]),
+      fakeWatcher([]),
+    );
+
+    const res = makeRes();
+    await handler(makeReq() as any, res);
+
+    const body: string = res.captured.body;
+    expect(body).toContain('data-kiln-layout="/dashboard" data-kiln-live="/dashboard"');
+    // The container must enclose the layout's slot, not sit beside it.
+    expect(body.indexOf('data-kiln-live="/dashboard"')).toBeLessThan(
+      body.indexOf('s-live="unread"'),
+    );
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it('adds no layout container when only the page has live fields', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-layout-live-'));
+    const layoutFile = await writeLayout(
+      tmpDir,
+      `export const load = async () => ({ heading: 'Chrome' });\n` +
+        `export default ({ children }) => createElement('div', null, children);\n`,
+    );
+    const { createElement } = await import('react');
+    const { Live } = await import('@kiln/core');
+    const pageModule = {
+      load: async () => ({ hits: Live.value(4) }),
+      default: ({ hits }: any) => createElement('p', { 's-live': 'hits' }, String(hits)),
+    };
+
+    const handler = buildPageHandler(
+      pageModule,
+      PAGE_META(layoutFile) as any,
+      [{ filePath: layoutFile, pattern: '/dashboard' } as any],
+      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
+      undefined,
+      fakeStore([]),
+      fakeWatcher([]),
+    );
+
+    const res = makeRes();
+    await handler(makeReq() as any, res);
+
+    // One container (the page wrapper), not two.
+    expect(res.captured.body.match(/data-kiln-live="/g)).toHaveLength(1);
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
   it('subscribes a store-target layout field, which has no DOM slot to be found by', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-layout-live-'));
     const layoutFile = await writeLayout(

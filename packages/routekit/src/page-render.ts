@@ -582,6 +582,15 @@ export function buildPageHandler(
           }
         : null,
     );
+    // A layout's dom-target slot needs a subscription container around it:
+    // silcrow scopes slot discovery to each [data-kiln-live] element's
+    // subtree, and layouts wrap the page wrapper rather than sitting inside
+    // it. Store-target layout fields need nothing here — their names ride on
+    // the page wrapper's data-kiln-live-store, which is read off the element
+    // itself, not from its subtree.
+    const layoutNeedsLiveContainer = layoutLiveFields.some(
+      ({ field }) => field.deliveryTarget !== 'store',
+    );
     let html = pageFragment;
     for (let index = layoutBaked.length - 1; index >= 0; index--) {
       const layoutRoute = layoutPatterns[index] ?? '/';
@@ -589,6 +598,7 @@ export function buildPageHandler(
         layoutRoute,
         layoutBaked[index].html,
         html,
+        index === 0 && layoutNeedsLiveContainer ? { route: req.path } : null,
       );
     }
     const snapshotProps = Object.assign({}, ...layoutPropsArr, pageProps);
