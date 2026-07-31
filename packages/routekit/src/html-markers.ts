@@ -35,16 +35,32 @@ export function wrapPageSegment(
   return `<div ${attrs} style="display:contents">${html}</div>`;
 }
 
-export function materializeLayoutSegment(pattern: string, shell: string, child: string): string {
+/**
+ * `live` marks this layout segment as an SSE subscription container.
+ *
+ * silcrow opens one connection per `[data-kiln-live]` element and only
+ * discovers slots inside that element's subtree, so a layout's `s-live` spans
+ * — which sit OUTSIDE the page wrapper, since layouts contain the page — are
+ * invisible to the page's own container. The outermost layout gets the
+ * attribute (route: the page's concrete path, where layout scalar fields are
+ * registered) and covers the whole document.
+ */
+export function materializeLayoutSegment(
+  pattern: string,
+  shell: string,
+  child: string,
+  live?: { route: string } | null,
+): string {
   const slot = `<div data-ps-slot="${escapeAttribute(pattern)}" style="display:contents">${child}</div>`;
   const rendered = shell.replace(OUTLET_TOKEN, slot);
+  const liveAttr = live ? ` data-kiln-live="${escapeAttribute(live.route)}"` : '';
   if (/^\s*(?:<!DOCTYPE html>)?<html\b/i.test(rendered)) {
     return rendered.replace(
       /<body\b/i,
-      `<body data-kiln-layout="${escapeAttribute(pattern)}"`,
+      `<body data-kiln-layout="${escapeAttribute(pattern)}"${liveAttr}`,
     );
   }
-  return `<div data-kiln-layout="${escapeAttribute(pattern)}" style="display:contents">${rendered}</div>`;
+  return `<div data-kiln-layout="${escapeAttribute(pattern)}"${liveAttr} style="display:contents">${rendered}</div>`;
 }
 
 export function respondWithNavigationShape(
@@ -121,12 +137,24 @@ export function warnDomLiveInsideIslands(html: string, route: string): void {
   const re = /data-kiln-island="([^"]+)"/g;
   for (let m = re.exec(html); m; m = re.exec(html)) {
     const fragment = extractBalancedDiv(html, m.index);
-    if (fragment && fragment.includes('s-live="')) {
+    if (!fragment) continue;
+    if (fragment.includes('s-live="')) {
       warnOnce(
         `island-dom-live:${route}:${m[1]}`,
         `[kiln] route "${route}": island "${m[1]}" contains a dom-target LiveProp slot (s-live). ` +
           `Silcrow does not patch DOM inside islands — declare the field with target: 'store' and ` +
           `read it with useLiveValue() from @kiln/react.`,
+      );
+    }
+    // Same rule, same reason, for lists: a dom-target Live.list rendered by an
+    // island is marked up and then never patched.
+    const listMatch = /data-kiln-list="([^"]*)"/.exec(fragment);
+    if (listMatch) {
+      warnOnce(
+        `island-dom-live-list:${route}:${listMatch[1]}`,
+        `[kiln] route "${route}": island "${m[1]}" renders Live.list "${listMatch[1]}" with the ` +
+          `default dom target. Silcrow does not patch DOM inside islands — declare the list with ` +
+          `target: 'store' and read it with useLiveList() from @kiln/react.`,
       );
     }
   }
@@ -188,6 +216,23 @@ export function applyLivePropMarkers(html: string, props: Record<string, unknown
     result = result.replace(text, `<span s-live="${escapeAttribute(name)}">${text}</span>`);
   }
   return result;
+}
+
+/**
+ * Every distinct `s-live="…"` slot name in a rendered document, in source
+ * order. Used by the cached-shell path to notice slots the page's own load()
+ * does not produce — those come from a layout, whose live registration only
+ * happens on a full render.
+ */
+export function extractLiveSlotNames(html: string | null | undefined): string[] {
+  if (!html) return [];
+  const names: string[] = [];
+  const re = /\ss-live="([^"]*)"/g;
+  for (let m = re.exec(html); m; m = re.exec(html)) {
+    const name = m[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+    if (name && !names.includes(name)) names.push(name);
+  }
+  return names;
 }
 
 export function countOccurrences(haystack: string, needle: string): number {

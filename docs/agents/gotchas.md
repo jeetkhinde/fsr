@@ -7,12 +7,14 @@ Kiln has several surfaces that are **typed, scaffolded, or discovered but not ac
 | `apiDir` / an `api/` folder for routes | Config key exists and `create-kiln` scaffolds it, but `startKiln()` never loads it — **not served at runtime** | `json_first = true` page, content negotiation, or `actions` ([data-loading.md](data-loading.md)) |
 | `_loading.tsx` | Discovered by the router but **no server-side semantic** | Return a fast shell + `LiveProp` fields ([live-and-islands.md](live-and-islands.md)) |
 | `cache.provider: 'memory'` or `'sqlite'` | **Not implemented** — throws `StartupError('UnsupportedProvider')` at boot | `'filesystem'` (default) or `'redis'` ([rendering-and-caching.md](rendering-and-caching.md)) |
-| `LiveProp` on a `cache_key`-variant page | **Skipped** with a one-time warning — live updates don't fire | Use LiveProp on non-variant pages |
+| `LiveProp`/`Live.list` on a `cache_key`-variant page | **Not supported** (decided, not a TODO) — skipped with a one-time warning; the page renders but never updates. Live registrations write to the route's base cache paths, which would poison every other variant | Drop the `cache_key`, or drop the live fields and let the route revalidate on its TTL |
+| `Live.list` on a `bake='user'` page | **Not supported** (decided) — skipped with a one-time warning. Scalar `LiveProp` fields under `bake='user'` *are* fully supported | Use scalar live fields, or drop `bake='user'` from that page |
 | i18n (`KilnI18n`) | Exists in `@kiln/core` but **not integrated into any request path** | Handle locale yourself for now |
 | Streaming SSR | Deliberately absent — see [rendering-and-caching.md](rendering-and-caching.md) | FSR + `LiveProp` over SSE |
 | Full-page React hydration | **Prohibited** (ADR-014) | Islands only ([live-and-islands.md](live-and-islands.md)) |
 | `dom`-target `LiveProp` inside an island | Bake-time warning; silcrow won't patch inside the React root | `target: 'store'` + `useLiveValue` |
-| `fsr.watcher: 'external'` | Typed, implementation only partial | Use `'embedded'` |
+| `dom`-target `Live.list` inside an island | Same rule, same warning — rows are marked and then never patched | `target: 'store'` + `useLiveList(name, { key })` ([live-and-islands.md](live-and-islands.md#a-livelist-inside-an-island)) |
+| `fsr.watcher: 'external'` | **Removed** — it was typed but never implemented, and setting it silently ran no watcher and re-loaded on every cache hit. The config is now rejected by name | Remove the setting; `'embedded'` is the only mode |
 | An `action` that both writes to `res` and returns a value | The committed body wins; the **return value is ignored** (warns once) | Pick one — commit via `res.html`/`res.json`, or return a value and let Kiln serialize it |
 | A logout form in `_layout.tsx` | Actions register against a **page** pattern; layouts have none | Post to a page action absolutely, e.g. `/login?/signout` ([auth.md](auth.md)) |
 | A plain `new SQL(url)` client for `load()` queries | **Invisible to auto-deps** — `createKilnSql` is what records tables into a live field's `depends_on` | `createKilnSql` from `@kiln/core/sql` ([rendering-and-caching.md](rendering-and-caching.md#auto-derived-dependencies-auto-deps)) |

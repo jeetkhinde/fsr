@@ -2,7 +2,7 @@
 import { defineCommand, runMain } from 'citty';
 import consola from 'consola';
 import { loadConfig } from 'c12';
-import type { KilnConfig } from '@kiln/core';
+import type { KilnConfig, ServerAdapter } from '@kiln/core';
 import { ElysiaAdapter } from '@kiln/adapter-elysia';
 import { startKiln } from '@kiln/routekit';
 import { FsrStore, FsrWatcher, RedisCache, startDbNotificationPipeline } from '@kiln/engine';
@@ -11,6 +11,7 @@ import { Glob } from 'bun';
 import { createServer, build as viteBuild } from 'vite';
 import react from '@vitejs/plugin-react';
 import { kilnVitePlugin, kilnIslandsPlugin, listIslands } from '@kiln/routekit';
+import { runServerSetup } from './server-setup.js';
 import * as path from 'path';
 
 interface FsrRuntime {
@@ -163,6 +164,8 @@ const devCommand = defineCommand({
       }
     });
 
+    await runServerSetup(config, adapter, 'dev', (m) => consola.info(m));
+
     await startKiln(adapter, config, pagesDir, {
       ...(runtime.fsr ?? {}),
       // Dev: island names resolve through the Vite dev server's manifest.
@@ -223,6 +226,8 @@ const startCommand = defineCommand({
         headers: { 'cache-control': 'public, max-age=31536000, immutable' },
       });
     });
+
+    await runServerSetup(config, adapter, 'start', (m) => consola.info(m));
 
     await startKiln(adapter, config, pagesDir, runtime.fsr);
 

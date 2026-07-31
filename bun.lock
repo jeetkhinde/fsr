@@ -139,6 +139,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@kiln/core": "workspace:*",
+        "@kiln/live": "workspace:*",
       },
       "devDependencies": {
         "@types/react": "^19.0.0",
@@ -159,6 +160,7 @@
         "@kiln/client": "workspace:*",
         "@kiln/core": "workspace:*",
         "@kiln/engine": "workspace:*",
+        "@kiln/live": "workspace:*",
         "sharp": "^0.34.5",
       },
       "devDependencies": {

@@ -6,6 +6,81 @@ Historical record of fixed framework bugs, kept out of the active file to keep s
 
 ## 0. Fixed 2026-07-31
 
+### `fix/framework-dx` — items 0 and 3-7 of the fix-sequencing doc
+
+*   **A fresh clone or worktree could not run `test:integration`** — `test-app/.env` is gitignored
+    and `bun --env-file=` ignores a missing file *without complaining*, so the suites ran with no
+    `DATABASE_URL` and failed with an opaque `database "<unix-user>" does not exist`. Cost time on
+    2026-07-30 and twice on 2026-07-31. Fixed with `test-app/.env.example` (which `store.test.ts`
+    already referenced, and which did not exist) and `scripts/preflight-env.ts`, wired as the first
+    step of `test:integration`. It hard-fails on a missing file/key with the exact `cp` to run;
+    unreachable Postgres/Redis is only a warning, since the suites already probe and skip and
+    `bun run test` must not require live services.
+
+*   **Layout scalar live fields were never registered at all** — filed as "layout `load()` is never
+    wrapped in `withDepCapture`, so layout scalar live fields get no auto-deps". Wider than that:
+    `extractLiveFields` only ever ran over the *page's* props, so a layout's `Live.value` got an
+    `s-live` slot in the HTML — and the browser client, which scans `[s-live]` and subscribes with
+    `window.location.pathname`, dutifully subscribed to it — while the server wrote no slot row and
+    registered no loader. Capturing deps alone would have been a no-op.
+
+    Fixed by registering layout live fields under the page's concrete route alongside the page's
+    own (page wins on a name collision, matching how props merge), wrapping each layout's `load()`
+    in its own `withDepCapture` so auto-deps stay per segment, re-running only the layouts that
+    contributed a live field in the watcher loader, and carrying store-target layout fields in
+    `data-kiln-live-store`. Two follow-ons found by tracing the real client:
+    - **The cached-shell fast path** returned early for a page whose only live fields live in a
+      layout, so the first request after a restart (cache warm, watcher registry empty) left the
+      field dead for the process. It now falls through when the shell carries `s-live` slots the
+      page's own `load()` does not produce — pure string work on HTML already in hand.
+    - **silcrow opens one connection per `[data-kiln-live]` element** and discovers slots only
+      inside that element's subtree. Layouts *contain* the page wrapper, so a layout's `s-live` span
+      was outside the only container on the page. The outermost layout now carries the attribute
+      (route: the page's concrete path) when a layout has a dom-target field.
+
+*   **`Live.list` inside an island received nothing, and had no `target`** — `_patchList`
+    early-returned for any list inside `[data-kiln-island]` and, unlike the scalar path, never
+    published to the store. Fixed with `Live.list({ target: 'dom' | 'store' | 'dom-and-store' })`
+    (same vocabulary as `Live.value`): a store-delivered list is deliberately left unmarked and
+    declares itself in `data-kiln-list-store` + `data-kiln-live-lists` so the SSE subscription still
+    covers it, and the client publishes each patch to `live-list:<name>` **before** any DOM
+    early-return. Patches are published rather than reduced client-side because reducing needs the
+    list's `key(row)`, which lives in `load()` and cannot be serialized — `useLiveList(name, { key,
+    initial })` in `@kiln/react` reduces with the app's own accessor, seeded from
+    `window.__kiln_seed`, replaying a bounded log so a patch landing before hydration is not lost.
+    `applyListPatchToRows` was extracted in `@kiln/live` and made idempotent for a re-delivered
+    insert, which log replay needs. A dom-target `Live.list` inside an island now warns at bake
+    time, as a dom-target `LiveProp` already did.
+
+*   **An app owning its entry point could not use islands** (ADR-020) — `adapter.app.all(...)` was
+    reachable only from app code, so one non-page endpoint (better-auth's `/api/auth/*`) forced a
+    hand-built entry, which also meant no islands and a hand-rolled `FsrWatcher` duplicating
+    `initFsr`. Fixed with `config.server.setup({ adapter, config, mode })`, called by both `dev` and
+    `start` after the FSR runtime is up and before pages are mounted, plus
+    `ServerAdapter.registerRaw(pattern, handler, { method })` — outside the page pipeline by design
+    (no `KilnRequest`, no `handle` hook, no timeout: a sign-in endpoint must be reachable without a
+    session). `defineConfig` takes `KilnUserConfig` because `DeepPartial` would strip `setup`'s
+    callability; a non-function `setup` fails `validateConfig` and a throwing one aborts the boot.
+
+*   **`Live.list` in a dynamic-segment layout shared one channel across instances** — the container
+    stamp and the registration both used the bare pattern, and the hub matches patches by exact
+    route, so a row inserted for project 7 patched project 9. Both now use `layoutInstancePath()`
+    (`/projects/7`). The layout's baked HTML is already cached per instance, so the stamped route
+    and the cache entry cannot disagree. A static pattern is its own instance path, so its
+    registration count is unchanged.
+
+*   **`fsr.watcher: 'external'` was a trap** (ADR-021) — typed for two releases with no watcher
+    process, IPC channel or daemon behind it; its only effects were a read-path branch that re-ran
+    `load()` on every cache hit and a `Live.list` guard. Setting it silently forfeited the caching
+    live routes exist for. Removed: the union is `'embedded'` only, `validateConfig` rejects
+    `'external'` by name, and both dead branches are deleted.
+
+*   **Decided, not fixed** — `cacheKey` + live fields and `bake='user'` + `Live.list` stay
+    unsupported. Their warnings now state the decision and the two ways out. They remain warnings
+    rather than startup errors because neither is detectable before `load()` runs, and throwing at
+    first render would turn a degraded page into a production 500.
+
+
 ### `feat/live-list-any-markup`
 
 *   **`Live.list` could only mark `<li>` rows inside `<ul>`/`<ol>`** — `findMatchingRow` scanned for

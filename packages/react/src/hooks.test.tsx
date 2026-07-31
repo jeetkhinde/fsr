@@ -14,6 +14,7 @@ import {
   useLiveValue,
   KilnReactProvider,
   resolveKilnAction,
+  useLiveList,
 } from "./hooks.js";
 import { submitSilcrow, silcrowSubmitHandler } from "./submit.js";
 
@@ -282,6 +283,36 @@ async function runTests() {
     assert.equal(renderToStaticMarkup(<ActiveUsers />), "<span>-1</span>");
 
     console.log("✅ useLiveValue reads live atom, then seed, then fallback");
+  }
+
+  // 14. useLiveList — the store bridge for Live.list({ target: 'store' })
+  {
+    type Card = { id: number; title: string };
+    function Board({ initial }: { initial?: Card[] }) {
+      const cards = useLiveList<Card>("cards", { key: (c) => c.id, initial });
+      return <span>{cards.map((c) => c.title).join(",")}</span>;
+    }
+
+    // (a) the baked seed is the starting point — patches arrive later, over SSE
+    (globalThis.window as any).__kiln_seed = {
+      cards: [
+        { id: 1, title: "Alpha" },
+        { id: 2, title: "Beta" },
+      ],
+    };
+    assert.equal(renderToStaticMarkup(<Board />), "<span>Alpha,Beta</span>");
+
+    // (b) `initial` covers the server render, where there is no seed yet
+    delete (globalThis.window as any).__kiln_seed;
+    assert.equal(
+      renderToStaticMarkup(<Board initial={[{ id: 9, title: "Solo" }]} />),
+      "<span>Solo</span>",
+    );
+
+    // (c) neither: empty, never undefined — callers map over the result
+    assert.equal(renderToStaticMarkup(<Board />), "<span></span>");
+
+    console.log("✅ useLiveList starts from the seed, then `initial`, then empty");
   }
 
   console.log("🎉 All @kiln/react tests passed!");

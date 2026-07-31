@@ -92,6 +92,25 @@ export class ElysiaAdapter implements ServerAdapter {
     this.app.get(urlPath, () => file(filePath));
   }
 
+  registerRaw(
+    pattern: string,
+    handler: (request: Request) => Response | Promise<Response>,
+    options?: { method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'ALL' },
+  ): void {
+    // Deliberately not wrapped in wrapRequest/runHandle/withTimeout: a raw
+    // route exists precisely to hand the untouched Request to code Kiln does
+    // not own (see ServerAdapter.registerRaw).
+    const run = (ctx: { request: Request }) => handler(ctx.request);
+    switch (options?.method) {
+      case 'GET': this.app.get(pattern, run); return;
+      case 'POST': this.app.post(pattern, run); return;
+      case 'PUT': this.app.put(pattern, run); return;
+      case 'PATCH': this.app.patch(pattern, run); return;
+      case 'DELETE': this.app.delete(pattern, run); return;
+      default: this.app.all(pattern, run);
+    }
+  }
+
   applyMiddleware(config: MiddlewareConfig): void {
     if (config.csrf !== false) {
       this.app.use(csrf({ trustProxy: config.trustProxy === true }));

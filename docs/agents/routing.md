@@ -45,7 +45,32 @@ export async function load(req: KilnRequest) {
 }
 ```
 
-What a layout still must not read in `load()`: `req.query`, and any param belonging to a *descendant* page (`[taskId]` under this layout) — neither is in the layout's cache key, so both would serve one request's data to every other request. Push that data into the page's own `load()`. A `Live.list` inside a dynamic-segment layout is not supported yet either (its updates are identified by pattern, so every project would share one list); Kiln warns once per pattern — move the list into the page.
+What a layout still must not read in `load()`: `req.query`, and any param belonging to a *descendant* page (`[taskId]` under this layout) — neither is in the layout's cache key, so both would serve one request's data to every other request. Push that data into the page's own `load()`.
+
+A `Live.list` inside a dynamic-segment layout **is** supported: it is addressed by the layout's concrete instance path (`/projects/7`, not `/projects/:id`), so each project gets its own channel. One registration per instance is the cost; a static layout pattern is its own instance path and is unaffected.
+
+## Routes the file router can't own
+
+Some endpoints are not pages: a third-party auth library's catch-all, a webhook that needs the untouched `Request`, a stylesheet outside `public/`. Declare them in `config.server.setup` rather than writing a custom entry point — the CLI is what wires Vite, islands, and the FSR supervisors, so leaving it costs an app all three:
+
+```ts
+// kiln.config.ts
+export default defineConfig({
+  server: {
+    async setup({ adapter, mode }) {          // mode: 'dev' | 'start'
+      const { auth } = await import('./lib/auth.js');
+      adapter.registerRaw?.('/api/auth/*', (request) => auth.handler(request));
+      adapter.registerRaw?.('/webhooks/stripe', handleStripe, { method: 'POST' });
+      adapter.registerAsset('/assets/app.css', './styles/app.css');
+    },
+  },
+});
+```
+
+- **Runs before pages are mounted**, so an app route wins over a page at the same path.
+- **`registerRaw` bypasses the page pipeline entirely** — no `KilnRequest`, no `hooks.ts` `handle` hook, no request timeout. That is deliberate: a sign-in endpoint must be reachable without a session. Anything that *should* be gated belongs in a page or action instead.
+- **`method` defaults to every method**; pass `{ method: 'POST' }` to narrow.
+- A `setup` that throws aborts the boot rather than starting a half-wired server.
 
 ## Error handling from a route
 

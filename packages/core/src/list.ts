@@ -1,4 +1,4 @@
-import type { LiveListOptions, LiveListQueryContext } from '@kiln/live';
+import type { LiveListDelivery, LiveListOptions, LiveListQueryContext } from '@kiln/live';
 import { normalizeLiveListDependsOn } from '@kiln/live';
 
 export interface KilnListRow {
@@ -30,6 +30,8 @@ export interface LiveListMeta<T = unknown> {
   autoDeps?: string[];
   debounce?: number;
   revalidate?: number | false;
+  /** Delivery target — 'dom' unless the list opted into the store. */
+  target: LiveListDelivery;
   keyOf(row: T): string;
   query(ctx: LiveListQueryContext): Promise<T[]> | T[];
 }
@@ -47,6 +49,7 @@ export function createLiveList<T>(options: LiveListOptions<T>): LiveList<T> {
     dependsOn: normalizeLiveListDependsOn(options.dependsOn),
     debounce: options.debounce,
     revalidate: options.revalidate,
+    target: options.target ?? 'dom',
     keyOf: (row) => String(options.key(row)),
     query: options.query,
   };

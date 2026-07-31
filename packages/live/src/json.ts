@@ -11,29 +11,50 @@ export function applyListPatchToJson<T extends Record<string, unknown>, Row>(
   patch: ListPatch<Row>,
   keyOf: (row: Row) => LiveListKey,
 ): T & Record<string, Row[]> {
-  const current = Array.isArray(seed[patch.list]) ? ([...(seed[patch.list] as Row[])] as Row[]) : [];
+  const current = Array.isArray(seed[patch.list]) ? (seed[patch.list] as Row[]) : [];
+  return { ...seed, [patch.list]: applyListPatchToRows(current, patch, keyOf) } as T &
+    Record<string, Row[]>;
+}
 
-  let nextRows: Row[];
+/**
+ * The row-array half of `applyListPatchToJson`, without the seed object
+ * around it. `useLiveList()` reduces a store-delivered list with this — the
+ * browser gets patches, never a whole array, and needs the app's own
+ * `key(row)` to apply them.
+ *
+ * Always returns a new array, so it can drive React state directly.
+ */
+export function applyListPatchToRows<Row>(
+  rows: Row[],
+  patch: ListPatch<Row>,
+  keyOf: (row: Row) => LiveListKey,
+): Row[] {
+  const current = [...rows];
+
   switch (patch.op) {
     case "fields":
-      nextRows = current.map((row) => (String(keyOf(row)) === patch.key ? ({ ...(row as Record<string, unknown>), ...patch.changes } as Row) : row));
-      break;
-    case "insert":
-      nextRows = [...current];
-      nextRows.splice(clampIndex(patch.index, nextRows.length), 0, patch.row);
-      break;
+      return current.map((row) =>
+        String(keyOf(row)) === patch.key
+          ? ({ ...(row as Record<string, unknown>), ...patch.changes } as Row)
+          : row,
+      );
+    case "insert": {
+      // A re-delivered insert (reconnect, replayed log) must not duplicate
+      // the row — keys are unique by contract.
+      if (current.some((row) => String(keyOf(row)) === patch.key)) return current;
+      const next = [...current];
+      next.splice(clampIndex(patch.index, next.length), 0, patch.row);
+      return next;
+    }
     case "remove":
-      nextRows = current.filter((row) => String(keyOf(row)) !== patch.key);
-      break;
+      return current.filter((row) => String(keyOf(row)) !== patch.key);
     case "move":
-      nextRows = moveRow(current, patch.key, patch.to, keyOf);
-      break;
+      return moveRow(current, patch.key, patch.to, keyOf);
     case "replace-row":
-      nextRows = current.map((row) => (String(keyOf(row)) === patch.key ? patch.row : row));
-      break;
+      return current.map((row) => (String(keyOf(row)) === patch.key ? patch.row : row));
+    default:
+      return current;
   }
-
-  return { ...seed, [patch.list]: nextRows } as T & Record<string, Row[]>;
 }
 
 function moveRow<Row>(rows: Row[], key: string, to: number, keyOf: (row: Row) => LiveListKey): Row[] {

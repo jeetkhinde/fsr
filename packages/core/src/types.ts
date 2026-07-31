@@ -119,6 +119,25 @@ export interface ServerAdapter {
   /** Register a static asset route */
   registerAsset(urlPath: string, filePath: string): void;
 
+  /**
+   * Mount a raw HTTP handler at `pattern`, outside the page pipeline.
+   *
+   * For the endpoints the file router structurally cannot own: a third-party
+   * auth library's catch-all (`/api/auth/*`), a webhook receiver that needs
+   * the untouched `Request`. The handler gets the platform `Request` and
+   * returns a platform `Response`; Kiln does not wrap it, and the app's
+   * `hooks.ts` `handle` hook does NOT run for it — which is the point for a
+   * sign-in endpoint that must be reachable without a session.
+   *
+   * `method` defaults to every method. Optional so a minimal adapter can
+   * omit it; `config.server.setup` reports a clear error when it's missing.
+   */
+  registerRaw?(
+    pattern: string,
+    handler: (request: Request) => Response | Promise<Response>,
+    options?: { method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'ALL' },
+  ): void;
+
   /** Apply all middleware */
   applyMiddleware(config: MiddlewareConfig): void;
 

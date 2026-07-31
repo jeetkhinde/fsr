@@ -18,6 +18,7 @@ import type {
   KilnResponse,
   KilnConfig,
   KilnIdentity,
+  LiveFieldMeta,
   ServerAdapter,
 } from '@kiln/core';
 import {
@@ -45,6 +46,7 @@ import {
   injectKilnScript,
   injectModuleScript,
   materializeBakedShell,
+  layoutInstancePath,
   layoutParamNames,
 } from '@kiln/engine';
 
@@ -54,6 +56,7 @@ import {
   escapeAttribute,
   escapeHtml,
   extractLayoutFragment,
+  extractLiveSlotNames,
   materializeLayoutSegment,
   respondWithNavigationShape,
   unwrapLiveProps,
@@ -62,7 +65,6 @@ import {
 } from './html-markers.js';
 import { makeLoaderRequest } from './loader-request.js';
 import {
-  assertEmbeddedLiveLists,
   hasLiveLists,
   materializeLiveLists,
   registerLiveLists,
@@ -273,7 +275,6 @@ export function buildPageHandler(
         observedTables = [...tables];
         rawPageProps = result;
         if (tracker.identityAccessed()) renderPure = false;
-        assertEmbeddedLiveLists(rawPageProps, kilnConfig);
         rawPageProps = await materializeLiveLists(rawPageProps, store);
         pageProps = unwrapLiveProps(rawPageProps);
         return pageProps;
@@ -361,10 +362,6 @@ export function buildPageHandler(
       materialized = null;
     }
     if (materialized) {
-      if (kilnConfig?.fsr?.watcher === 'external') {
-        const loaded = await loadPageProps();
-        if (loaded === null) return;
-      }
       if (!watcher || watcher.hasRegisteredRoute(req.path)) {
         respondWithNavigationShape(res, req, layoutPatterns, pageMeta.pattern, materialized);
         return;
@@ -373,7 +370,20 @@ export function buildPageHandler(
       if (loaded === null) return;
 
       const liveFields = extractLiveFields(rawPageProps);
-      if (store && watcher && liveFields.length > 0 && (!variant || isUserVariant)) {
+      // The cached shell embeds its layouts' HTML, markers and all. An
+      // s-live slot in there that the page's own load() does not produce
+      // belongs to a layout — and a layout's slots/loader are only registered
+      // by the full render below. Without this the first request after a
+      // restart (cache warm, watcher registry empty) would answer from cache
+      // and leave a layout-only live field unregistered for the life of the
+      // process. Pure string work on HTML already in hand: no extra I/O, and
+      // it costs one full render per process, since the
+      // hasRegisteredRoute check above short-circuits every later request.
+      const shellLiveSlots = extractLiveSlotNames(materialized);
+      const layoutOwnedSlots = shellLiveSlots.filter(
+        (name) => !liveFields.some((f) => f.name === name),
+      );
+      if (store && watcher && layoutOwnedSlots.length === 0 && liveFields.length > 0 && (!variant || isUserVariant)) {
         const loaderReq = makeLoaderRequest(req, isUserVariant);
         watcher.registerLoader({
           route: req.path,
@@ -385,7 +395,7 @@ export function buildPageHandler(
         });
       }
 
-      if (!hasLiveLists(rawPageProps) && liveFields.length === 0) {
+      if (!hasLiveLists(rawPageProps) && liveFields.length === 0 && layoutOwnedSlots.length === 0) {
         respondWithNavigationShape(res, req, layoutPatterns, pageMeta.pattern, materialized);
         return;
       }
@@ -416,6 +426,11 @@ export function buildPageHandler(
     const rawLayoutPropsArr: any[] = new Array(layoutEntries.length).fill({});
     const layoutBaked: { html: string }[] = new Array(layoutEntries.length);
     const layoutFromCache: boolean[] = new Array(layoutEntries.length).fill(false);
+    // Per-layout equivalent of the page's `observedTables` — the tables this
+    // layout's load() actually queried, unioned into its own live fields'
+    // depends_on at step 12. Kept per index rather than merged into one list
+    // so a layout's tables never become another segment's dependency.
+    const layoutObservedTables: string[][] = layoutEntries.map(() => []);
     // An impure layout's HTML gets embedded in the page shell, so it must
     // block the PAGE's bake too, not just its own pattern-cache entry.
     let anyLayoutImpure = false;
@@ -460,7 +475,12 @@ export function buildPageHandler(
             layoutPattern,
             layoutParamNames: layoutParamNames(layoutPattern),
           });
-          loaded = await lMod.load(tracker.proxied);
+          // Wrapped exactly like the page's load() above: without this a
+          // layout's scalar live fields get no auto-deps and only revalidate
+          // if the developer wrote dependsOn by hand.
+          const { result, tables } = await withDepCapture(async () => lMod.load(tracker.proxied));
+          loaded = result;
+          layoutObservedTables[idx] = [...tables];
           layoutPure = !tracker.identityAccessed();
           const violation = tracker.scopeViolation();
           if (violation) {
@@ -471,7 +491,6 @@ export function buildPageHandler(
                 `that needs it, or resolve it client-side.`,
             );
           }
-          assertEmbeddedLiveLists(loaded, kilnConfig);
           loaded = await materializeLiveLists(loaded, store);
         }
         rawLayoutPropsArr[idx] = loaded;
@@ -480,8 +499,14 @@ export function buildPageHandler(
         // Markers must be baked in BEFORE this HTML is cached, so a later
         // cache-hit request (which skips load()/bake entirely) still has the
         // s-live slots materializeBakedShell needs to patch fresh values in.
+        // The list container is stamped with the layout INSTANCE path, not the
+        // pattern: that attribute is the route silcrow subscribes with, and
+        // the pattern would put every instance of /projects/:id on one
+        // channel. The HTML this ends up in is cached per instance already
+        // (getLayoutHtml keys on the layout's own params), so the stamped
+        // route and the cache entry always agree.
         const marked = applyLivePropMarkers(
-          applyLiveListMarkers(baked.html, loaded, layoutPattern),
+          applyLiveListMarkers(baked.html, loaded, layoutInstancePath(layoutPattern, req.params)),
           loaded,
         );
         layoutBaked[idx] = { html: marked };
@@ -502,6 +527,21 @@ export function buildPageHandler(
     ]);
 
     if (aborted) return;
+
+    // A layout's scalar live fields belong to the PAGE's live registration,
+    // not to the layout pattern: the browser client collects [s-live] slots
+    // document-wide and subscribes with window.location.pathname
+    // (live-client-script.ts `_getSlots`/`_subscribe`), so a layout's slot is
+    // already subscribed under the page's concrete path. Only the server side
+    // was missing — no slot row was ever written for it and no loader ever
+    // produced a fresh value — which is why a layout live scalar rendered
+    // once and then never updated. Registering them alongside the page's own
+    // fields at step 12 is what closes that, and carrying each one's
+    // `layoutIndex` is what lets it take ITS layout's observed tables as
+    // auto-deps rather than the page's.
+    const layoutLiveFields = layoutEntries.flatMap((_, idx) =>
+      extractLiveFields(rawLayoutPropsArr[idx]).map((field) => ({ field, layoutIndex: idx })),
+    );
 
     // 6. Bake the page itself — always per-request/per-route, unlike layouts.
     const pageComponent = module.default;
@@ -524,17 +564,32 @@ export function buildPageHandler(
     // feeds useLiveValue inside islands). Baked into the shell, so cached
     // promoted pages subscribe too.
     const pageLiveFields = extractLiveFields(rawPageProps);
+    // A layout's store-target field has no DOM slot anywhere in the document,
+    // so unless its name rides along here nothing would ever subscribe to it.
+    const subscribableLiveFields = [
+      ...pageLiveFields,
+      ...layoutLiveFields.map(({ field }) => field),
+    ];
     const pageFragment = wrapPageSegment(
       pageMeta.pattern,
       markedPageHtml,
-      pageLiveFields.length > 0 || hasLiveLists(rawPageProps)
+      subscribableLiveFields.length > 0 || hasLiveLists(rawPageProps)
         ? {
             route: req.path,
-            storeFields: pageLiveFields
+            storeFields: subscribableLiveFields
               .filter((f) => f.deliveryTarget === 'store' || f.deliveryTarget === 'dom-and-store')
               .map((f) => f.name),
           }
         : null,
+    );
+    // A layout's dom-target slot needs a subscription container around it:
+    // silcrow scopes slot discovery to each [data-kiln-live] element's
+    // subtree, and layouts wrap the page wrapper rather than sitting inside
+    // it. Store-target layout fields need nothing here — their names ride on
+    // the page wrapper's data-kiln-live-store, which is read off the element
+    // itself, not from its subtree.
+    const layoutNeedsLiveContainer = layoutLiveFields.some(
+      ({ field }) => field.deliveryTarget !== 'store',
     );
     let html = pageFragment;
     for (let index = layoutBaked.length - 1; index >= 0; index--) {
@@ -543,6 +598,7 @@ export function buildPageHandler(
         layoutRoute,
         layoutBaked[index].html,
         html,
+        index === 0 && layoutNeedsLiveContainer ? { route: req.path } : null,
       );
     }
     const snapshotProps = Object.assign({}, ...layoutPropsArr, pageProps);
@@ -637,15 +693,20 @@ export function buildPageHandler(
     if (variant && !isUserVariant && watcher && (hasLiveLists(rawPageProps) || extractLiveFields(rawPageProps).length > 0)) {
       warnOnce(
         `variant-live:${req.path}`,
-        `[kiln] route "${req.path}" combines cacheKey with LiveProp/Live.list; ` +
-          `live updates are not supported for cacheKey variants yet and were skipped.`,
+        `[kiln] route "${req.path}" combines cacheKey with LiveProp/Live.list. Live updates are ` +
+          `NOT supported for cacheKey variants and were skipped — this page renders correctly ` +
+          `but will never update in place. Live registrations write to the route's base cache ` +
+          `paths, which would poison every other variant of it. Drop the cacheKey, or drop the ` +
+          `live fields and let the route revalidate on its TTL.`,
       );
     }
     if (isUserVariant && watcher && hasLiveLists(rawPageProps)) {
       warnOnce(
         `user-live-list:${req.path}`,
-        `[kiln] route "${req.path}" combines bake='user' with Live.list; per-user list ` +
-          `updates are not supported yet (scalar LiveProp fields are) and were skipped.`,
+        `[kiln] route "${req.path}" combines bake='user' with Live.list. Per-user LIST updates ` +
+          `are NOT supported and were skipped — the rows render once and then never change. ` +
+          `Scalar LiveProp fields are fully supported under bake='user', so use those, or drop ` +
+          `bake='user' from this page.`,
       );
     }
 
@@ -665,23 +726,13 @@ export function buildPageHandler(
       for (let index = 0; index < layoutEntries.length; index++) {
         const layoutRoute = layoutPatterns[index] ?? '/';
         const layoutOptions = extractPageOptions(layoutEntries[index].module);
-        // The layout's baked HTML is now cached per concrete param value, but
-        // a Live.list inside it is still identified to the store/hub by the
-        // PATTERN alone (the marker route and the registration route below) —
-        // so two concrete instances of "/projects/:id" would share one list
-        // channel and patch each other's rows. Scalar LiveProp fields are
-        // unaffected (they ride the page's own route). Warn once per pattern
-        // rather than let it fail silently.
-        if ((layoutRoute.includes(':') || layoutRoute.includes('*')) && hasLiveLists(rawLayoutPropsArr[index])) {
-          warnOnce(
-            `dynamic-layout-live-list:${layoutRoute}`,
-            `[kiln] layout "${layoutRoute}" has a dynamic path segment and uses Live.list; ` +
-              `list updates are identified by pattern, so every concrete instance of this ` +
-              `layout shares one list channel. Move the Live.list into the page for now.`,
-          );
-        }
+        // Registered under the layout INSTANCE path, matching the route
+        // stamped on the list container above. A dynamic layout therefore
+        // gets one registration per concrete instance instead of one shared
+        // channel for all of them; a static pattern is its own instance path,
+        // so its registration count is unchanged.
         await registerLiveLists({
-          route: layoutRoute,
+          route: layoutInstancePath(layoutRoute, req.params),
           pageComponent: layoutEntries[index].module.default,
           pageProps: rawLayoutPropsArr[index],
           finalHtml,
@@ -696,8 +747,21 @@ export function buildPageHandler(
       }
     }
 
-    // 12. Persist live fields on pageMeta (extracted once at step 7)
-    const liveFields = pageLiveFields;
+    // 12. Persist live fields on pageMeta (extracted once at step 7).
+    // Layout fields ride under the page's route — see the note at step 5b —
+    // each paired with the tables ITS layout's load() observed, so auto-deps
+    // stay per-segment. On a name collision the page's field wins, matching
+    // how snapshotProps merges (layouts first, page last).
+    const liveFieldSources: { field: LiveFieldMeta; observedTables: string[] }[] = [
+      ...layoutLiveFields
+        .filter(({ field }) => !pageLiveFields.some((p) => p.name === field.name))
+        .map(({ field, layoutIndex }) => ({
+          field,
+          observedTables: layoutObservedTables[layoutIndex],
+        })),
+      ...pageLiveFields.map((field) => ({ field, observedTables })),
+    ];
+    const liveFields = liveFieldSources.map((entry) => entry.field);
     // Feeds the pre-load version-snapshot gate above. Recorded even when the
     // upsert branch below is skipped (tombstoned, wrong variant) — what it
     // answers is "can this route produce live fields at all", not "did we
@@ -710,11 +774,11 @@ export function buildPageHandler(
       // queried. Explicit deps are preserved, never replaced — apps can opt
       // out entirely via fsr.autoDeps: false.
       const autoDepsEnabled = kilnConfig?.fsr?.autoDeps !== false;
-      for (const field of liveFields) {
+      for (const { field, observedTables: fieldTables } of liveFieldSources) {
         const dependsOn = Array.from(
           new Set([
             ...(field.dependsOn ?? []),
-            ...(autoDepsEnabled ? observedTables : []),
+            ...(autoDepsEnabled ? fieldTables : []),
           ]),
         );
         await store.upsertSlot(
@@ -733,12 +797,23 @@ export function buildPageHandler(
         );
       }
       const loaderReq = makeLoaderRequest(req, isUserVariant);
+      // Only layouts that actually contributed a live field are re-run — a
+      // watcher tick must not pay for every layout's load() just because the
+      // page has a live field of its own.
+      const liveLayoutModules = Array.from(
+        new Set(layoutLiveFields.map(({ layoutIndex }) => layoutIndex)),
+      ).map((idx) => layoutEntries[idx].module);
       watcher?.registerLoader?.({
         route: req.path,
         userKey,
         load: async () => {
+          const layoutLoaded = await Promise.all(
+            liveLayoutModules.map(async (lMod) =>
+              typeof lMod.load === 'function' ? await lMod.load(loaderReq) : {},
+            ),
+          );
           const loaded = typeof module.load === 'function' ? await module.load(loaderReq) : {};
-          return loaded as Record<string, unknown>;
+          return Object.assign({}, ...layoutLoaded, loaded) as Record<string, unknown>;
         },
       });
     }

@@ -45,88 +45,33 @@ only interesting insofar as they exercise a framework path.
 - PostgreSQL: needed for `test:integration` and `apps/jags-list`
 - Redis: needed for FSR / LiveProp SSE features and related tests
 
-## Next Priorities — framework only (surveyed from source 2026-07-31)
+## Next Priorities — framework only
 
-Ordered by launch risk. Every claim below was traced to a file:line in this survey, not carried
-from the older roadmap.
+### The 2026-07-31 survey is fully closed (`fix/framework-dx`, 2026-07-31)
 
-### P0 — will bite a real app at launch
+Every item in `docs/superpowers/plans/2026-07-31-framework-fix-sequencing.md` — the doc that ranked
+the remaining framework work by severity — is done. Items 1 and 2 landed as PRs #34/#35; items 0 and
+3-7 landed on `fix/framework-dx`:
 
-**1. An app that owns its entry point cannot use islands.** (M — smaller than it was)
-`kiln dev` / `kiln start` construct their own `ElysiaAdapter` (`packages/cli/src/cli.ts:148,204`)
-and never load the app's own entry, so a custom entry forfeits the island build pipeline (Vite
-chunks + `kiln-islands.json`). `apps/jags-list` still has no islands.
-
-**The old framing — "auth forces a custom entry" — is dead.** #2 is fixed, so cookies no longer
-require owning the entry. What actually keeps jags-list on a custom entry, read from
-`apps/jags-list/src/main.ts` after the rewrite, is (a) better-auth's `/api/auth/*` catch-all, which
-is not a Kiln page, and (b) its hand-built FSR wiring and `registerAsset` call. So this is now
-"let app code contribute raw routes and assets under the CLI", which is a smaller and much better
-defined problem. `startKiln` already accepts `islandsManifestUrl` (`boot.ts:39`) and `kiln start`
-serves `/_kiln/client/*` in ~20 replicable lines.
-
-**2. ~~Actions never receive `res`.~~ DONE 2026-07-31** — `feat/action-response-api`, ADR-019.
-Actions get `(req, res)`; `headers` is a `Headers` with a required `res.cookies`;
-`AppError.conflict()` covers 409. jags-list's raw auth routes are deleted. Details in
-[bugs-resolved.md](bugs-resolved.md) §0.
-
-**3. `Live.list` is far narrower than its API suggests.** (S for what remains) Two constraints
-left, neither visible at the call site:
-- ~~rows must be `<li>` inside `<ul>`/`<ol>`~~ — **DONE 2026-07-31** (`feat/live-list-any-markup`):
-  rows opt in with `data-kiln-row={key}`, container discovered from them, `<li>` scan kept as
-  fallback. Also fixed the client's `<div>` row parsing, which silently dropped `<tr>` inserts;
-- patches are dropped inside islands (`live-client-script.ts:63`) and, unlike scalars, never
-  published to the store — so a list inside an island receives nothing;
-- no `target` option, unlike `LiveProp` (`packages/live/src/list.ts`);
-- ~~no auto-deps~~ — **DONE 2026-07-31** on `fix/live-list-auto-deps`. Each list captures its own
-  query's tables; a list with no deps at all warns. jags-list's explicit `dependsOn` is deleted and
-  `test:live` passes on captured deps. Details in [bugs-resolved.md](bugs-resolved.md) §0.
-
-**Found while fixing the above, not fixed:** layout `load()` is never wrapped in `withDepCapture`
-(`page-render.ts`, the layout branch calls `lMod.load(tracker.proxied)` directly), so layout
-**scalar** live fields get no auto-deps at all. Layout *lists* are fine — list capture is
-self-contained. Unmeasured severity; nobody has hit it because layouts with live scalars are rare
-in the test vehicle.
-
-### P1 — warned, but still surprising (each is a live `warnOnce`)
-
-| Combination | Behaviour | Size |
+| # | Item | Outcome |
 |---|---|---|
-| `cacheKey` + any live field | live updates silently skipped | M |
-| `bake='user'` + `Live.list` | per-user lists unsupported | M |
-| ~~`bake='user'` + dynamic segment + live fields~~ | **FIXED 2026-07-31** (`fix/sse-user-scoping`) | — |
-| `Live.list` in a dynamic-segment layout | all instances share one channel | M |
+| 0 | `.env.example` + preflight | `test-app/.env.example` + `bun run preflight`, first step of `test:integration` |
+| 3 | Layout scalar live fields | Registered under the page route with per-segment auto-deps — **wider than filed**: they were never registered at all, so capturing deps alone would have been a no-op |
+| 4 | `Live.list` in islands | `target: 'store'` + `useLiveList()` in `@kiln/react` |
+| 5 | App entry + islands | `config.server.setup` + `ServerAdapter.registerRaw` (ADR-020) |
+| 6 | Three warned combos | Dynamic-layout `Live.list` **supported** via `layoutInstancePath()`; the other two **decided against**, warnings reworded to say so |
+| 7 | External watcher | **Removed** — typed for two releases with nothing behind it (ADR-021) |
 
-The third is fixed. It was recorded as "wrong-user data"; that was **wrong** — it delivered
-*nothing*, because an authenticated render never writes the shared row and `hub.ts` filters patches
-by exact `userKey`. A silent correctness defect, not a privacy breach. See
-[bugs-resolved.md](bugs-resolved.md) §0.
+**Two findings were wider than filed, and that is the pattern worth carrying forward.** Item 3 was
+filed as a missing `withDepCapture`; tracing it showed layout live fields had no slot row and no
+loader — the client subscribed to a slot the server never fed. Item 6's third combination was filed
+as a limitation to warn about; it was a routing-identity bug (pattern vs instance path) and was
+simply fixable. Both were found by following the value end-to-end through the *real* client
+(`packages/client/src/silcrow.js`, which subscribes per `[data-kiln-live]` element), not by reading
+the registration site alone.
 
-**Next framework item:** `Live.list` non-`<li>` markup — a div board or table cannot be a live list
-at all (`live-list-render.ts:90,131`). Full ordering in
-`docs/superpowers/plans/2026-07-31-framework-fix-sequencing.md` (PR #33).
-
-### P2
-
-- **External watcher** — settled 2026-07-30 as dev's-choice, default `'embedded'`; not implemented.
-  Only becomes work if you want it real. Blocked on how an out-of-process watcher invokes a
-  `Live.list`'s closures — see [roadmap.md](roadmap.md) § Phase 4.2. (L)
-- **`.env` files are gitignored**, so a fresh clone/worktree cannot run `test:integration` — it
-  fails with `database "jagjeet" does not exist` until `test-app/.env` is copied across. Cost time
-  twice on 2026-07-30. Ship `.env.example` + a preflight check. (XS)
-
-### Recommended starting point
-
-**Ordering now lives in `docs/superpowers/plans/2026-07-31-framework-fix-sequencing.md`** (merged
-via PR #33) — it ranks every remaining framework item by framework severity and records a measured
-conflict map. Read that first; this section only summarises.
-
-Landed 2026-07-31: PR #31 (actions receive `res`), PR #32 (`Live.list` auto-deps).
-
-The theory that P0 #1 and #2 would "collapse together" was **tested and only half held**. Fixing #2
-removed auth as a reason to own the entry, but jags-list still needs a custom entry for
-better-auth's catch-all and its FSR wiring — so #1 survived, in reduced form. Recorded because the
-prediction was explicit and the outcome should be too.
+**Nothing from that survey remains open.** The next framework work needs a fresh survey; the
+standing backlog is in [roadmap.md](roadmap.md).
 
 ### Known test-harness limitation (found 2026-07-31)
 

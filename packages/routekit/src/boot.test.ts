@@ -1087,44 +1087,15 @@ describe('buildPageHandler', () => {
     await fs.rm(tmpDir, { recursive: true });
   });
 
-  it('rejects Live.list pages when the watcher mode is external', async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
-    const { createElement } = await import('react');
-    const { Live } = await import('@kiln/core');
-    const pageModule = {
-      load: async () => ({
-        todos: Live.list({
-          key: (todo: any) => todo.id,
-          dependsOn: 'todo_events',
-          query: () => []
-        })
-      }),
-      default: ({ todos }: any) => createElement('ul', null, todos)
-    };
-    const handler = buildPageHandler(
-      pageModule,
-      {
-        pattern: '/external',
-        layouts: [],
-        liveFields: [],
-        hasEntries: false,
-        filePath: '',
-        relativePath: ''
-      },
-      [],
-      { cacheDir: tmpDir, ttlSecs: 0, redis: null },
-      { fsr: { watcher: 'external' } } as any,
-      { executeLiveListQuery: async () => [] } as any,
-      {} as any
+  it('rejects fsr.watcher = "external" at config time, by name', async () => {
+    // The mode was typed for two releases with nothing behind it, so an app
+    // that set it was silently running uncached. Removing the option without
+    // saying so would just move the surprise.
+    const { defineConfig } = await import('@kiln/core');
+    expect(() => defineConfig({ fsr: { watcher: 'external' } } as any)).toThrow(
+      /fsr\.watcher = "external"/,
     );
-
-    // The handler catches the error and responds 500 instead of rejecting —
-    // an unhandled throw would bypass Kiln's error-page rendering entirely.
-    const res = makeRes();
-    await handler(makeReq({ path: '/external' }) as any, res);
-    expect(res.status).toBe(500);
-    expect(res.captured?.type).toBe('html');
-    await fs.rm(tmpDir, { recursive: true });
+    expect(() => defineConfig({ fsr: { watcher: 'embedded' } })).not.toThrow();
   });
 
   it('maps AppError thrown from load() to its status instead of a generic 500', async () => {

@@ -4,7 +4,15 @@
 
 ```sh
 bun install
+cp test-app/.env.example test-app/.env   # then point the URLs at your local Postgres/Redis
 ```
+
+`test-app/.env` is gitignored, so every fresh clone **and every new `git
+worktree`** needs that copy — otherwise the integration suites run with no
+`DATABASE_URL` (`bun --env-file=` ignores a missing file without complaint) and
+fail with an opaque `database "<your-unix-user>" does not exist`.
+`bun run preflight` checks this on its own and is the first step of
+`test:integration`.
 
 This is a Bun-based monorepo (`packages/*`, `examples/*`, `test-app`). Some
 tooling also reads `pnpm-lock.yaml` / `pnpm-workspace.yaml` — keep both in
@@ -34,8 +42,10 @@ sync with `package.json`'s `workspaces` field when adding a package.
   ```
 
   Tests that need Postgres/Redis are excluded here and run separately via
-  `bun run test:integration` (requires `test-app/.env`; see that script in
-  the root `package.json` for the exact list).
+  `bun run test:integration` (requires `test-app/.env` — see Setup; the script
+  in the root `package.json` has the exact list). It runs `bun run preflight`
+  first, which fails fast if that file is missing a required key and warns if
+  Postgres or Redis is unreachable.
 
 ## Pull requests
 

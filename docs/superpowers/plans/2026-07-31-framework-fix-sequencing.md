@@ -56,7 +56,7 @@ conflict before starting item work to avoid compounding it.
 
 ## The sequence
 
-### 0. `.env.example` + preflight check (XS) — optional quick win
+### 0. `.env.example` + preflight check — **DONE**
 
 **Files**: new `test-app/.env.example`, `apps/jags-list/.env.example` (exists), a preflight check in
 the test scripts. **Touched by neither PR — zero conflict.**
@@ -137,7 +137,17 @@ safest item to run in parallel with anything else, including alongside item 1.
 
 ---
 
-### 3. Layout scalar live fields get no auto-deps
+### 3. Layout scalar live fields get no auto-deps — **DONE**
+
+**Wider than filed.** `extractLiveFields` only ever ran over the page's props, so a layout's
+`Live.value` was DOM-marked and then never registered: no slot row, no loader. Capturing deps alone
+would have been a no-op. Layout fields are now registered under the page's concrete route, each
+taking its own layout's observed tables, and the outermost layout carries the `data-kiln-live`
+container their `s-live` spans need (silcrow scopes slot discovery to each container's subtree, and
+layouts wrap the page wrapper rather than sitting inside it).
+
+<details><summary>Original entry</summary>
+
 
 **Severity**: moderate; completes the parity story #32 began. Layout `load()` is never wrapped in
 `withDepCapture` — the layout branch calls `lMod.load(tracker.proxied)` directly
@@ -150,10 +160,20 @@ Found while implementing #32 and deliberately excluded from it as a separate def
 **Conflict**: `page-render.ts` at ~463, well clear of #31's 767 and #32's 679/709. No hunk overlap,
 but it is conceptually a continuation of #32 and its test will read more naturally once #32 has
 landed. **Prefer after #32 merges**; not blocked by it.
+</details>
 
 ---
 
-### 4. `Live.list` inside an island receives nothing, and has no `target` option
+### 4. `Live.list` inside an island receives nothing, and has no `target` option — **DONE**
+
+`Live.list({ target: 'dom' | 'store' | 'dom-and-store' })`, same vocabulary as `Live.value`. A
+store-delivered list is left unmarked and declares itself in `data-kiln-list-store`; the client
+publishes each patch to `live-list:<name>` *before* any DOM early-return. Patches are published
+rather than reduced client-side, because reducing needs the list's `key(row)`, which lives in
+`load()` and cannot be serialized — `useLiveList(name, { key, initial })` in `@kiln/react` reduces
+with the app's own accessor and replays a bounded log so a patch landing before hydration is not
+lost.
+
 
 **Severity**: moderate. `_patchList` early-returns when the list is inside `[data-kiln-island]`
 (`packages/routekit/src/live-client-script.ts:63`) and, unlike the scalar path, never publishes to
@@ -171,7 +191,12 @@ a changed meta shape.
 
 ---
 
-### 5. App owning its entry point cannot use islands
+### 5. App owning its entry point cannot use islands — **DONE** (ADR-020)
+
+`config.server.setup({ adapter, config, mode })` runs in both `kiln dev` and `kiln start`, before
+pages are mounted; `ServerAdapter.registerRaw` mounts a handler outside the page pipeline. An app
+no longer trades islands and the FSR supervisors for one raw route.
+
 
 **Severity**: moderate, and **rescoped** by #31. The old framing — "an app needing cookies must own
 its entry" — is dead: actions can set cookies now. What still forces a custom entry, read from
@@ -188,7 +213,20 @@ So the real problem is: **let app code contribute raw routes and assets under `k
 
 ---
 
-### 6. Remaining warned-but-surprising combinations
+### 6. Remaining warned-but-surprising combinations — **DONE** (one supported, two decided against)
+
+- **`Live.list` in a dynamic-segment layout → supported.** Container stamp and registration both use
+  `layoutInstancePath()` (`/projects/7`, not `/projects/:id`), so instances stop sharing a channel.
+  Warning removed.
+- **`cacheKey` + live fields → not supported, decided.** Live registrations write to the route's
+  base cache paths.
+- **`bake='user'` + `Live.list` → not supported, decided.** Scalar fields under `bake='user'` are
+  fully supported and cover the real cases.
+
+Both remaining warnings now state the decision and the two ways out instead of reading as a TODO.
+They stay warnings rather than startup errors deliberately: neither is detectable before `load()`
+runs, and throwing at first render would turn a degraded page into a production 500.
+
 
 Three left once item 1 lands, each a live `warnOnce`: `cacheKey` + live fields (updates silently
 skipped); `bake='user'` + `Live.list` (unsupported); `Live.list` in a dynamic-segment layout (all
@@ -201,7 +239,12 @@ partly fall out of it.
 
 ---
 
-### 7. External watcher — **blocked on a human decision, not on code**
+### 7. External watcher — **DECIDED: option (c), removed** (ADR-021)
+
+`fsr.watcher: 'external'` is gone; `validateConfig` rejects it by name. Reviving an out-of-process
+watcher is a designed feature with an RPC protocol, not a config string — see ADR-021 and
+`.memory/roadmap.md` Phase 4.2. Original framing below.
+
 
 `fsr.watcher: 'external'` is typed but has **no implementation** (confirmed 2026-07-29): the only
 references are the type union, a read-path branch that re-runs `load()` on every cache hit, and the
@@ -223,15 +266,19 @@ Not startable until that is answered.
 
 | # | Item | Severity | Start before #31/#32 merge? |
 |---|---|---|---|
-| 0 | `.env.example` + preflight | XS / DX | Yes — zero conflict |
-| 1 | ~~SSE user scoping on dynamic routes~~ | **Highest** | **DONE — PR #34** |
-| 2 | ~~`Live.list` non-`<li>` markup~~ | High | **DONE — PR #35** |
-| 3 | Layout scalar auto-deps | Moderate | Prefer after #32 |
-| 4 | `Live.list` in islands + `target` | Moderate | **No — blocked by #32** |
-| 5 | App entry + islands | Moderate | Prefer after #31 |
-| 6 | Three remaining warned combos | Low | Measure when started |
-| 7 | External watcher | — | Blocked on maintainer decision |
+| # | Item | Outcome |
+|---|---|---|
+| 0 | `.env.example` + preflight | **DONE** |
+| 1 | SSE user scoping on dynamic routes | **DONE — PR #34** |
+| 2 | `Live.list` non-`<li>` markup | **DONE — PR #35** |
+| 3 | Layout scalar live fields (wider than filed) | **DONE** |
+| 4 | `Live.list` in islands + `target` | **DONE** |
+| 5 | App entry + islands | **DONE — ADR-020** |
+| 6 | Three warned combos | **DONE** — 1 supported, 2 decided against |
+| 7 | External watcher | **DONE — removed, ADR-021** |
 
-**Items 1 and 2 shipped** (PR #34, PR #35). Item 1 (`match-pattern.ts` + a shared `resolveRouteUserKey`; unit 244/0,
-integration exit 0, build exit 0). **Next: item 3**, layout scalar auto-deps — small, and it completes the parity story #32 began.
-Item 4 stays blocked until #32 merges.
+**Every item in this sequence is closed.** Items 0 and 3-7 shipped on `fix/framework-dx`
+(340 unit / 0 fail, integration exit 0, build exit 0). Two findings were wider than filed and are
+recorded as such above: item 3 (layout live fields never registered at all, not merely un-dep'd)
+and item 6's third combination (the shared channel was a routing identity bug, fixable rather than
+a limitation to warn about).

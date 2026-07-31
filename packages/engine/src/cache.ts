@@ -37,6 +37,29 @@ export function layoutParamNames(pattern: string): string[] {
 }
 
 /**
+ * The layout pattern with its OWN params substituted — `/projects/:id` with
+ * `{ id: '7' }` → `/projects/7`. A static pattern comes back unchanged.
+ *
+ * This is the identity a layout's live features are addressed by. Using the
+ * bare pattern instead made every concrete instance of a dynamic layout share
+ * one `Live.list` channel, so a row inserted for project 7 patched project
+ * 9's page too. A param the request doesn't carry leaves its segment as-is,
+ * which degrades to the old pattern-wide behaviour rather than inventing a
+ * route that matches nothing.
+ */
+export function layoutInstancePath(pattern: string, params?: LayoutParams): string {
+  if (!pattern.includes(':') && !pattern.includes('*')) return pattern;
+  return pattern
+    .split('/')
+    .map((seg) => {
+      if (seg === '*') return params?.['*'] ?? seg;
+      if (!seg.startsWith(':')) return seg;
+      return params?.[seg.slice(1)] ?? seg;
+    })
+    .join('/');
+}
+
+/**
  * Stable token identifying one concrete instance of a dynamic layout pattern,
  * or null for a static pattern (which has exactly one instance and keeps its
  * historical, suffix-free key).

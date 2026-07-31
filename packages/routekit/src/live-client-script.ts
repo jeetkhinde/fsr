@@ -8,6 +8,14 @@
 export const KILN_LIVE_CLIENT_SCRIPT = `(function(){
 'use strict';
 var _route='',_slots=[],_es=null;
+// Lists declared target:'store'/'dom-and-store' (data-kiln-list-store).
+var _storeLists={};
+// Patches published to the store, kept so an island that hydrates after a
+// patch arrives can still catch up. Capped — a list that has drifted 200
+// patches behind is better off waiting for the revalidate resync than
+// replaying a log.
+var _listLog={},_listSeq=0;
+var LIST_LOG_MAX=200;
 
 function _getSlots(){
   var r=[];
@@ -59,10 +67,15 @@ function _patchScalar(field,value){
 }
 
 function _patchList(data){
+  // Store delivery first: it is the only path that reaches a list inside an
+  // island, and it must not be skipped by any of the DOM early-returns below.
+  if(_storeLists[data.list])_publishListPatch(data.list,data);
   var list=document.querySelector('[data-kiln-list="'+data.list+'"]');
   if(list&&_inIsland(list))return;
   if(!list){
-    if(data.op==='insert'){
+    // A store-delivered list has no container by design — the island renders
+    // its rows — so a missing one is not evidence of a stale page.
+    if(data.op==='insert'&&!_storeLists[data.list]){
       var reloadKey='kiln-live-list-reload:'+window.location.pathname+':'+data.list;
       if(!sessionStorage.getItem(reloadKey)){
         sessionStorage.setItem(reloadKey,'1');
@@ -111,6 +124,23 @@ function _patchList(data){
       _setText(el,data.changes[field]);
     });
   });
+}
+
+// The list counterpart of the scalar store bridge. Patches are published
+// rather than reduced into an array here on purpose: reducing needs the
+// list's key(row) function, which lives in the app's load() and cannot be
+// serialized to the browser. useLiveList() has the app's own key accessor
+// and does the reduction there.
+function _publishListPatch(name,patch){
+  var log=_listLog[name]||(_listLog[name]=[]);
+  var entry={seq:++_listSeq,patch:patch};
+  log.push(entry);
+  if(log.length>LIST_LOG_MAX)log.shift();
+  try{
+    if(window.Silcrow&&typeof window.Silcrow.publish==='function'){
+      window.Silcrow.publish('live-list:'+name,entry);
+    }
+  }catch(err){/* store unavailable */}
 }
 
 // ADR-014 store bridge: every scalar patch is ALSO published to the
@@ -165,8 +195,22 @@ function _connect(route,slots){
   _es.onerror=function(){console.warn('[kiln] fsr: SSE disconnected');};
 }
 
+function _storeListNames(){
+  var out={};
+  document.querySelectorAll('[data-kiln-list-store]').forEach(function(el){
+    String(el.getAttribute('data-kiln-list-store')||'').split(',').forEach(function(s){
+      if(s)out[s]=true;
+    });
+  });
+  return out;
+}
+
 function _subscribe(){
   var route=window.location.pathname;
+  // Re-read per navigation: the next page declares its own store lists, and
+  // the previous page's patch log describes rows that are no longer mounted.
+  if(route!==_route){_listLog={};}
+  _storeLists=_storeListNames();
   var slots=_getSlots();
   if(slots.length)_connect(route,slots);
   else if(_es){_es.close();_es=null;}
@@ -185,5 +229,12 @@ var _origReplace=history.replaceState.bind(history);
 history.pushState=function(){_origPush.apply(history,arguments);queueMicrotask(_subscribe);};
 history.replaceState=function(){_origReplace.apply(history,arguments);queueMicrotask(_subscribe);};
 
-window.__KilnFSR={connect:_connect,subscribe:_subscribe,getSlots:_getSlots};
+window.__KilnFSR={
+  connect:_connect,
+  subscribe:_subscribe,
+  getSlots:_getSlots,
+  // Read by useLiveList() on mount to replay whatever arrived before the
+  // island hydrated.
+  listLog:function(name){return _listLog[name]||[];}
+};
 })();`;

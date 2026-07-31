@@ -350,7 +350,7 @@ client: {
 
 ### FSR watcher mode
 ```ts
-fsr: { watcher: 'embedded' | 'external' }  // external typed, implementation partial
+fsr: { watcher: 'embedded' }  // only mode; 'external' removed 2026-07-31 (was typed, never implemented)
 ```
 
 ---
