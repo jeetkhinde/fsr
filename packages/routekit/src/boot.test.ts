@@ -1531,12 +1531,14 @@ describe("dynamic bake='user' + live fields warning (Task 8 fix)", () => {
     return warnings;
   }
 
-  it("warns when a dynamic-pattern page declares bake='user' with a LiveProp field", async () => {
-    // This is exactly the silently-broken combination: bakeByPattern (built
-    // at registration, keyed by page.pattern) can never match the concrete
-    // request pathname for a dynamic route, so the /__kiln/fsr SSE + snapshot
-    // handlers silently fall back to the shared ('') identity key instead of
-    // scoping to the subscribing user.
+  it("no longer warns for a dynamic-pattern bake='user' page with a LiveProp field", async () => {
+    // Was the silently-broken combination: bakeByPattern is keyed by
+    // page.pattern and was looked up with the concrete request pathname, so
+    // the SSE + snapshot handlers fell back to the shared ('') key. The
+    // handlers now match the path back to its pattern first
+    // (resolveRouteUserKey), so the combination works and the warning that
+    // told authors to avoid it would be false. Scoping itself is covered by
+    // route-user-key.test.ts.
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-dynuser-warn-'));
     const { LiveProp } = await import('@kiln/core');
     const pageModule = {
@@ -1552,17 +1554,14 @@ describe("dynamic bake='user' + live fields warning (Task 8 fix)", () => {
       { cacheDir: tmpDir, ttlSecs: 0, redis: null },
       undefined,
       undefined,
-      {} as any, // watcher: truthy is enough to arm the gate; no live-list methods needed for a scalar field
+      {} as any,
       undefined,
       identity as any,
     );
     const warnings = await captureWarningsAsync(async () => {
       await handler(makeReq({ path: '/users/5', locals: { user: 'tom' } }) as any, makeRes());
     });
-    expect(warnings.length).toBe(1);
-    expect(warnings[0]).toContain('/users/:id');
-    expect(warnings[0]).toContain("bake='user'");
-    expect(warnings[0]).toContain('dynamic path segment');
+    expect(warnings.filter((w: string) => w.includes('dynamic path segment'))).toHaveLength(0);
     await fs.rm(tmpDir, { recursive: true });
   });
 

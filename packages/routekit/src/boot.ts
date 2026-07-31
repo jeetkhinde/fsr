@@ -7,6 +7,8 @@ import type { CacheOptions, PageErrorFiles } from './handler-types.js';
 import { applyLivePropMarkers, escapeAttribute, escapeHtml, extractLayoutFragment, materializeLayoutSegment, respondWithNavigationShape, unwrapLiveProps, warnDomLiveInsideIslands, wrapPageSegment } from './html-markers.js';
 
 import { discoverRoutes } from './discover.js';
+import { createPatternMatcher, type PatternMatcher } from './match-pattern.js';
+import { warnOnce } from './dedup.js';
 import { extractPageOptions, type BakeMode } from './page-options.js';
 import type { PageRoute, LayoutNode } from './manifest.js';
 import type {
@@ -98,6 +100,41 @@ export function buildActionHandler(
       res.json({ error: err.message || 'Action failed' });
     }
   };
+}
+
+// ---------------------------------------------------------------------------
+// Live subscription user key
+// ---------------------------------------------------------------------------
+
+/** The SSE user key for a subscribed concrete path.
+ *
+ * bakeByPattern is keyed by PATTERN, but the live client subscribes with
+ * window.location.pathname, so the path must be matched to a pattern first —
+ * without that, every dynamic route missed the lookup and fell back to the
+ * shared key, and subscribers silently received nothing.
+ *
+ * identity(req) is the ONLY source of the user key. The matched pattern
+ * selects a bake mode and nothing else, so no client-supplied value can
+ * influence whose data is read. */
+export function resolveRouteUserKey(input: {
+  route: string;
+  matcher: PatternMatcher;
+  bakeByPattern: Map<string, BakeMode | undefined>;
+  identity?: KilnIdentity;
+  req: KilnRequest;
+}): string {
+  const pattern = input.matcher.match(input.route);
+  if (pattern === null) {
+    warnOnce(
+      `sse-unmatched-route:${input.route}`,
+      `[kiln] live subscription for "${input.route}" matches no registered route pattern; ` +
+        `treating it as a shared route. If this is a bake='user' page, its live updates will ` +
+        `not be scoped to the subscriber.`,
+    );
+    return '';
+  }
+  const bake = input.bakeByPattern.get(pattern);
+  return bake === 'user' && input.identity ? input.identity(input.req) ?? '' : '';
 }
 
 // ---------------------------------------------------------------------------
@@ -244,6 +281,11 @@ export async function startKiln(
     // @kiln/client not installed
   }
 
+  // Built once, after every page's bake mode is known. The live client
+  // subscribes with a concrete path, which must be matched back to its
+  // registered pattern before that bake mode can be read.
+  const routeMatcher: PatternMatcher = createPatternMatcher([...bakeByPattern.keys()]);
+
   // 6b. Islands bootstrap + manifest (ADR-014). The manifest is served
   // no-store and maps island NAMES to current chunk URLs — cached HTML never
   // embeds URLs, so week-old promoted shells hydrate against today's build.
@@ -298,8 +340,13 @@ export async function startKiln(
       // identity hook is configured for the app: a shared route must always
       // get userKey='' (the shared row) even when other routes declare
       // bake='user', or its shared patches never reach this subscriber.
-      const routeBake = bakeByPattern.get(route);
-      const sseUserKey = routeBake === 'user' && identity ? identity(req) ?? '' : '';
+      const sseUserKey = resolveRouteUserKey({
+        route,
+        matcher: routeMatcher,
+        bakeByPattern,
+        identity,
+        req,
+      });
       // A subscriber watching this (route, user) snapshot counts as activity
       // — a page someone has open gets eager patches even though nobody is
       // re-requesting it (which is what would otherwise bump last_active_at).
@@ -363,8 +410,13 @@ export async function startKiln(
       const slots = (req.query.slots || '').split(',').filter(Boolean);
       // Same bake='user' gate as the SSE handler above — a shared route's
       // snapshot must not be narrowed to the caller's identity.
-      const routeBake = bakeByPattern.get(route);
-      const snapshotUserKey = routeBake === 'user' && identity ? identity(req) ?? '' : '';
+      const snapshotUserKey = resolveRouteUserKey({
+        route,
+        matcher: routeMatcher,
+        bakeByPattern,
+        identity,
+        req,
+      });
       const { fsrSnapshotHandler } = await import('@kiln/engine' as any);
       const snapshot = await fsrSnapshotHandler(route, slots, options.store, snapshotUserKey);
       res.json(snapshot);
