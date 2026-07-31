@@ -4,6 +4,7 @@ import {
   useActionState,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -11,6 +12,7 @@ import {
   type ReactNode,
   createElement,
 } from "react";
+import { applyListPatchToRows, type ListPatch } from "@kiln/live";
 import {
   type SilcrowSubmitOptions,
   type SilcrowActionOptions,
@@ -97,6 +99,68 @@ export function useLiveValue<T>(field: string, fallback?: T): T {
     read,
     read,
   );
+}
+
+/**
+ * Read a `Live.list` inside a React island.
+ *
+ * Declare the list in `load()` with `target: 'store'` (or `'dom-and-store'`).
+ * The server then leaves its rows unmarked — silcrow never patches DOM an
+ * island owns — and publishes each SSE list patch to the `live-list:<field>`
+ * atom scope instead. This hook replays anything that arrived before the
+ * island hydrated, then applies each new patch as it lands.
+ *
+ * `key` must return the same value as the list's server-side `key(row)`:
+ * patches identify rows by that key, and it cannot be serialized to the
+ * browser. Initial rows come from the baked seed (`window.__kiln_seed`), so
+ * pass `initial` only for the server render and for a field the seed omits.
+ */
+export function useLiveList<T>(
+  field: string,
+  options: { key: (row: T) => string | number; initial?: T[] },
+): T[] {
+  const keyRef = useRef(options.key);
+  keyRef.current = options.key;
+
+  const initialRows = (): T[] => {
+    if (typeof window === 'undefined') return options.initial ?? [];
+    const seed = (window as any).__kiln_seed;
+    if (seed && typeof seed === 'object' && Array.isArray(seed[field])) {
+      return seed[field] as T[];
+    }
+    return options.initial ?? [];
+  };
+
+  const [state, setState] = useState<{ rows: T[]; seq: number }>(() => ({
+    rows: initialRows(),
+    seq: 0,
+  }));
+
+  useEffect(() => {
+    const keyOf = (row: T) => keyRef.current(row);
+    const applyEntry = (entry: unknown) =>
+      setState((prev) => {
+        const next = entry as { seq?: number; patch?: ListPatch<T> } | null;
+        if (!next || typeof next.seq !== 'number' || !next.patch) return prev;
+        // Patches are ordered and may be re-delivered; seq is what makes
+        // replaying the log and live delivery idempotent together.
+        if (next.seq <= prev.seq) return prev;
+        return {
+          rows: applyListPatchToRows(prev.rows, next.patch, keyOf),
+          seq: next.seq,
+        };
+      });
+
+    for (const entry of window.__KilnFSR?.listLog?.(field) ?? []) applyEntry(entry);
+
+    return (
+      window.Silcrow?.subscribe?.('live-list:' + field, () => {
+        applyEntry(window.Silcrow?.snapshot?.('live-list:' + field));
+      }) ?? (() => {})
+    );
+  }, [field]);
+
+  return state.rows;
 }
 
 /**

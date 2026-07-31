@@ -1,9 +1,11 @@
 import { getLiveListMeta, isLiveList } from "@kiln/core";
+import type { LiveListDelivery } from "@kiln/live";
 import { warnOnce } from "./dedup.js";
 
 interface ListRenderTarget {
   name: string;
   rows: unknown[];
+  delivery: LiveListDelivery;
   keyOf(row: unknown): string;
 }
 
@@ -16,18 +18,25 @@ interface Range {
 export function applyLiveListMarkers(html: string, loadResult: Record<string, unknown>, route?: string): string {
   const targets = extractListTargets(loadResult);
   let result = html;
-  const emptyNames: string[] = [];
+  // Lists the client must subscribe to even though no [data-kiln-list]
+  // element will carry the name: a list that rendered no rows, and a
+  // store-delivered list, which is deliberately never marked.
+  const subscribeOnlyNames: string[] = [];
+  const storeNames: string[] = [];
 
   for (const target of targets) {
-    if (target.rows.length === 0) {
-      emptyNames.push(target.name);
+    if (target.delivery !== 'dom') storeNames.push(target.name);
+    // A store-delivered list's rows are the island's to render; marking them
+    // would invite silcrow to patch DOM React owns.
+    if (target.delivery === 'store' || target.rows.length === 0) {
+      subscribeOnlyNames.push(target.name);
       continue;
     }
     result = markList(result, target, route);
   }
 
-  if (emptyNames.length > 0 && route) {
-    result = markEmptyListSubscriptions(result, route, emptyNames);
+  if ((subscribeOnlyNames.length > 0 || storeNames.length > 0) && route) {
+    result = markRootListSubscriptions(result, route, subscribeOnlyNames, storeNames);
   }
 
   return result;
@@ -62,6 +71,7 @@ function extractListTargets(loadResult: Record<string, unknown>): ListRenderTarg
     targets.push({
       name,
       rows: value as unknown[],
+      delivery: meta.target ?? 'dom',
       keyOf: (row) => meta.keyOf(row),
     });
   }
@@ -147,27 +157,43 @@ function markList(html: string, target: ListRenderTarget, route?: string): strin
   return result.slice(0, listOpen.start) + markedOpen + result.slice(listOpen.openEnd);
 }
 
-function markEmptyListSubscriptions(html: string, route: string, names: string[]): string {
+function markRootListSubscriptions(
+  html: string,
+  route: string,
+  subscribeOnlyNames: string[],
+  storeNames: string[],
+): string {
   const bodyMatch = /<body\b[^>]*>/i.exec(html);
   const rootMatch = bodyMatch ?? /<[A-Za-z][A-Za-z0-9:-]*\b[^>]*>/.exec(html);
   if (!rootMatch || rootMatch.index === undefined) return html;
 
   let openTag = rootMatch[0];
   openTag = addAttribute(openTag, "data-kiln-live", route);
-  const existing = readAttribute(openTag, "data-kiln-live-lists");
+  if (subscribeOnlyNames.length > 0) {
+    openTag = mergeNameList(openTag, "data-kiln-live-lists", subscribeOnlyNames);
+  }
+  // Tells the client which lists to feed into the store — and, just as
+  // importantly, which ones must NOT trigger the missing-container reload,
+  // since a store-delivered list is never expected to have a container.
+  if (storeNames.length > 0) {
+    openTag = mergeNameList(openTag, "data-kiln-list-store", storeNames);
+  }
+  return html.slice(0, rootMatch.index) + openTag + html.slice(rootMatch.index + rootMatch[0].length);
+}
+
+function mergeNameList(openTag: string, attribute: string, names: string[]): string {
+  const existing = readAttribute(openTag, attribute);
   const merged = Array.from(new Set([
     ...(existing ? existing.split(",").filter(Boolean) : []),
     ...names,
   ]));
   if (existing === null) {
-    openTag = addAttribute(openTag, "data-kiln-live-lists", merged.join(","));
-  } else {
-    openTag = openTag.replace(
-      /data-kiln-live-lists="[^"]*"/,
-      `data-kiln-live-lists="${escapeAttr(merged.join(","))}"`,
-    );
+    return addAttribute(openTag, attribute, merged.join(","));
   }
-  return html.slice(0, rootMatch.index) + openTag + html.slice(rootMatch.index + rootMatch[0].length);
+  return openTag.replace(
+    new RegExp(`${attribute}="[^"]*"`),
+    `${attribute}="${escapeAttr(merged.join(","))}"`,
+  );
 }
 
 function findMatchingRow(html: string, row: unknown, offset: number): Range | null {

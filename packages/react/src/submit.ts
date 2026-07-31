@@ -53,6 +53,14 @@ declare global {
       confirmOptimistic?: (mutationId: string) => void;
       revertOptimistic?: (mutationId: string) => void;
     };
+    /** Installed by the live client script (routekit). `listLog` lets an
+     * island catch up on list patches that landed before it hydrated. */
+    __KilnFSR?: {
+      connect?: (route: string, slots: string[]) => void;
+      subscribe?: () => void;
+      getSlots?: () => string[];
+      listLog?: (field: string) => unknown[];
+    };
   }
 }
 

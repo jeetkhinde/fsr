@@ -12,6 +12,7 @@ Kiln has several surfaces that are **typed, scaffolded, or discovered but not ac
 | Streaming SSR | Deliberately absent — see [rendering-and-caching.md](rendering-and-caching.md) | FSR + `LiveProp` over SSE |
 | Full-page React hydration | **Prohibited** (ADR-014) | Islands only ([live-and-islands.md](live-and-islands.md)) |
 | `dom`-target `LiveProp` inside an island | Bake-time warning; silcrow won't patch inside the React root | `target: 'store'` + `useLiveValue` |
+| `dom`-target `Live.list` inside an island | Same rule, same warning — rows are marked and then never patched | `target: 'store'` + `useLiveList(name, { key })` ([live-and-islands.md](live-and-islands.md#a-livelist-inside-an-island)) |
 | `fsr.watcher: 'external'` | Typed, implementation only partial | Use `'embedded'` |
 | An `action` that both writes to `res` and returns a value | The committed body wins; the **return value is ignored** (warns once) | Pick one — commit via `res.html`/`res.json`, or return a value and let Kiln serialize it |
 | A logout form in `_layout.tsx` | Actions register against a **page** pattern; layouts have none | Post to a page action absolutely, e.g. `/login?/signout` ([auth.md](auth.md)) |

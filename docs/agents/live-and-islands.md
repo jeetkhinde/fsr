@@ -118,6 +118,45 @@ Kiln marks the rows' **enclosing element** as the list container — the `div.bo
 - **The value must equal `key(row)`.** It is how a marked element is matched to its row. A `data-kiln-row` value matching no row is warned about once and that element simply never updates.
 - **Markers are all-or-nothing per list.** If Kiln sees any `data-kiln-row` for a list it uses only marked elements; without markers it falls back to the `<ul>`/`<li>` scan. Marking some rows and not others means the unmarked ones are not live.
 
+### A `Live.list` inside an island
+
+The default `dom` target cannot reach an island — silcrow never patches DOM the React root owns (rule 3 below), and a `dom` list rendered by an island is warned about at bake time. Declare `target: 'store'` and read it with `useLiveList()`:
+
+```tsx
+// pages/board.tsx
+export async function load() {
+  return {
+    cards: Live.list<Card>({
+      key: (c) => c.id,
+      target: 'store',                 // no DOM marking; patches go to the store
+      query: async ({ sql }) => sql`SELECT id::text, title FROM cards ORDER BY position`,
+    }),
+  };
+}
+```
+
+```tsx
+// islands/Board.tsx
+import { useLiveList } from '@kiln/react';
+
+export default function Board({ initial }: { initial: Card[] }) {
+  const cards = useLiveList<Card>('cards', { key: (c) => c.id, initial });
+  return <div>{cards.map((c) => <article key={c.id}>{c.title}</article>)}</div>;
+}
+```
+
+| Target | Effect |
+|--------|--------|
+| `'dom'` (default) | Rows are marked and patched in place. Not delivered inside an island. |
+| `'store'` | No marking at all; patches go to the `live-list:<name>` store scope for `useLiveList()`. |
+| `'dom-and-store'` | Both — for a list rendered outside an island whose data an island also reads. |
+
+Three things to know:
+
+- **`key` must match the server's.** Patches identify rows by `key(row)`, and that function cannot be serialized to the browser — so the island passes its own copy. A mismatch means patches quietly apply to nothing.
+- **Initial rows come from the baked seed** (`window.__kiln_seed`), so `initial` is only needed for the server render (pass the island prop, as above).
+- **Patches that land before the island hydrates are replayed**, not lost — the client keeps a bounded log (200 patches) that `useLiveList` drains on mount.
+
 ## Islands — client-side React interactivity
 
 Full-page hydration is prohibited (ADR-014). Interactivity comes from islands: named React components mounted into otherwise-static baked HTML.
@@ -151,8 +190,8 @@ export default function Dashboard({ start }: Awaited<ReturnType<typeof load>>) {
 ### The four island rules (do not violate)
 
 1. **Props are bake-time values** embedded in the marker — plain JSON only (no `Date`/`Map`/functions).
-2. **Live data inside an island uses the store**: declare the field with `target: 'store'` and read it with `useLiveValue(field, fallback)`; pass the bake-time value as `fallback` so SSR and first client render match.
-3. **Silcrow never patches DOM inside an island** — the React root owns that subtree. A `dom`-target `LiveProp` inside an island triggers a bake-time warning.
+2. **Live data inside an island uses the store**: declare the field with `target: 'store'` and read it with `useLiveValue(field, fallback)` — or, for a `Live.list`, [`useLiveList(name, { key })`](#a-livelist-inside-an-island). Pass the bake-time value as `fallback`/`initial` so SSR and first client render match.
+3. **Silcrow never patches DOM inside an island** — the React root owns that subtree. A `dom`-target `LiveProp` **or `Live.list`** inside an island triggers a bake-time warning.
 4. **Navigation stays with silcrow** — plain `<a>` links, no client router inside islands.
 
 Nested islands are unsupported (outermost wins).

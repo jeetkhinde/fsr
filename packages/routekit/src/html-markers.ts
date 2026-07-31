@@ -121,12 +121,24 @@ export function warnDomLiveInsideIslands(html: string, route: string): void {
   const re = /data-kiln-island="([^"]+)"/g;
   for (let m = re.exec(html); m; m = re.exec(html)) {
     const fragment = extractBalancedDiv(html, m.index);
-    if (fragment && fragment.includes('s-live="')) {
+    if (!fragment) continue;
+    if (fragment.includes('s-live="')) {
       warnOnce(
         `island-dom-live:${route}:${m[1]}`,
         `[kiln] route "${route}": island "${m[1]}" contains a dom-target LiveProp slot (s-live). ` +
           `Silcrow does not patch DOM inside islands — declare the field with target: 'store' and ` +
           `read it with useLiveValue() from @kiln/react.`,
+      );
+    }
+    // Same rule, same reason, for lists: a dom-target Live.list rendered by an
+    // island is marked up and then never patched.
+    const listMatch = /data-kiln-list="([^"]*)"/.exec(fragment);
+    if (listMatch) {
+      warnOnce(
+        `island-dom-live-list:${route}:${listMatch[1]}`,
+        `[kiln] route "${route}": island "${m[1]}" renders Live.list "${listMatch[1]}" with the ` +
+          `default dom target. Silcrow does not patch DOM inside islands — declare the list with ` +
+          `target: 'store' and read it with useLiveList() from @kiln/react.`,
       );
     }
   }
