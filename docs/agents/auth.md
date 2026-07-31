@@ -138,15 +138,27 @@ register against a *page* pattern and layouts have none, so a logout form in
 
 ### The auth library's own handler is still a raw route
 
+It's a catch-all owned by the library, not a Kiln page, so it can't be a file
+route. Mount it from `config.server.setup` — no custom entry point needed, and
+the app keeps `kiln dev` / `kiln start` (and therefore islands):
+
 ```ts
-// src/main.ts
-const adapter = new ElysiaAdapter();
-adapter.app.all('/api/auth/*', (ctx) => auth.handler(ctx.request)); // better-auth
+// kiln.config.ts
+export default defineConfig({
+  server: {
+    async setup({ adapter }) {
+      const { auth } = await import('./lib/auth.js');
+      adapter.registerRaw?.('/api/auth/*', (request) => auth.handler(request)); // better-auth
+      adapter.registerAsset('/assets/app.css', './styles/app.css');
+    },
+  },
+});
 ```
 
-It's a catch-all owned by the library, not a Kiln page, so it stays mounted on
-`adapter.app` — and being a raw route, `handle` never runs for it (public by
-construction).
+`setup` runs after the FSR runtime is up and **before** pages are mounted, so an
+app route wins over a page at the same path. `registerRaw` hands the untouched
+`Request` straight to the library and `handle` never runs for it — public by
+construction, which is what a sign-in endpoint needs.
 
 ## Gotchas
 

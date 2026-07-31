@@ -1,3 +1,5 @@
+import type { ServerAdapter } from './types.js';
+
 export interface WebConfig {
   host: string;
   port: number;
@@ -132,6 +134,44 @@ export interface CacheConfig {
   namespace?: string;
 }
 
+/**
+ * What `server.setup` is handed. Deliberately just the adapter and the
+ * resolved config: everything an app needs to mount raw routes and assets,
+ * and nothing that would make `@kiln/core` depend on `@kiln/engine`.
+ */
+export interface KilnServerSetupContext {
+  adapter: ServerAdapter;
+  config: KilnConfig;
+  /** 'dev' under `kiln dev` (Vite proxy live), 'start' under `kiln start`. */
+  mode: 'dev' | 'start';
+}
+
+export interface ServerConfig {
+  /**
+   * App-owned server wiring the file router cannot express — a third-party
+   * auth catch-all, a stylesheet outside `public/`, an adapter plugin.
+   *
+   * Runs after the adapter and FSR runtime are up and BEFORE pages are
+   * mounted, so an app route wins over a page at the same path.
+   *
+   * This exists so needing one raw route no longer forces an app to abandon
+   * `kiln dev` / `kiln start` for a hand-built entry point — which also cost
+   * it islands, since only the CLI wires the Vite/islands pipeline.
+   *
+   * ```ts
+   * // kiln.config.ts
+   * server: {
+   *   async setup({ adapter }) {
+   *     const { auth } = await import('./lib/auth.js');
+   *     adapter.registerRaw?.('/api/auth/*', (request) => auth.handler(request));
+   *     adapter.registerAsset('/assets/app.css', './styles/app.css');
+   *   },
+   * }
+   * ```
+   */
+  setup?(ctx: KilnServerSetupContext): void | Promise<void>;
+}
+
 export interface KilnConfig {
   web: WebConfig;
   backend: BackendConfig;
@@ -141,6 +181,7 @@ export interface KilnConfig {
   images: ImageConfig;
   client: ClientRuntimeConfig;
   fsr: FsrConfig;
+  server?: ServerConfig;
   port?: number;
   pagesDir?: string;
 }
@@ -210,7 +251,15 @@ export type DeepPartial<T> = {
   [P in keyof T]?: T[P] extends object ? DeepPartial<T[P]> : T[P];
 };
 
-export function defineConfig(config: DeepPartial<KilnConfig>): KilnConfig {
+/**
+ * `server.setup` is a function, and `DeepPartial` maps over object types —
+ * which a function is — so it would strip callability. Kept whole.
+ */
+export type KilnUserConfig = DeepPartial<Omit<KilnConfig, 'server'>> & {
+  server?: ServerConfig;
+};
+
+export function defineConfig(config: KilnUserConfig): KilnConfig {
   const merged = { ...DEFAULT_CONFIG };
   
   if (config.web) merged.web = { ...DEFAULT_CONFIG.web, ...config.web } as any;
@@ -232,6 +281,7 @@ export function defineConfig(config: DeepPartial<KilnConfig>): KilnConfig {
   // or a caller mutating the returned config — would corrupt the shared
   // singleton for every future defineConfig() call in the process.
   merged.fsr = { ...DEFAULT_CONFIG.fsr, ...config.fsr } as any;
+  if (config.server !== undefined) merged.server = config.server;
   if (config.port !== undefined) merged.port = config.port;
   if (config.pagesDir !== undefined) merged.pagesDir = config.pagesDir as any;
 
@@ -272,6 +322,13 @@ function validateConfig(c: KilnConfig): void {
   port('port', c.port);
   port('web.port', c.web?.port);
   port('backend.port', c.backend?.port);
+
+  // A JS-authored config can hand `setup` anything. Catching it here beats a
+  // "config.server.setup is not a function" during boot, after the FSR
+  // supervisors have already started.
+  if (c.server?.setup !== undefined && typeof c.server.setup !== 'function') {
+    fail('server.setup', c.server.setup, 'a function');
+  }
 
   const quality = c.images?.quality;
   if (quality !== undefined) {
