@@ -52,10 +52,16 @@ here so they are tracked as defects rather than living only in a session transcr
     So closing this needs a way to register raw routes and assets from app code under `kiln dev` /
     `kiln start` — a smaller, better-defined problem than before, and no longer coupled to auth.
 
-*   **Four warned-but-surprising combinations** (each a live `warnOnce`): `cacheKey` + live fields
-    (updates skipped); `bake='user'` + `Live.list` (unsupported); `bake='user'` + dynamic segment +
-    live fields (**SSE scoped to the wrong user**); `Live.list` in a dynamic-segment layout (all
-    instances share one channel). The third is the most severe — wrong-user data.
+*   **Three warned-but-surprising combinations** (each a live `warnOnce`): `cacheKey` + live fields
+    (updates skipped); `bake='user'` + `Live.list` (unsupported); `Live.list` in a dynamic-segment
+    layout (all instances share one channel). None fails silently — each warns — so they rank below
+    anything that does.
+
+    A fourth, `bake='user'` + dynamic segment + live fields, is **FIXED 2026-07-31** on
+    `fix/sse-user-scoping`; see [bugs-resolved.md](bugs-resolved.md). It was recorded here as "SSE
+    scoped to the wrong user" and "the most severe — wrong-user data". **Both were wrong** — it
+    delivered nothing rather than the wrong user's data. Corrected on the way out so the mistake
+    isn't inherited.
 
 *   **`.env` files are gitignored, so a fresh clone cannot run `test:integration`** — fails with
     `database "jagjeet" does not exist` until `test-app/.env` is copied in. Ship `.env.example`
@@ -93,8 +99,9 @@ Recorded so they aren't re-filed as bugs. Full rationale in `.codebase-memory/ad
     whole chain: real INSERT → `kiln_emit_event` trigger → LISTEN/NOTIFY → `FsrWatcher` → Redis →
     a subscribed SSE client. Deleting the list's `dependsOn` makes that suite fail on a 20s
     timeout, so the coverage has teeth.
-*   Dynamic-segment `bake='user'` + live fields falls back to shared-key SSE scoping (warned at
-    runtime).
+*   ~~Dynamic-segment `bake='user'` + live fields falls back to shared-key SSE scoping~~ — **FIXED
+    2026-07-31**: the SSE and snapshot endpoints now match the concrete path back to its registered
+    pattern before reading bake mode. See [bugs-resolved.md](bugs-resolved.md) §0.
 *   The dormant check costs one awaited Postgres SELECT per validated cache hit on routes with no
     local SSE-active mark. **Decision 2026-07-27: leave as-is** — correctness over a sub-ms indexed
     read; revisit only with profiling evidence.

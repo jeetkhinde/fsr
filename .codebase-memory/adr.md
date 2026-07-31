@@ -117,6 +117,20 @@ registration-time (role changes lag one request); per-user Live.list
 unsupported; query-reading loads must stay SSR until query joins the key;
 shared-shell dedup deferred to Plan 3.
 
+**Amendment (2026-07-31) — subscription keys resolve through pattern matching.**
+"Subscriptions resolve the key from the subscriber's own session" was true of
+`identity(req)`, but the *gate* in front of it was not: `bakeByPattern` is keyed
+by route pattern while the live client subscribes with
+`window.location.pathname`, so a dynamic route missed the lookup and the key
+fell back to `''` (shared). Subscribers on dynamic `bake='user'` routes
+therefore received nothing — `hub.ts` filters patches by exact `userKey` match.
+The SSE and snapshot endpoints now match the concrete path back to its
+registered pattern (`packages/routekit/src/match-pattern.ts`) and share one
+`resolveRouteUserKey` helper. `identity(req)` remains the only source of the
+key: the matched pattern selects a bake mode and nothing else, so no
+client-supplied value can influence whose data is read. An unmatched route
+warns once and is treated as shared.
+
 ## ADR-018: Auto-Deps, sync-triggers, Owner-Scoped Invalidation, Freshness Tiers
 
 **Status:** ACCEPTED
