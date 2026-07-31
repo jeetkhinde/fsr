@@ -7,7 +7,8 @@ Kiln has several surfaces that are **typed, scaffolded, or discovered but not ac
 | `apiDir` / an `api/` folder for routes | Config key exists and `create-kiln` scaffolds it, but `startKiln()` never loads it — **not served at runtime** | `json_first = true` page, content negotiation, or `actions` ([data-loading.md](data-loading.md)) |
 | `_loading.tsx` | Discovered by the router but **no server-side semantic** | Return a fast shell + `LiveProp` fields ([live-and-islands.md](live-and-islands.md)) |
 | `cache.provider: 'memory'` or `'sqlite'` | **Not implemented** — throws `StartupError('UnsupportedProvider')` at boot | `'filesystem'` (default) or `'redis'` ([rendering-and-caching.md](rendering-and-caching.md)) |
-| `LiveProp` on a `cache_key`-variant page | **Skipped** with a one-time warning — live updates don't fire | Use LiveProp on non-variant pages |
+| `LiveProp`/`Live.list` on a `cache_key`-variant page | **Not supported** (decided, not a TODO) — skipped with a one-time warning; the page renders but never updates. Live registrations write to the route's base cache paths, which would poison every other variant | Drop the `cache_key`, or drop the live fields and let the route revalidate on its TTL |
+| `Live.list` on a `bake='user'` page | **Not supported** (decided) — skipped with a one-time warning. Scalar `LiveProp` fields under `bake='user'` *are* fully supported | Use scalar live fields, or drop `bake='user'` from that page |
 | i18n (`KilnI18n`) | Exists in `@kiln/core` but **not integrated into any request path** | Handle locale yourself for now |
 | Streaming SSR | Deliberately absent — see [rendering-and-caching.md](rendering-and-caching.md) | FSR + `LiveProp` over SSE |
 | Full-page React hydration | **Prohibited** (ADR-014) | Islands only ([live-and-islands.md](live-and-islands.md)) |

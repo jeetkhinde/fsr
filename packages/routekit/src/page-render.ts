@@ -46,6 +46,7 @@ import {
   injectKilnScript,
   injectModuleScript,
   materializeBakedShell,
+  layoutInstancePath,
   layoutParamNames,
 } from '@kiln/engine';
 
@@ -505,8 +506,14 @@ export function buildPageHandler(
         // Markers must be baked in BEFORE this HTML is cached, so a later
         // cache-hit request (which skips load()/bake entirely) still has the
         // s-live slots materializeBakedShell needs to patch fresh values in.
+        // The list container is stamped with the layout INSTANCE path, not the
+        // pattern: that attribute is the route silcrow subscribes with, and
+        // the pattern would put every instance of /projects/:id on one
+        // channel. The HTML this ends up in is cached per instance already
+        // (getLayoutHtml keys on the layout's own params), so the stamped
+        // route and the cache entry always agree.
         const marked = applyLivePropMarkers(
-          applyLiveListMarkers(baked.html, loaded, layoutPattern),
+          applyLiveListMarkers(baked.html, loaded, layoutInstancePath(layoutPattern, req.params)),
           loaded,
         );
         layoutBaked[idx] = { html: marked };
@@ -693,15 +700,20 @@ export function buildPageHandler(
     if (variant && !isUserVariant && watcher && (hasLiveLists(rawPageProps) || extractLiveFields(rawPageProps).length > 0)) {
       warnOnce(
         `variant-live:${req.path}`,
-        `[kiln] route "${req.path}" combines cacheKey with LiveProp/Live.list; ` +
-          `live updates are not supported for cacheKey variants yet and were skipped.`,
+        `[kiln] route "${req.path}" combines cacheKey with LiveProp/Live.list. Live updates are ` +
+          `NOT supported for cacheKey variants and were skipped — this page renders correctly ` +
+          `but will never update in place. Live registrations write to the route's base cache ` +
+          `paths, which would poison every other variant of it. Drop the cacheKey, or drop the ` +
+          `live fields and let the route revalidate on its TTL.`,
       );
     }
     if (isUserVariant && watcher && hasLiveLists(rawPageProps)) {
       warnOnce(
         `user-live-list:${req.path}`,
-        `[kiln] route "${req.path}" combines bake='user' with Live.list; per-user list ` +
-          `updates are not supported yet (scalar LiveProp fields are) and were skipped.`,
+        `[kiln] route "${req.path}" combines bake='user' with Live.list. Per-user LIST updates ` +
+          `are NOT supported and were skipped — the rows render once and then never change. ` +
+          `Scalar LiveProp fields are fully supported under bake='user', so use those, or drop ` +
+          `bake='user' from this page.`,
       );
     }
 
@@ -721,23 +733,13 @@ export function buildPageHandler(
       for (let index = 0; index < layoutEntries.length; index++) {
         const layoutRoute = layoutPatterns[index] ?? '/';
         const layoutOptions = extractPageOptions(layoutEntries[index].module);
-        // The layout's baked HTML is now cached per concrete param value, but
-        // a Live.list inside it is still identified to the store/hub by the
-        // PATTERN alone (the marker route and the registration route below) —
-        // so two concrete instances of "/projects/:id" would share one list
-        // channel and patch each other's rows. Scalar LiveProp fields are
-        // unaffected (they ride the page's own route). Warn once per pattern
-        // rather than let it fail silently.
-        if ((layoutRoute.includes(':') || layoutRoute.includes('*')) && hasLiveLists(rawLayoutPropsArr[index])) {
-          warnOnce(
-            `dynamic-layout-live-list:${layoutRoute}`,
-            `[kiln] layout "${layoutRoute}" has a dynamic path segment and uses Live.list; ` +
-              `list updates are identified by pattern, so every concrete instance of this ` +
-              `layout shares one list channel. Move the Live.list into the page for now.`,
-          );
-        }
+        // Registered under the layout INSTANCE path, matching the route
+        // stamped on the list container above. A dynamic layout therefore
+        // gets one registration per concrete instance instead of one shared
+        // channel for all of them; a static pattern is its own instance path,
+        // so its registration count is unchanged.
         await registerLiveLists({
-          route: layoutRoute,
+          route: layoutInstancePath(layoutRoute, req.params),
           pageComponent: layoutEntries[index].module.default,
           pageProps: rawLayoutPropsArr[index],
           finalHtml,

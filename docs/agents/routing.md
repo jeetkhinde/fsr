@@ -45,7 +45,9 @@ export async function load(req: KilnRequest) {
 }
 ```
 
-What a layout still must not read in `load()`: `req.query`, and any param belonging to a *descendant* page (`[taskId]` under this layout) — neither is in the layout's cache key, so both would serve one request's data to every other request. Push that data into the page's own `load()`. A `Live.list` inside a dynamic-segment layout is not supported yet either (its updates are identified by pattern, so every project would share one list); Kiln warns once per pattern — move the list into the page.
+What a layout still must not read in `load()`: `req.query`, and any param belonging to a *descendant* page (`[taskId]` under this layout) — neither is in the layout's cache key, so both would serve one request's data to every other request. Push that data into the page's own `load()`.
+
+A `Live.list` inside a dynamic-segment layout **is** supported: it is addressed by the layout's concrete instance path (`/projects/7`, not `/projects/:id`), so each project gets its own channel. One registration per instance is the cost; a static layout pattern is its own instance path and is unaffected.
 
 ## Routes the file router can't own
 
