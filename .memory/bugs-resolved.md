@@ -4,6 +4,33 @@ Historical record of fixed framework bugs, kept out of the active file to keep s
 
 > **Last full verification**: 2026-07-12 (Gemini-audit round 2). `tsc --noEmit` clean across every package; unit suite 149 pass / 0 fail.
 
+## 0. Fixed 2026-07-31 (branch `feat/live-list-any-markup`)
+
+*   **`Live.list` could only mark `<li>` rows inside `<ul>`/`<ol>`** — `findMatchingRow` scanned for
+    the next `<li>` whose HTML contained every one of the row's text values, and `markList` marked
+    the nearest enclosing `<ul>`/`<ol>`. A div board or a table could not be a live list at all.
+
+    Fixed by an opt-in marker: the app puts `data-kiln-row={key}` on each row element (value must
+    equal `key(row)`), and the server adds the `data-kiln-key` the client already queries, then
+    marks the rows' **enclosing** element via a new tag-agnostic `findEnclosingOpenTag`. Markers are
+    all-or-nothing per list; with none present the `<li>` scan runs unchanged, so nothing that
+    worked before changed. A `data-kiln-row` matching no row warns once.
+
+    **Why a `rowTag` config option was rejected:** rows were located by content matching, and in a
+    div board the first element containing a row's text is the outer *wrapper*, not the row — so
+    configuring the tag would have marked the wrong element. Explicit markers remove the guess.
+
+    **A second defect found while fixing this:** `_patchList` built new rows with
+    `document.createElement('div')` + `innerHTML`, and a `<tr>` parsed inside a `<div>` is discarded
+    by the HTML parser. A table-backed list would therefore render correctly and then silently never
+    insert or replace a row. Both the `insert` and `replace-row` branches now use `<template>`, which
+    parses table-context fragments correctly.
+
+    The client needed no other change — it already queried `[data-kiln-list]` / `[data-kiln-key]`
+    and inserted `firstElementChild`, whatever tag that is.
+
+    Verification: unit 239 pass / 60 skip / 0 fail, `bun run build` exit 0.
+
 ## 1. Fixed in the 2026-07-27 source audit (branch `fix/emit-event-non-bigint-id`)
 
 Self-audit of the framework at `758eb44`, all six findings verified against source before fixing
