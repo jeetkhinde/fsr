@@ -15,7 +15,7 @@ not the design.
 ## Ordering principle
 
 Ordered by **framework severity**, not by what the test vehicle happens to exercise. That
-distinction is load-bearing here: the most severe item below (#1) has stayed open through two
+distinction is load-bearing here: the highest-severity item below (#1) has stayed open through two
 sessions precisely because `apps/jags-list` cannot reach it — its only `bake='user'` page is
 `pages/index.tsx`, and `/` has no dynamic segment. An app-led queue structurally cannot surface
 bugs the app does not touch.
@@ -70,11 +70,20 @@ cheaper. It is DX, not correctness — if the queue is tight, it can slide to th
 
 ---
 
-### 1. Wrong-user SSE scoping — **start first**
+### 1. SSE user scoping on dynamic routes — **start first**
 
-**Severity**: highest open defect. A `bake='user'` page on a dynamic route serves live patches that
-are not scoped to the subscribing user. This is cross-user data exposure, not merely a missed
-update.
+**Severity**: highest open defect. A `bake='user'` page on a dynamic route silently stops
+delivering live updates entirely.
+
+**Corrected 2026-07-31** — this was first written here, and in PR #33, as "cross-user data
+exposure". That is **wrong**. `page-render.ts:211` sets `userKey = uid ?? ''` regardless of whether
+the route is dynamic, so an authenticated render always writes under its own uid and can never
+populate the shared row; `hub.ts:308` then filters patches by exact `userKey` match. A subscriber
+holding `''` therefore matches **nothing**. On the initial snapshot (`hub.ts:395`) it reads the
+shared row — absent, or holding the **anonymous** view if an anonymous request ever rendered that
+route. Anonymous is the least-privileged view and there is no path for one user's data to reach
+another, so there is no privacy breach. It stays item 1 because an entire class of routes silently
+loses live updates — the same failure mode as the auto-deps gap — not because of exposure.
 
 **Root cause, traced.** `bakeByPattern` is keyed by route **pattern**
 (`packages/routekit/src/boot.ts:185` — `bakeByPattern.set(page.pattern, pageOptions.bake)`), so its
@@ -214,7 +223,7 @@ Not startable until that is answered.
 | # | Item | Severity | Start before #31/#32 merge? |
 |---|---|---|---|
 | 0 | `.env.example` + preflight | XS / DX | Yes — zero conflict |
-| 1 | Wrong-user SSE scoping | **Highest** | **Yes** — no hunk overlap |
+| 1 | SSE user scoping on dynamic routes (silent loss of live updates) | **Highest** | **Yes** — no hunk overlap |
 | 2 | `Live.list` non-`<li>` markup | High | Yes — zero file overlap |
 | 3 | Layout scalar auto-deps | Moderate | Prefer after #32 |
 | 4 | `Live.list` in islands + `target` | Moderate | **No — blocked by #32** |
