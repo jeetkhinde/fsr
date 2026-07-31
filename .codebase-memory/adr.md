@@ -358,6 +358,61 @@ assertions unchanged.
 
 ---
 
+## ADR-020: App-Contributed Server Routes (`config.server.setup`)
+
+**Status:** ACCEPTED (2026-07-31)
+**Decision:** An app declares non-page server wiring in `kiln.config.ts`'s
+`server.setup({ adapter, config, mode })`, called by both `kiln dev` and `kiln
+start` after the FSR runtime is up and **before** `startKiln` mounts pages (so
+an app route wins at the same path). `ServerAdapter.registerRaw(pattern,
+handler, { method })` mounts a handler that receives the platform `Request` and
+returns a `Response`, outside the page pipeline: no `KilnRequest` wrapping, no
+`hooks.ts` `handle` hook, no request timeout.
+
+**Why:** an app needing one non-page endpoint — better-auth's `/api/auth/*`
+catch-all is the real case — had to abandon the CLI for a hand-built entry
+point, because `adapter.app.all(...)` was reachable only from app code. That
+cost far more than the route: the CLI is what wires Vite, the islands pipeline
+and the FSR supervisors, so a custom entry meant **no islands** and a
+hand-rolled `FsrWatcher` duplicating `initFsr`.
+
+**Consequences:** `defineConfig` takes `KilnUserConfig` — `DeepPartial` maps
+over object types and a function is one, so `server` passes through whole or
+`setup` would lose callability. A non-function `setup` fails `validateConfig`;
+a throwing `setup` aborts the boot rather than starting a half-wired server.
+`registerRaw` is optional on `ServerAdapter` so a minimal adapter can omit it.
+Bypassing `handle` is the point, not a gap: a sign-in endpoint must be
+reachable without a session. Anything that *should* be gated belongs in a page
+or action.
+
+---
+
+## ADR-021: The Only Watcher Mode Is `embedded`
+
+**Status:** ACCEPTED (2026-07-31)
+**Decision:** `fsr.watcher: 'external'` is removed. The union is `'embedded'`
+only, and `validateConfig` rejects `'external'` by name.
+
+**Why:** it was typed for two releases with nothing behind it — no watcher
+process, no IPC channel, no daemon. Its only effects were a read-path branch
+that re-ran `load()` on every cache hit and a `Live.list` guard that threw. Net
+behaviour was "no watcher, re-load every time": it silently forfeited the
+caching live routes exist for while reading like a supported deployment
+topology. A typed option that quietly disables caching is worse than no option.
+
+**Rejected alternatives:** (a) RPC back into the app process — the real design,
+but a protocol, not a config string; (b) restrict external mode to scalar
+`Live.value` fields and reject `Live.list` — too little value to justify a
+second mode.
+
+**If revived:** a `Live.list` registers closures (`keyOf`, `query`, and a
+`renderRows` callback that SSRs the page component). Closures cannot cross a
+process boundary and `renderRows` needs the component graph loaded, so an
+out-of-process watcher must RPC back into an app process. Tracked in
+`.memory/roadmap.md` Phase 4.2.
+
+---
+
 ## ADR-010: Explicit Dependency Key Model
 
 **Status:** LOCKED
