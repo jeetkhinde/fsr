@@ -81,10 +81,17 @@ none visible at the call site:
 |---|---|---|
 | `cacheKey` + any live field | live updates silently skipped | M |
 | `bake='user'` + `Live.list` | per-user lists unsupported | M |
-| `bake='user'` + dynamic segment + live fields | **SSE scoped to the wrong user** | M |
+| ~~`bake='user'` + dynamic segment + live fields~~ | **FIXED 2026-07-31** (`fix/sse-user-scoping`) | — |
 | `Live.list` in a dynamic-segment layout | all instances share one channel | M |
 
-The third is the worst of these — wrong-user data, not merely missing updates.
+The third is fixed. It was recorded as "wrong-user data"; that was **wrong** — it delivered
+*nothing*, because an authenticated render never writes the shared row and `hub.ts` filters patches
+by exact `userKey`. A silent correctness defect, not a privacy breach. See
+[bugs-resolved.md](bugs-resolved.md) §0.
+
+**Next framework item:** `Live.list` non-`<li>` markup — a div board or table cannot be a live list
+at all (`live-list-render.ts:90,131`). Full ordering in
+`docs/superpowers/plans/2026-07-31-framework-fix-sequencing.md` (PR #33).
 
 ### P2
 

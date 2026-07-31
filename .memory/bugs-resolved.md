@@ -4,6 +4,42 @@ Historical record of fixed framework bugs, kept out of the active file to keep s
 
 > **Last full verification**: 2026-07-12 (Gemini-audit round 2). `tsc --noEmit` clean across every package; unit suite 149 pass / 0 fail.
 
+## 0. Fixed 2026-07-31 (branch `fix/sse-user-scoping`)
+
+*   **Live updates never reached subscribers on dynamic `bake='user'` routes** — `bakeByPattern` is
+    keyed by route pattern (`packages/routekit/src/boot.ts`, the discovery loop), but the SSE and
+    snapshot endpoints looked it up with the concrete path the client subscribes with (the live
+    client sends `window.location.pathname`). For a dynamic route the lookup missed, so `routeBake`
+    was `undefined`, the `=== 'user'` guard failed, and the user key fell back to `''` — the shared
+    key.
+
+    Fixed by matching the concrete path back to its registered pattern first
+    (`packages/routekit/src/match-pattern.ts`, `createPatternMatcher`) and routing both endpoints
+    through one `resolveRouteUserKey` helper instead of duplicating the logic. `identity(req)`
+    remains the only source of the user key; the matched pattern selects a bake mode and nothing
+    else, so no client-supplied value influences whose data is read. An unmatched route warns once
+    and stays shared, rather than failing the subscription — a stale client during a rolling deploy
+    is the common cause.
+
+    **Severity was mis-recorded and is corrected here.** `bugs-active.md` called this "SSE scoped to
+    the wrong user" and "the most severe — wrong-user data". It was neither.
+    `packages/routekit/src/page-render.ts` sets `userKey = uid ?? ''` regardless of dynamic
+    segments, so an authenticated render always writes under its own uid and can never populate the
+    shared row; `packages/engine/src/hub.ts` then filters patches by exact `userKey` match. A
+    subscriber holding `''` matched **nothing**. The initial snapshot read the shared row — absent,
+    or holding the anonymous (least-privileged) view. A silent correctness defect, not a privacy
+    breach.
+
+    Also deleted the `page-render.ts` warning telling authors this combination was broken, and
+    rewrote the `boot.test.ts` case that asserted it — both described a limitation that no longer
+    exists.
+
+    Falsification: `resolveRouteUserKey` returns the subscriber's uid for a dynamic `bake='user'`
+    pattern. Confirmed the test has teeth by temporarily restoring the raw-path lookup — the
+    dynamic-route case fails (`'' !== 'u1'`) while the static and shared cases still pass.
+    Verification: unit 244 pass / 60 skip / 0 fail, `test:integration` exit 0, `bun run build`
+    exit 0.
+
 ## 1. Fixed in the 2026-07-27 source audit (branch `fix/emit-event-non-bigint-id`)
 
 Self-audit of the framework at `758eb44`, all six findings verified against source before fixing
