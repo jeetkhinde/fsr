@@ -8,6 +8,7 @@ import {
   getLiveListMeta,
   isLiveList,
   type LiveList,
+  type LiveListMeta,
 } from '@kiln/core';
 import { bakeSegment, type FsrStore, type FsrWatcher } from '@kiln/engine';
 // Server-only subpath: withDepCapture pulls in node:async_hooks, so it must
@@ -66,6 +67,15 @@ export function hasLiveLists(loadResult: any): boolean {
   );
 }
 
+/** Explicit deps plus the tables captured from the list's own query. Explicit
+ * deps are preserved and never replaced — auto-deps only ever adds, matching
+ * the scalar path's rule (page-render.ts, step 12). */
+export function resolveListDeps(meta: LiveListMeta<any>, autoDepsEnabled: boolean): string[] {
+  return Array.from(
+    new Set([...meta.dependsOn, ...(autoDepsEnabled ? meta.autoDeps ?? [] : [])]),
+  );
+}
+
 export async function registerLiveLists(input: {
   route: string;
   pageComponent: any;
@@ -77,12 +87,15 @@ export async function registerLiveLists(input: {
   isLayout?: boolean;
   defaultDebounce?: number;
   defaultRevalidate?: number | false;
+  /** Mirrors kilnConfig.fsr.autoDeps. Omitted or true = union captured deps. */
+  autoDeps?: boolean;
 }): Promise<void> {
   for (const [name, value] of Object.entries(input.pageProps)) {
     if (!isLiveList(value)) continue;
     const meta = getLiveListMeta(value);
     if (!meta) continue;
     const rows = value as unknown[];
+    const dependsOn = resolveListDeps(meta, input.autoDeps !== false);
     const rendered = extractLiveListRowHtml(input.finalHtml, name);
     const snapshotRows = rows.map((row) => {
       const key = meta.keyOf(row);
@@ -97,7 +110,7 @@ export async function registerLiveLists(input: {
       {
         route: input.route,
         name,
-        dependsOn: meta.dependsOn,
+        dependsOn,
         debounce: meta.debounce ?? input.defaultDebounce,
         revalidate: meta.revalidate ?? input.defaultRevalidate,
         keyOf: meta.keyOf,
@@ -115,7 +128,7 @@ export async function registerLiveLists(input: {
       {
         route: input.route,
         name,
-        dependsOn: meta.dependsOn,
+        dependsOn,
         debounceSecs: meta.debounce ?? input.defaultDebounce,
         revalidateSecs: meta.revalidate ?? input.defaultRevalidate,
         rows: snapshotRows,

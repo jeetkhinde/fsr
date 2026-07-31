@@ -679,6 +679,7 @@ export function buildPageHandler(
         watcher,
         defaultDebounce: options.debounce ?? kilnConfig?.fsr?.patchDebounceSecs,
         defaultRevalidate: options.revalidate ?? kilnConfig?.fsr?.revalidateSeconds,
+        autoDeps: kilnConfig?.fsr?.autoDeps !== false,
       });
       for (let index = 0; index < layoutEntries.length; index++) {
         const layoutRoute = layoutPatterns[index] ?? '/';
@@ -709,6 +710,7 @@ export function buildPageHandler(
           isLayout: true,
           defaultDebounce: layoutOptions.debounce ?? kilnConfig?.fsr?.patchDebounceSecs,
           defaultRevalidate: layoutOptions.revalidate ?? kilnConfig?.fsr?.revalidateSeconds,
+          autoDeps: kilnConfig?.fsr?.autoDeps !== false,
         });
       }
     }
