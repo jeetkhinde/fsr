@@ -62,18 +62,22 @@ raw adapter routes, and a 409 was unreachable in Plan 3b because `AppError` offe
 404/401/403/422/500/redirect (`packages/core/src/errors.ts`). **Fixing this likely dissolves half
 of #1.** The API shape is a public-surface decision — brainstorm before implementing.
 
-**3. `Live.list` is far narrower than its API suggests.** (L for the cluster) Four constraints,
-none visible at the call site:
+**3. `Live.list` is far narrower than its API suggests.** (M for what remains) Three constraints
+left, none visible at the call site:
 - rows must be `<li>` inside `<ul>`/`<ol>` (`live-list-render.ts:90,131`) — a div board or a table
   cannot be marked at all;
 - patches are dropped inside islands (`live-client-script.ts:63`) and, unlike scalars, never
   published to the store — so a list inside an island receives nothing;
 - no `target` option, unlike `LiveProp` (`packages/live/src/list.ts`);
-- **no auto-deps** — `registerLiveLists` passes `meta.dependsOn` straight through
-  (`live-registration.ts:89,107`) while `LiveProp` unions observed tables. Omit `dependsOn` and the
-  list silently never updates. **Treat this one as a bug, not a gap**: the asymmetry is invisible
-  and fails silently. Proven by falsification in `apps/jags-list` (`bun run test:live` fails on a
-  20s timeout without it).
+- ~~no auto-deps~~ — **DONE 2026-07-31** on `fix/live-list-auto-deps`. Each list captures its own
+  query's tables; a list with no deps at all warns. jags-list's explicit `dependsOn` is deleted and
+  `test:live` passes on captured deps. Details in [bugs-resolved.md](bugs-resolved.md) §0.
+
+**Found while fixing the above, not fixed:** layout `load()` is never wrapped in `withDepCapture`
+(`page-render.ts`, the layout branch calls `lMod.load(tracker.proxied)` directly), so layout
+**scalar** live fields get no auto-deps at all. Layout *lists* are fine — list capture is
+self-contained. Unmeasured severity; nobody has hit it because layouts with live scalars are rare
+in the test vehicle.
 
 ### P1 — warned, but still surprising (each is a live `warnOnce`)
 
@@ -97,11 +101,14 @@ The third is the worst of these — wrong-user data, not merely missing updates.
 
 ### Recommended starting point
 
-P0 #1 and #2 are close to one problem. Give actions a response handle, then let a custom entry
-consume the island pipeline — #1 and #2 collapse together, and jags-list can finally exercise
-islands, which is the point of having it. Then the `Live.list` cluster, starting with auto-deps
-parity because it fails silently.
+Two branches are in flight and unmerged; this file is on `fix/live-list-auto-deps`, branched from
+`main` @ `f5fa13a`, so it does not reflect the other one:
 
-**Open decision before coding:** the action/response API shape. Options include passing `res` as a
-second argument, returning a response descriptor, or a `cookies`/`headers` bag on the request.
-Worth a brainstorm — it is public surface and hard to change later.
+- **PR #31 `feat/action-response-api`** — closes P0 #2 (actions receive `res`). Its own branch
+  rewrites P0 #1 and #2 above; read that branch's copy of this file, not this one, for their state.
+- **`fix/live-list-auto-deps`** — the auto-deps item of the `Live.list` cluster, above.
+
+Next, once both land: the rest of the `Live.list` cluster. The `<li>`-only markup constraint is the
+most limiting for real UIs (a kanban board is divs, not a list), and the islands gap is what stops a
+list inside an island receiving anything. Neither fails silently the way auto-deps did, so neither is
+as urgent as that was.

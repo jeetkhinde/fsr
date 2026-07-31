@@ -211,6 +211,36 @@ but not yet exercised end-to-end through a page with live fields in any app
 actor re-materialization, row-level auto-deps (`WHERE`-clause parsing),
 auto-owner inference. Extends ADR-016, ADR-017.
 
+**Amendment (2026-07-31) — `Live.list` captures its own query.** As originally
+shipped, auto-deps was `load()`-scoped only: `registerLiveLists` passed
+`meta.dependsOn` straight through, so a `Live.list` got no automatic
+dependencies at all while scalar `LiveProp` unioned the request's observed
+tables. Omitting `dependsOn` therefore degraded a list silently.
+
+A list now captures the tables touched by **its own** `query`, in its own
+`withDepCapture` scope inside `materializeLiveLists`
+(`packages/routekit/src/live-registration.ts`). The result rides on the value as
+`LiveListMeta.autoDeps` (`packages/core/src/list.ts`) and is unioned with the
+explicit deps by `resolveListDeps` at registration, gated on `fsr.autoDeps`
+exactly as the scalar path is.
+
+Per-list capture was chosen over reusing the page's `observedTables` because
+`initial` is optional on `LiveListOptions` and the page's capture wraps only
+`module.load()` — a list that omits `initial` would have captured nothing,
+preserving the silent-failure case the change exists to remove. It was also
+chosen over widening the page's capture boundary to enclose
+`materializeLiveLists`, which would have leaked each list's tables into every
+scalar field's `depends_on` on the same page. A further benefit: because the
+scope is self-contained, it works identically on the layout path, where
+`load()` is not wrapped in `withDepCapture` at all.
+
+A list that ends up with **no** dependencies — nothing declared, nothing
+captured — now emits a `warnOnce`. Note that such a list is not necessarily
+inert: `fetchStaleLists` refreshes on `stale = TRUE` **OR**
+`COALESCE(revalidate_secs, 300) > 0`, so only `revalidate: false` (persisted as
+`0`) removes the timer fallback. The warning states whichever consequence
+applies.
+
 ---
 
 ## ADR-004: Field-Level Granularity — LiveProp vs Static
