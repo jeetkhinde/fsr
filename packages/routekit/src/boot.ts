@@ -10,12 +10,14 @@ import { discoverRoutes } from './discover.js';
 import { extractPageOptions, type BakeMode } from './page-options.js';
 import type { PageRoute, LayoutNode } from './manifest.js';
 import type {
+  KilnAction,
   KilnRequest,
   KilnResponse,
   KilnConfig,
   KilnIdentity,
   ServerAdapter,
 } from '@kiln/core';
+import { warnOnce } from './dedup.js';
 import { StartupError } from '@kiln/core';
 // Server-only subpath: the '@kiln/core' barrel must stay client-bundleable
 // (islands import from it), and sql.ts pulls in node:async_hooks + bun.
@@ -57,7 +59,7 @@ export type { CacheOptions, PageErrorFiles } from './handler-types.js';
 // ---------------------------------------------------------------------------
 
 export function buildActionHandler(
-  actions: Record<string, any>,
+  actions: Record<string, KilnAction>,
   opts?: { cache?: KilnCache; identity?: KilnIdentity; bake?: BakeMode }
 ) {
   // Read-your-own-writes for bake='user' pages: the actor must see their own
@@ -85,8 +87,21 @@ export function buildActionHandler(
     }
 
     try {
-      const result = await actions[actionName](req);
+      const result = await actions[actionName](req, res);
       await invalidateActor(req);
+      // Same rule as the `handle` hook (KilnHandle): if the action committed a
+      // response itself, send that. Warn rather than silently discarding a
+      // returned value — an invisible asymmetry is how the Live.list auto-deps
+      // gap became a bug rather than a documented limitation.
+      if (res.bodyType) {
+        if (result !== undefined) {
+          warnOnce(
+            `action-body-conflict:${req.path}:${actionName}`,
+            `[kiln] action "${actionName}" on ${req.path} both wrote to res and returned a value; the return value was ignored.`,
+          );
+        }
+        return;
+      }
       res.json(result || { success: true });
     } catch (err: any) {
       if (err.type === 'Redirect') {
@@ -254,7 +269,7 @@ export async function startKiln(
     // @kiln/client not installed
   }
   adapter.registerPage('/_kiln/islands.json', [], async (_req, res) => {
-    res.headers['cache-control'] = 'no-store';
+    res.headers.set('cache-control', 'no-store');
     // Dev: the CLI points this at the Vite dev server's manifest.
     if (options.islandsManifestUrl) {
       try {
@@ -282,7 +297,7 @@ export async function startKiln(
   // 7. Serve FSR live client script when FSR is active
   if (fsrEnabled) {
     adapter.registerPage('/_kiln/live.js', [], async (_req, res) => {
-      res.headers['content-type'] = 'application/javascript; charset=utf-8';
+      res.headers.set('content-type', 'application/javascript; charset=utf-8');
       res.html(KILN_LIVE_CLIENT_SCRIPT);
     });
   }
@@ -407,8 +422,8 @@ export async function startKiln(
     const { generateServiceWorker } = await import('./sw-template.js');
     const swContent = generateServiceWorker((config as any).serviceWorker);
     adapter.registerPage('/sw.js', [], async (_req, res) => {
-      res.headers['content-type'] = 'application/javascript; charset=utf-8';
-      res.headers['cache-control'] = 'no-cache';
+      res.headers.set('content-type', 'application/javascript; charset=utf-8');
+      res.headers.set('cache-control', 'no-cache');
       res.html(swContent);
     });
   }

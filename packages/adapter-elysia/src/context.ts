@@ -1,4 +1,5 @@
-import type { KilnRequest, KilnResponse, SSEEvent } from '@kiln/core';
+import { createCookies } from '@kiln/core';
+import type { KilnCookies, KilnRequest, KilnResponse, SSEEvent } from '@kiln/core';
 
 export function wrapRequest(ctx: any): KilnRequest {
   const req = ctx.request as Request;
@@ -50,7 +51,9 @@ export function wrapRequest(ctx: any): KilnRequest {
 
 export class ElysiaResponseImpl implements KilnResponse {
   public status = 200;
-  public headers: Record<string, string> = {};
+  // `headers` must be declared before `cookies` — createCookies binds to it.
+  public headers = new Headers();
+  public cookies: KilnCookies = createCookies(this.headers);
   public body?: any;
   public bodyType?: 'html' | 'json' | 'sse' | 'redirect' | 'binary';
   public redirectUrl?: string;
@@ -88,13 +91,30 @@ export class ElysiaResponseImpl implements KilnResponse {
   }
 }
 
+/** Copies a Headers onto Elysia's plain-record `ctx.set.headers`. Single-valued
+ * names go across directly; set-cookie goes as a string[], which Elysia expands
+ * into one header per entry (proved by multi-cookie.test.ts).
+ *
+ * ctx.set.headers stays a record on purpose: assigning a Headers instance to it
+ * would make the record-style writes elsewhere in this file and in
+ * middleware/compression.ts set plain JS properties instead of headers, and be
+ * dropped with no type error and no runtime error. See spec §2.3. */
+export function applyHeaders(headers: Headers, ctx: any): void {
+  for (const [key, value] of headers) {
+    if (key === 'set-cookie') continue;
+    ctx.set.headers[key] = value;
+  }
+  const cookies = headers.getSetCookie();
+  if (cookies.length > 0) {
+    ctx.set.headers['set-cookie'] = cookies;
+  }
+}
+
 export function handleElysiaResponse(res: ElysiaResponseImpl, ctx: any) {
   if (res.status) {
     ctx.set.status = res.status;
   }
-  for (const [key, value] of Object.entries(res.headers)) {
-    ctx.set.headers[key] = value;
-  }
+  applyHeaders(res.headers, ctx);
 
   if (res.bodyType === 'redirect') {
     return;

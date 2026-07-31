@@ -24,8 +24,8 @@ export function buildImageHandler(config: ImageConfig) {
     const mimeType = fmt === 'jpeg' ? 'image/jpeg' : `image/${fmt}`;
 
     if (await cacheFile.exists()) {
-      res.headers['content-type'] = mimeType;
-      res.headers['cache-control'] = 'public, max-age=31536000, immutable';
+      res.headers.set('content-type', mimeType);
+      res.headers.set('cache-control', 'public, max-age=31536000, immutable');
       const data = await cacheFile.arrayBuffer();
       if (typeof res.binary === 'function') {
         res.binary(data);
@@ -59,8 +59,8 @@ export function buildImageHandler(config: ImageConfig) {
       // Write to disk cache (fire-and-forget)
       Bun.write(cachePath, out).catch(() => {});
 
-      res.headers['content-type'] = mimeType;
-      res.headers['cache-control'] = 'public, max-age=31536000, immutable';
+      res.headers.set('content-type', mimeType);
+      res.headers.set('cache-control', 'public, max-age=31536000, immutable');
       if (typeof res.binary === 'function') {
         res.binary(out);
       } else {

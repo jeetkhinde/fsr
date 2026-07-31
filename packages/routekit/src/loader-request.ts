@@ -2,6 +2,7 @@
 // These build the fake request objects used when nobody is actually asking:
 // the watcher re-running a loader long after the original request ended, and
 // startup prebakes that render purely for their cache side effect.
+import { createCookies } from '@kiln/core';
 import type { KilnRequest, KilnResponse } from '@kiln/core';
 
 /**
@@ -53,9 +54,11 @@ export function makePrebakeRequest(
 /** Response sink for startup prebakes — the handler's side effect (writing
  * the cache) is the point; the rendered body has no recipient. */
 export function makeNoopResponse(): KilnResponse {
+  const headers = new Headers();
   return {
     status: 200,
-    headers: {},
+    headers,
+    cookies: createCookies(headers),
     html: () => {},
     json: () => {},
     redirect: () => {},

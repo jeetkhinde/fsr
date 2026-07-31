@@ -6,11 +6,16 @@ Last updated: 2026-07-31
 
 ## Current State
 
-**Everything is merged. `main` @ `347ad6d`, working tree clean, no open PRs, no worktrees.**
+**In flight: `feat/action-response-api`** (worktree `.worktrees/feat-action-response-api`) — P0 #2,
+complete and verified, not yet merged. `main` @ `f5fa13a`.
 
-Last full framework verification: **2026-07-31** @ `347ad6d` — `bun run test:unit`
-**225 pass / 60 skip / 0 fail**, `bun run test:integration` exit 0 (live PG + Redis),
-`bun run build` green, and a fresh `git clone` builds in a single pass.
+Last full framework verification: **2026-07-31** on `feat/action-response-api` — `bun run test:unit`
+**248 pass / 60 skip / 0 fail**, `bun run test:integration` exit 0 (live PG + Redis),
+`bun run build` exit 0, and all seven `apps/jags-list` suites green individually (24 pass / 0 fail).
+
+Note for fresh worktrees: they start with no `node_modules` and no `packages/*/dist`, so
+`bun install && bun run build` must run before any test, and `.env` files must be copied in
+(still gitignored — the P2 item below).
 
 Merged since 2026-07-27:
 - **PR #27** — layout cache keyed by pattern AND its own params (fixes cross-instance chrome leak).
@@ -47,20 +52,23 @@ from the older roadmap.
 
 ### P0 — will bite a real app at launch
 
-**1. The framework assumes it owns the server, so auth and islands are mutually exclusive.** (L)
+**1. An app that owns its entry point cannot use islands.** (M — smaller than it was)
 `kiln dev` / `kiln start` construct their own `ElysiaAdapter` (`packages/cli/src/cli.ts:148,204`)
-and never load the app's own entry. But an app that must set a cookie has to own its entry, because
-actions cannot touch the response (see #2). Net effect: **auth forces a custom entry, and a custom
-entry forfeits the island build pipeline** (Vite chunks + `kiln-islands.json`). `apps/jags-list`
-hit exactly this and has no islands as a result. `startKiln` does accept `islandsManifestUrl`
-(`boot.ts:39`), and `kiln start` serves `/_kiln/client/*` in ~20 replicable lines, so a seam
-exists — it is just undocumented and unsupported.
+and never load the app's own entry, so a custom entry forfeits the island build pipeline (Vite
+chunks + `kiln-islands.json`). `apps/jags-list` still has no islands.
 
-**2. Actions never receive `res`.** (M) `actions[actionName](req)` — `boot.ts:88`. No cookies, no
-custom status, no headers from an action. Consequences already observed: login/logout had to become
-raw adapter routes, and a 409 was unreachable in Plan 3b because `AppError` offers only
-404/401/403/422/500/redirect (`packages/core/src/errors.ts`). **Fixing this likely dissolves half
-of #1.** The API shape is a public-surface decision — brainstorm before implementing.
+**The old framing — "auth forces a custom entry" — is dead.** #2 is fixed, so cookies no longer
+require owning the entry. What actually keeps jags-list on a custom entry, read from
+`apps/jags-list/src/main.ts` after the rewrite, is (a) better-auth's `/api/auth/*` catch-all, which
+is not a Kiln page, and (b) its hand-built FSR wiring and `registerAsset` call. So this is now
+"let app code contribute raw routes and assets under the CLI", which is a smaller and much better
+defined problem. `startKiln` already accepts `islandsManifestUrl` (`boot.ts:39`) and `kiln start`
+serves `/_kiln/client/*` in ~20 replicable lines.
+
+**2. ~~Actions never receive `res`.~~ DONE 2026-07-31** — `feat/action-response-api`, ADR-019.
+Actions get `(req, res)`; `headers` is a `Headers` with a required `res.cookies`;
+`AppError.conflict()` covers 409. jags-list's raw auth routes are deleted. Details in
+[bugs-resolved.md](bugs-resolved.md) §0.
 
 **3. `Live.list` is far narrower than its API suggests.** (L for the cluster) Four constraints,
 none visible at the call site:
@@ -97,11 +105,19 @@ The third is the worst of these — wrong-user data, not merely missing updates.
 
 ### Recommended starting point
 
-P0 #1 and #2 are close to one problem. Give actions a response handle, then let a custom entry
-consume the island pipeline — #1 and #2 collapse together, and jags-list can finally exercise
-islands, which is the point of having it. Then the `Live.list` cluster, starting with auto-deps
-parity because it fails silently.
+**The `Live.list` cluster (#3), starting with auto-deps parity** — it fails silently, which makes it
+the worst remaining defect. Then #1, which is now well-defined: give app code a way to register raw
+routes and assets under `kiln dev`/`kiln start`, and jags-list can finally exercise islands.
 
-**Open decision before coding:** the action/response API shape. Options include passing `res` as a
-second argument, returning a response descriptor, or a `cookies`/`headers` bag on the request.
-Worth a brainstorm — it is public surface and hard to change later.
+The theory that #1 and #2 would "collapse together" was **tested and only half held**. Fixing #2 did
+remove auth as a reason to own the entry, but jags-list still needs a custom entry for better-auth's
+catch-all and its FSR wiring — so #1 survived, in reduced form. Recorded because the prediction was
+explicit and the outcome should be too.
+
+### Known test-harness limitation (found 2026-07-31)
+
+`cd apps/jags-list && RUN_APP_TESTS=1 bun test tests/` — running all suites in **one** invocation —
+fails with `PostgresError: Connection closed` (3 pass / 10 fail). Each suite spawns its own server
+and the connections collide. **This is pre-existing, not a regression**: verified identical on
+unmodified `main` @ `f5fa13a`. Run the suites one file at a time; all seven pass individually.
+Worth fixing eventually, but it is a harness issue, not a framework defect.

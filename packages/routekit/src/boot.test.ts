@@ -1,5 +1,6 @@
 import { describe, it, expect, spyOn } from 'bun:test';
 import { buildPageHandler, applyLivePropMarkers, warnDomLiveInsideIslands, startKiln } from './boot.js';
+import { createCookies } from '@kiln/core';
 import type { KilnRequest, KilnResponse } from '@kiln/core';
 import * as os from 'os';
 import * as path from 'path';
@@ -23,14 +24,18 @@ function makeReq(overrides: Partial<KilnRequest> = {}): KilnRequest {
 }
 
 function makeRes(): any {
-  const res: any = { status: 200, headers: {}, captured: null };
+  const headers = new Headers();
+  const res: any = { status: 200, headers, cookies: createCookies(headers), captured: null };
   res.html = (b: string) => {
+    res.bodyType = 'html';
     res.captured = { type: 'html', body: b };
   };
   res.json = (b: unknown) => {
+    res.bodyType = 'json';
     res.captured = { type: 'json', body: b };
   };
   res.redirect = (url: string) => {
+    res.bodyType = 'redirect';
     res.captured = { type: 'redirect', url };
   };
   res.sse = () => {};
@@ -316,6 +321,122 @@ describe('buildPageHandler', () => {
     await fs.rm(tmpDir, { recursive: true });
   });
 
+  it('passes res to the action, so it can set cookies', async () => {
+    const { buildActionHandler } = await import('./boot.js');
+    const handler = buildActionHandler({
+      signin: async (_req: any, res: any) => {
+        res.cookies.set('sid', 'abc', { httpOnly: true });
+        return { ok: true };
+      },
+    });
+
+    const res = makeRes();
+    await handler(
+      makeReq({ path: '/login', method: 'POST', query: { '/signin': '' } as any }) as any,
+      res,
+    );
+
+    expect(res.headers.getSetCookie()).toEqual(['sid=abc; Path=/; HttpOnly']);
+    expect(res.captured).toEqual({ type: 'json', body: { ok: true } });
+  });
+
+  it('preserves a status the action set, so 409 is reachable', async () => {
+    const { buildActionHandler } = await import('./boot.js');
+    const handler = buildActionHandler({
+      claim: async (_req: any, res: any) => {
+        res.status = 409;
+        return { error: 'already claimed' };
+      },
+    });
+
+    const res = makeRes();
+    await handler(
+      makeReq({ path: '/t', method: 'POST', query: { '/claim': '' } as any }) as any,
+      res,
+    );
+
+    expect(res.status).toBe(409);
+    expect(res.captured).toEqual({ type: 'json', body: { error: 'already claimed' } });
+  });
+
+  it('keeps cookies staged before an AppError.redirect', async () => {
+    const { buildActionHandler } = await import('./boot.js');
+    const { AppError } = await import('@kiln/core');
+    const handler = buildActionHandler({
+      signout: async (_req: any, res: any) => {
+        res.cookies.delete('sid');
+        throw AppError.redirect('/login');
+      },
+    });
+
+    const res = makeRes();
+    await handler(
+      makeReq({ path: '/login', method: 'POST', query: { '/signout': '' } as any }) as any,
+      res,
+    );
+
+    expect(res.captured).toEqual({ type: 'redirect', url: '/login' });
+    expect(res.headers.getSetCookie()).toEqual(['sid=; Path=/; Max-Age=0']);
+  });
+
+  it('does not overwrite a body the action committed itself', async () => {
+    const { buildActionHandler } = await import('./boot.js');
+    const handler = buildActionHandler({
+      csv: async (_req: any, res: any) => {
+        res.headers.set('content-type', 'text/csv');
+        res.html('a,b\n1,2');
+      },
+    });
+
+    const res = makeRes();
+    await handler(
+      makeReq({ path: '/t', method: 'POST', query: { '/csv': '' } as any }) as any,
+      res,
+    );
+
+    expect(res.captured).toEqual({ type: 'html', body: 'a,b\n1,2' });
+  });
+
+  it('warns when an action both commits a body and returns a value', async () => {
+    const { buildActionHandler } = await import('./boot.js');
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (msg: string) => warnings.push(String(msg));
+    try {
+      const handler = buildActionHandler({
+        both: async (_req: any, res: any) => {
+          res.html('committed');
+          return { ignored: true };
+        },
+      });
+      const res = makeRes();
+      await handler(
+        makeReq({ path: '/warn-both', method: 'POST', query: { '/both': '' } as any }) as any,
+        res,
+      );
+      expect(res.captured).toEqual({ type: 'html', body: 'committed' });
+    } finally {
+      console.warn = original;
+    }
+
+    expect(warnings.some((w) => w.includes('both wrote to res and returned a value'))).toBe(true);
+  });
+
+  it('still supports a one-argument action', async () => {
+    const { buildActionHandler } = await import('./boot.js');
+    const handler = buildActionHandler({
+      legacy: async (_req: any) => ({ greeting: 'hi' }),
+    });
+
+    const res = makeRes();
+    await handler(
+      makeReq({ path: '/t', method: 'POST', query: { '/legacy': '' } as any }) as any,
+      res,
+    );
+
+    expect(res.captured).toEqual({ type: 'json', body: { greeting: 'hi' } });
+  });
+
   it('materializes the latest JSON into an immutable promoted shell', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiln-boot-'));
     const { KilnCache, createBakedSnapshot } = await import('@kiln/engine');
@@ -365,7 +486,7 @@ describe('buildPageHandler', () => {
       headers: new Headers(),
     }) as any, res);
     expect(res.captured.type).toBe('html');
-    expect(res.headers['content-type']).toContain('x-ps-fragment=1');
+    expect(res.headers.get('content-type')).toContain('x-ps-fragment=1');
     expect(res.captured.body).toContain('data-ps-slot="/contacts"');
     expect(res.captured.body).toContain('Detail');
     await fs.rm(tmpDir, { recursive: true });
@@ -420,7 +541,7 @@ describe('buildPageHandler', () => {
       }) as any,
       rootOnlyRes,
     );
-    expect(rootOnlyRes.headers['content-type']).toContain('x-ps-fragment=1');
+    expect(rootOnlyRes.headers.get('content-type')).toContain('x-ps-fragment=1');
     expect(rootOnlyRes.captured.body).toContain('data-ps-slot="/"');
     expect(rootOnlyRes.captured.body).toContain('DASHBOARD_MARKER'); // the missing layout is included
     expect(rootOnlyRes.captured.body).toContain('PAGE_MARKER');
@@ -494,8 +615,8 @@ describe('buildPageHandler', () => {
     // recording the cache hit must be set.
     expect(resB.captured.body).toContain('LAYOUT_BAKED_1');
     expect(resB.captured.body).toContain('PAGE_B');
-    expect(resB.headers['x-kiln-layout-cache-hit']).toBe('/section');
-    expect(resA.headers['x-kiln-layout-cache-hit']).toBeUndefined(); // A did the fresh bake
+    expect(resB.headers.get('x-kiln-layout-cache-hit')).toBe('/section');
+    expect(resA.headers.get('x-kiln-layout-cache-hit')).toBeNull(); // A did the fresh bake
 
     await fs.rm(tmpDir, { recursive: true });
   });
@@ -560,7 +681,7 @@ describe('buildPageHandler', () => {
     await board(makeReq({ path: '/projects/ALPHA/board', params: { id: 'ALPHA' } }) as any, alphaBoard);
     expect(alphaBoard.captured.body).toContain('PROBE-ALPHA');
     expect(alphaBoard.captured.body).toContain('BOARD');
-    expect(alphaBoard.headers['x-kiln-layout-cache-hit']).toBe('/projects/:id');
+    expect(alphaBoard.headers.get('x-kiln-layout-cache-hit')).toBe('/projects/:id');
     expect((globalThis as any).__projectLayoutLoads).toBe(2);
 
     await fs.rm(tmpDir, { recursive: true });
@@ -617,7 +738,7 @@ describe('buildPageHandler', () => {
     // Both re-loaded: the layout was never cached, which is the correct
     // trade for a layout whose output varies by something not in its key.
     expect((globalThis as any).__strayLayoutLoads).toBe(2);
-    expect(two.headers['x-kiln-layout-cache-hit']).toBeUndefined();
+    expect(two.headers.get('x-kiln-layout-cache-hit')).toBeNull();
     // And the developer is told why, naming the offending read.
     const messages = warn.mock.calls.map((c) => String(c[0]));
     expect(messages.some((m) => m.includes('ADR-011') && m.includes('params.id'))).toBe(true);
@@ -1789,7 +1910,7 @@ describe('startKiln islands manifest route', () => {
     expect(handler).toBeDefined();
     const res = makeRes();
     await handler!(makeReq({ path: '/_kiln/islands.json' }) as any, res);
-    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.headers.get('cache-control')).toBe('no-store');
     expect(res.captured?.type).toBe('json');
     expect(res.captured?.body).toEqual({ version: 'none', islands: {} });
     await fs.rm(pagesDir, { recursive: true, force: true });

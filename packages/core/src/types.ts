@@ -1,4 +1,5 @@
 import { LiveProp } from './live-prop.js';
+import type { KilnCookies } from './cookies.js';
 
 // ── Request/Response abstractions (framework-agnostic) ──
 
@@ -30,7 +31,12 @@ export interface SSEEvent {
 
 export interface KilnResponse {
   status: number;
-  headers: Record<string, string>;
+  /** Web Headers, matching KilnRequest.headers. A plain record cannot carry
+   * multiple Set-Cookie values, which is what actions setting cookies need. */
+  headers: Headers;
+  /** Cookie helper bound to `headers`. Required of every adapter, so app code
+   * can call it unconditionally. */
+  cookies: KilnCookies;
   body?: string | unknown | AsyncIterable<SSEEvent>;
   bodyType?: 'html' | 'json' | 'sse' | 'redirect' | 'binary';
   redirectUrl?: string;
@@ -59,6 +65,20 @@ export interface KilnResponse {
  * never an Elysia context, so the contract holds across adapters.
  */
 export type KilnHandle = (req: KilnRequest, res: KilnResponse) => void | Promise<void>;
+
+/**
+ * A page action: the named handlers a page exports as `actions`. Receives the
+ * same (req, res) pair as every other Kiln handler, so an action can set
+ * cookies, headers and a custom status.
+ *
+ * Return a value and Kiln sends it as JSON. Alternatively commit a response
+ * yourself (res.html/json/redirect/binary) and Kiln sends that instead —
+ * the same rule KilnHandle uses. Doing both warns; the return value loses.
+ */
+export type KilnAction = (
+  req: KilnRequest,
+  res: KilnResponse,
+) => unknown | Promise<unknown>;
 
 /** Resolves the stable user key for per-user caching (bake = 'user').
  * Runs after `handle`, so req.locals is populated. Return null for

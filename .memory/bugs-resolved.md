@@ -4,6 +4,34 @@ Historical record of fixed framework bugs, kept out of the active file to keep s
 
 > **Last full verification**: 2026-07-12 (Gemini-audit round 2). `tsc --noEmit` clean across every package; unit suite 149 pass / 0 fail.
 
+## 0. Fixed 2026-07-31 (branch `feat/action-response-api`)
+
+*   **Actions could not touch the response** — invoked as `actions[actionName](req)`
+    (`packages/routekit/src/boot.ts`), so an action could set no cookies, no headers and no custom
+    status. This forced jags-list's login/logout onto raw Elysia routes and made 409 unreachable.
+
+    Fixed by passing `res` through as a second argument (`KilnAction` in
+    `packages/core/src/types.ts`), with precedence reusing the rule `KilnHandle` already documented:
+    a committed body wins over the return value, and doing both warns rather than silently
+    discarding.
+
+    **A constraint the original gap survey missed:** `KilnResponse.headers` was
+    `Record<string, string>`, which cannot carry multiple `Set-Cookie` values — so passing `res`
+    alone would not have fixed the driving case. `headers` is now a web `Headers` (matching
+    `KilnRequest.headers`), with a required `res.cookies` façade whose `path` defaults to `/`. The
+    Elysia adapter keeps `ctx.set.headers` a plain record and passes `set-cookie` as a `string[]`;
+    assigning a `Headers` instance there was rejected because the record-style writes in
+    `context.ts`/`middleware/compression.ts` would have been dropped with no error of any kind.
+
+    `AppError.conflict()` (409) added for code too deep in a call stack to reach `res`.
+
+    **Proven by falsification:** the raw `/auth/login` and `/auth/logout` routes were deleted from
+    `apps/jags-list/src/main.ts` and reimplemented as actions;
+    `apps/jags-list/tests/app.integration.test.ts` passes 6/6 with its assertions unchanged (only
+    URLs moved). Full framework verification at the time: unit 248 pass / 60 skip / 0 fail,
+    `test:integration` exit 0, `bun run build` exit 0, and all seven jags-list suites green
+    individually (24 pass / 0 fail). See ADR-019.
+
 ## 1. Fixed in the 2026-07-27 source audit (branch `fix/emit-event-non-bigint-id`)
 
 Self-audit of the framework at `758eb44`, all six findings verified against source before fixing

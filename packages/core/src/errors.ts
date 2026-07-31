@@ -1,6 +1,6 @@
 export class AppError extends Error {
   constructor(
-    public readonly type: 'NotFound' | 'Unauthorized' | 'Forbidden' | 'Validation' | 'Internal' | 'Redirect',
+    public readonly type: 'NotFound' | 'Unauthorized' | 'Forbidden' | 'Validation' | 'Conflict' | 'Internal' | 'Redirect',
     message: string,
     public readonly status: number
   ) {
@@ -23,6 +23,13 @@ export class AppError extends Error {
 
   static validation(message: string): AppError {
     return new AppError('Validation', message, 422);
+  }
+
+  /** 409. Throwing is how code deep in a call stack signals an outcome, where
+   * `res` is out of reach — a db helper detecting a duplicate cannot set
+   * res.status. Statuses beyond 409 use res.status from an action. */
+  static conflict(message = 'Conflict'): AppError {
+    return new AppError('Conflict', message, 409);
   }
 
   static internal(message = 'Internal Server Error'): AppError {
