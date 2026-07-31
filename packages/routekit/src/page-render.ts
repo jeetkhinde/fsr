@@ -769,7 +769,7 @@ export function buildPageHandler(
     // any client logic — purely so this can be verified from the outside.
     const cacheHitPatterns = layoutPatterns.filter((_, i) => layoutFromCache[i]);
     if (cacheHitPatterns.length > 0) {
-      res.headers['x-kiln-layout-cache-hit'] = cacheHitPatterns.join(',');
+      res.headers.set('x-kiln-layout-cache-hit', cacheHitPatterns.join(','));
     }
 
     respondWithNavigationShape(res, req, layoutPatterns, pageMeta.pattern, finalHtml);

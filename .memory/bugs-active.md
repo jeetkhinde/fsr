@@ -30,16 +30,27 @@ here so they are tracked as defects rather than living only in a session transcr
     scalar path, never publishes to the Silcrow store. `LiveListOptions` also has no `target`
     option, so there is no opt-in either (`packages/live/src/list.ts`).
 
-*   **Actions cannot touch the response** — invoked as `actions[actionName](req)`
-    (`packages/routekit/src/boot.ts:88`). No cookies, no custom status, no headers. Forces auth
-    endpoints onto raw adapter routes, and makes some status codes unreachable: `AppError` offers
-    only 404/401/403/422/500/redirect (`packages/core/src/errors.ts`), so a 409 cannot be returned.
+*   ~~**Actions cannot touch the response**~~ — **FIXED 2026-07-31** on `feat/action-response-api`.
+    Actions now receive `(req, res)`; `KilnResponse.headers` is a `Headers` with a required
+    `res.cookies`; `AppError.conflict()` covers 409. See ADR-019 and
+    [bugs-resolved.md](bugs-resolved.md).
 
 *   **An app that owns its entry point cannot use islands** — `kiln dev`/`kiln start` build their own
-    `ElysiaAdapter` (`packages/cli/src/cli.ts:148,204`) and never load the app's entry, but an app
-    needing cookies must own its entry (see above). `apps/jags-list` is blocked on this and has no
-    islands. A seam exists (`startKiln` accepts `islandsManifestUrl`, `boot.ts:39`) but is
-    undocumented and unsupported.
+    `ElysiaAdapter` (`packages/cli/src/cli.ts:148,204`) and never load the app's entry.
+    `apps/jags-list` still has no islands. A seam exists (`startKiln` accepts `islandsManifestUrl`,
+    `boot.ts:39`) but is undocumented and unsupported.
+
+    **The cause has changed, and the old framing is now wrong.** This entry used to say "an app
+    needing cookies must own its entry" — that is no longer true, since login/logout are ordinary
+    actions. What still forces jags-list onto a custom entry, verified in
+    `apps/jags-list/src/main.ts` after the rewrite:
+    1. `adapter.app.all('/api/auth/*', ...)` — better-auth's own catch-all handler, which is not a
+       Kiln page and has nowhere else to mount;
+    2. its hand-built `FsrStore`/`FsrWatcher`/`startDbNotificationPipeline` wiring and
+       `registerAsset` call, which duplicate what the CLI's `initFsr` does.
+
+    So closing this needs a way to register raw routes and assets from app code under `kiln dev` /
+    `kiln start` — a smaller, better-defined problem than before, and no longer coupled to auth.
 
 *   **Four warned-but-surprising combinations** (each a live `warnOnce`): `cacheKey` + live fields
     (updates skipped); `bake='user'` + `Live.list` (unsupported); `bake='user'` + dynamic segment +

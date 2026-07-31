@@ -243,6 +243,56 @@ applies.
 
 ---
 
+## ADR-019: Actions Receive the Response
+
+**Status:** ACCEPTED (2026-07-31)
+**Decision:** Page actions are invoked as `actions[name](req, res)`
+(`packages/routekit/src/boot.ts`), not `(req)`. The new `KilnAction` type
+(`packages/core/src/types.ts`) makes this the declared contract, matching the
+four handler surfaces that already used `(req, res)`: `KilnHandle` and
+`registerPage`/`registerAction`/`registerSSE`. Rejected alternatives: returning
+a response descriptor (ambiguous against the existing "returned object is the
+JSON payload" contract, needing a Symbol brand), and returning a web `Response`
+(least adapter-agnostic, leaves cookie construction as manual string-building).
+
+**Precedence** deliberately reuses the rule `KilnHandle` already documents, so
+there is one rule rather than two: a body the action committed itself wins over
+its return value; returning a value *and* committing a body emits a `warnOnce`
+rather than silently discarding the return; otherwise the return value is sent
+as JSON as before. `AppError` handling and `invalidateActor` are unchanged, and
+cookies staged on `res` survive both the redirect and the error path because
+they live in `res.headers`, independent of the body. One-argument actions keep
+working — TypeScript assigns them to the two-parameter type and JS ignores the
+extra argument.
+
+**`KilnResponse.headers` is now a web `Headers`**, not `Record<string, string>`.
+A record cannot carry multiple `Set-Cookie` values, which is the driving case;
+`KilnRequest.headers` was already a `Headers`, so this also removes an
+asymmetry. `KilnResponse.cookies` (`packages/core/src/cookies.ts`) is a
+**required** member — `set`/`delete` with `path` defaulting to `/`, because
+without that default a session cookie set from `POST /login` is scoped to
+`/login` and silently invisible elsewhere. Serialization lives in one pure
+module bound to the `Headers` via `createCookies`.
+
+**Adapter:** `ctx.set.headers` deliberately stays Elysia's plain record;
+`applyHeaders` (`packages/adapter-elysia/src/context.ts`) translates, passing
+`set-cookie` as a `string[]` which Elysia expands into one header per entry
+(verified against 1.4.28 and guarded by `multi-cookie.test.ts`). Assigning a
+`Headers` instance to `ctx.set.headers` — which Elysia also supports — was
+rejected: the record-style writes in `context.ts` and `middleware/compression.ts`
+would then set plain JS properties and be dropped with no type error and no
+runtime error. Note that Elysia's own cookie jar (`set.cookie`) would overwrite
+the array; Kiln does not use it, and anything reaching for it must revisit this.
+
+`AppError.conflict()` (409) was added, since code deep in a call stack signals
+by throwing and cannot reach `res`. Statuses beyond 409 use `res.status`.
+
+**Proven by:** `apps/jags-list` login/logout moved off raw Elysia routes onto
+ordinary actions; `apps/jags-list/tests/app.integration.test.ts` passes with its
+assertions unchanged.
+
+---
+
 ## ADR-004: Field-Level Granularity — LiveProp vs Static
 
 **Status:** LOCKED

@@ -18,42 +18,8 @@ async function main() {
   // construction (no session needed to sign in).
   adapter.app.all('/api/auth/*', (ctx: any) => auth.handler(ctx.request));
 
-  // Form-post login/logout. Raw Elysia routes, NOT Kiln actions, because
-  // actions receive only `req` and cannot set Set-Cookie headers (spec §9
-  // gap 3). Being raw routes, `handle` does not run for them (public).
-  adapter.app.post('/auth/login', async (ctx: any) => {
-    const form = await ctx.request.formData();
-    const email = String(form.get('email') ?? '');
-    const password = String(form.get('password') ?? '');
-    try {
-      const res = await auth.api.signInEmail({
-        body: { email, password },
-        asResponse: true,
-      });
-      if (!res.ok) {
-        return new Response(null, { status: 303, headers: { location: '/login?error=1' } });
-      }
-      const headers = new Headers({ location: '/' });
-      for (const cookie of res.headers.getSetCookie()) headers.append('set-cookie', cookie);
-      return new Response(null, { status: 303, headers });
-    } catch {
-      return new Response(null, { status: 303, headers: { location: '/login?error=1' } });
-    }
-  });
-
-  adapter.app.post('/auth/logout', async (ctx: any) => {
-    const headers = new Headers({ location: '/login' });
-    try {
-      const res = await auth.api.signOut({
-        headers: ctx.request.headers,
-        asResponse: true,
-      });
-      for (const cookie of res.headers.getSetCookie()) headers.append('set-cookie', cookie);
-    } catch {
-      // no/invalid session — still land on /login
-    }
-    return new Response(null, { status: 303, headers });
-  });
+  // Login/logout are Kiln actions on the /login page (pages/login.tsx), not
+  // raw routes: actions now receive `res` and can set Set-Cookie themselves.
   const store = new FsrStore(sql);
   const fsrConfig = config.fsr;
   const redis = fsrConfig.redisUrl

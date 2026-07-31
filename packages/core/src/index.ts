@@ -1,4 +1,5 @@
 export * from './config.js';
+export * from './cookies.js';
 export * from './errors.js';
 export * from './i18n.js';
 export * from './list.js';

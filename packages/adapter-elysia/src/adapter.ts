@@ -1,6 +1,6 @@
 import { Elysia, sse, file } from 'elysia';
 import type { ServerAdapter, KilnRequest, KilnResponse, KilnHandle, MiddlewareConfig, SSEEvent } from '@kiln/core';
-import { wrapRequest, ElysiaResponseImpl, handleElysiaResponse } from './context.js';
+import { wrapRequest, ElysiaResponseImpl, handleElysiaResponse, applyHeaders } from './context.js';
 import { csrf, timeout, withTimeout, compression, tracing, loadHooks, serverHooks } from './middleware/index.js';
 export class ElysiaAdapter implements ServerAdapter {
   public app: Elysia;
@@ -67,13 +67,13 @@ export class ElysiaAdapter implements ServerAdapter {
       // set ctx.set.status + location; mirror status defensively.
       if (await self.runHandle(req, res)) {
         if (res.status) ctx.set.status = res.status;
-        for (const [k, v] of Object.entries(res.headers)) ctx.set.headers[k] = v;
+        applyHeaders(res.headers, ctx);
         return;
       }
       await handler(req, res);
 
       if (res.status && res.status !== 200) ctx.set.status = res.status;
-      for (const [k, v] of Object.entries(res.headers)) ctx.set.headers[k] = v;
+      applyHeaders(res.headers, ctx);
 
       if (res.bodyType === 'sse' && res.body) {
         for await (const event of res.body as AsyncIterable<SSEEvent>) {
