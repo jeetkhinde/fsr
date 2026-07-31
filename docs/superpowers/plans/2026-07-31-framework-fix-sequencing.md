@@ -70,7 +70,7 @@ cheaper. It is DX, not correctness — if the queue is tight, it can slide to th
 
 ---
 
-### 1. SSE user scoping on dynamic routes — **start first**
+### 1. SSE user scoping on dynamic routes — **DONE** (PR #34)
 
 **Severity**: highest open defect. A `bake='user'` page on a dynamic route silently stops
 delivering live updates entirely.
@@ -224,7 +224,7 @@ Not startable until that is answered.
 | # | Item | Severity | Start before #31/#32 merge? |
 |---|---|---|---|
 | 0 | `.env.example` + preflight | XS / DX | Yes — zero conflict |
-| 1 | SSE user scoping on dynamic routes (silent loss of live updates) | **Highest** | **Yes** — no hunk overlap |
+| 1 | ~~SSE user scoping on dynamic routes~~ | **Highest** | **DONE — PR #34** |
 | 2 | `Live.list` non-`<li>` markup | High | Yes — zero file overlap |
 | 3 | Layout scalar auto-deps | Moderate | Prefer after #32 |
 | 4 | `Live.list` in islands + `target` | Moderate | **No — blocked by #32** |
@@ -232,5 +232,6 @@ Not startable until that is answered.
 | 6 | Three remaining warned combos | Low | Measure when started |
 | 7 | External watcher | — | Blocked on maintainer decision |
 
-**Recommended next action:** start item 1 off `main`. It is the highest-severity defect, it is
-conflict-free against both open PRs, and it is the one the test vehicle can never find on its own.
+**Item 1 shipped as PR #34** (`match-pattern.ts` + a shared `resolveRouteUserKey`; unit 244/0,
+integration exit 0, build exit 0). **Next: item 2**, `Live.list` non-`<li>` markup — it touches
+`live-list-render.ts`, which no open PR touches, so it can start immediately off `main`.
