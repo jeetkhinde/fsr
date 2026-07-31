@@ -190,6 +190,23 @@ export function applyLivePropMarkers(html: string, props: Record<string, unknown
   return result;
 }
 
+/**
+ * Every distinct `s-live="…"` slot name in a rendered document, in source
+ * order. Used by the cached-shell path to notice slots the page's own load()
+ * does not produce — those come from a layout, whose live registration only
+ * happens on a full render.
+ */
+export function extractLiveSlotNames(html: string | null | undefined): string[] {
+  if (!html) return [];
+  const names: string[] = [];
+  const re = /\ss-live="([^"]*)"/g;
+  for (let m = re.exec(html); m; m = re.exec(html)) {
+    const name = m[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+    if (name && !names.includes(name)) names.push(name);
+  }
+  return names;
+}
+
 export function countOccurrences(haystack: string, needle: string): number {
   if (!needle) return 0;
   let count = 0;

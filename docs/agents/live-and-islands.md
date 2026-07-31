@@ -37,6 +37,17 @@ Live.list<T>(options)           // see below
 | `'store'` | Updates the client store only (no DOM write) — **required inside islands** |
 | `'dom-and-store'` | Both |
 
+### `LiveProp` in a layout
+
+A `_layout.tsx`'s `load()` may return `LiveProp` fields, and they update exactly like a page's: the field is registered under the **page's** concrete route (which is what the browser subscribes with), its `load()` is dep-captured on its own, and the watcher re-runs that layout's `load()` when a captured table changes. Nothing extra to declare.
+
+Two consequences worth knowing:
+
+- **Auto-deps are per segment.** A layout field depends on the tables the *layout's* `load()` queried, never the page's, and vice versa — one write does not revalidate the other segment's fields.
+- **A name collision resolves to the page.** If a layout and its page both return a field called `unread`, the page's wins, matching how `load()` results merge into props.
+
+`Live.list` in a layout is a different story — see [the dynamic-segment restriction](#livelist--real-time-collections-with-row-diffing) below.
+
 ### Manual dependency keys: the row-level escape hatch
 
 `dependsOn` keys accept either form:
