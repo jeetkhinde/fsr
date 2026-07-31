@@ -36,13 +36,13 @@ export async function load(req: KilnRequest) {
   const project = await projectById(projectId);
   if (!project || project.archived_at) throw AppError.notFound('Project not found');
   return {
-    // dependsOn is MANDATORY here: unlike LiveProp, Live.list does not union
-    // auto-deps (boot.ts registerLiveLists passes meta.dependsOn straight
-    // through). 'activity' is the table-level dep key kiln sync-triggers
-    // emits for this table per kiln.config.ts fsr.triggerTables.
+    // No dependsOn: the framework captures the tables this list's own query
+    // touches (`activity`, plus `user` via the join) and registers them as
+    // dependencies automatically, exactly as it does for scalar Live.value.
+    // This page is the falsification for that behaviour — if auto-deps
+    // regresses, tests/live.integration.test.ts times out.
     events: Live.list<ActivityRow>({
       key: (row) => row.id,
-      dependsOn: 'activity',
       initial: await activityRows(projectId),
       query: () => activityRows(projectId),
     }),

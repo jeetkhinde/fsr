@@ -15,12 +15,10 @@ Open **framework** issues only. Resolved history → [bugs-resolved.md](bugs-res
 Full prioritisation and rationale in [active-work.md](active-work.md) § Next Priorities. Recorded
 here so they are tracked as defects rather than living only in a session transcript.
 
-*   **`Live.list` receives no auto-deps, and fails silently without `dependsOn`** — `registerLiveLists`
-    passes `meta.dependsOn` straight through (`packages/routekit/src/live-registration.ts:89,107`),
-    while scalar `LiveProp` unions the request's observed tables. Omitting `dependsOn` registers a
-    list that never updates, with no error. Asymmetric and invisible at the call site.
-    **Treat as a bug, not a gap.** Falsifiable: deleting `dependsOn` in
-    `apps/jags-list/pages/projects/[id]/activity.tsx` makes `bun run test:live` fail on a 20s timeout.
+*   ~~**`Live.list` receives no auto-deps, and fails silently without `dependsOn`**~~ — **FIXED
+    2026-07-31** on `fix/live-list-auto-deps`. A list now captures its own query's tables and
+    unions them at registration; a list with no deps at all warns. See ADR-018's 2026-07-31
+    amendment and [bugs-resolved.md](bugs-resolved.md).
 
 *   **`Live.list` cannot mark non-`<ul>/<li>` markup** — `applyLiveListMarkers` finds rows by
     scanning for `<li>` inside the nearest `<ul>`/`<ol>`

@@ -4,7 +4,39 @@ Historical record of fixed framework bugs, kept out of the active file to keep s
 
 > **Last full verification**: 2026-07-12 (Gemini-audit round 2). `tsc --noEmit` clean across every package; unit suite 149 pass / 0 fail.
 
-## 0. Fixed 2026-07-31 (branch `feat/action-response-api`)
+## 0. Fixed 2026-07-31
+
+### `fix/live-list-auto-deps`
+
+*   **`Live.list` received no auto-deps** — `registerLiveLists` passed `meta.dependsOn` straight
+    through while scalar `LiveProp` unioned the request's observed tables, so omitting `dependsOn`
+    degraded a list with nothing logged.
+
+    Fixed by capturing each list's **own** query in its own `withDepCapture` scope inside
+    `materializeLiveLists`; the tables ride on `LiveListMeta.autoDeps` and are unioned by
+    `resolveListDeps` at registration, gated on `fsr.autoDeps` as the scalar path is. A list left
+    with no deps at all now emits a `warnOnce`.
+
+    **Correction to the original report:** it claimed a dep-less list "never updates". That is true
+    only with `revalidate: false` (persisted as `revalidate_secs = 0`). Otherwise `fetchStaleLists`
+    still refreshes it via `COALESCE(revalidate_secs, 300) > 0`, so it degrades to ~300s polling
+    rather than dying. Real bug either way; the severity claim was wrong.
+
+    **Why per-list capture rather than reusing the page's `observedTables`:** `initial` is optional
+    and the page's capture wraps only `load()`, so a list omitting `initial` would have captured
+    nothing — preserving the exact silent-failure case being fixed.
+
+    **Proven by falsification, in both directions.** The explicit `dependsOn: 'activity'` was
+    deleted from `apps/jags-list/pages/projects/[id]/activity.tsx` and `bun run test:live` passes.
+    With `live-registration.ts` and `page-render.ts` reverted to `main` and routekit rebuilt
+    (confirmed via `grep -c withDepCapture packages/routekit/dist/live-registration.js` → 0), the
+    same suite fails at 20044ms — so the test genuinely detects the regression rather than merely
+    passing. Resolved deps logged as `["activity", "user"]`: the needed key plus a harmless
+    over-capture from the `LEFT JOIN "user"`.
+
+    Verification at the time: unit 244 pass / 60 skip / 0 fail, `test:integration` exit 0,
+    `bun run build` exit 0, all seven jags-list suites green individually (24 pass / 0 fail).
+### `feat/action-response-api`
 
 *   **Actions could not touch the response** — invoked as `actions[actionName](req)`
     (`packages/routekit/src/boot.ts`), so an action could set no cookies, no headers and no custom

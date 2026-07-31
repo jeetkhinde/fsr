@@ -70,18 +70,22 @@ Actions get `(req, res)`; `headers` is a `Headers` with a required `res.cookies`
 `AppError.conflict()` covers 409. jags-list's raw auth routes are deleted. Details in
 [bugs-resolved.md](bugs-resolved.md) §0.
 
-**3. `Live.list` is far narrower than its API suggests.** (L for the cluster) Four constraints,
-none visible at the call site:
+**3. `Live.list` is far narrower than its API suggests.** (M for what remains) Three constraints
+left, none visible at the call site:
 - rows must be `<li>` inside `<ul>`/`<ol>` (`live-list-render.ts:90,131`) — a div board or a table
   cannot be marked at all;
 - patches are dropped inside islands (`live-client-script.ts:63`) and, unlike scalars, never
   published to the store — so a list inside an island receives nothing;
 - no `target` option, unlike `LiveProp` (`packages/live/src/list.ts`);
-- **no auto-deps** — `registerLiveLists` passes `meta.dependsOn` straight through
-  (`live-registration.ts:89,107`) while `LiveProp` unions observed tables. Omit `dependsOn` and the
-  list silently never updates. **Treat this one as a bug, not a gap**: the asymmetry is invisible
-  and fails silently. Proven by falsification in `apps/jags-list` (`bun run test:live` fails on a
-  20s timeout without it).
+- ~~no auto-deps~~ — **DONE 2026-07-31** on `fix/live-list-auto-deps`. Each list captures its own
+  query's tables; a list with no deps at all warns. jags-list's explicit `dependsOn` is deleted and
+  `test:live` passes on captured deps. Details in [bugs-resolved.md](bugs-resolved.md) §0.
+
+**Found while fixing the above, not fixed:** layout `load()` is never wrapped in `withDepCapture`
+(`page-render.ts`, the layout branch calls `lMod.load(tracker.proxied)` directly), so layout
+**scalar** live fields get no auto-deps at all. Layout *lists* are fine — list capture is
+self-contained. Unmeasured severity; nobody has hit it because layouts with live scalars are rare
+in the test vehicle.
 
 ### P1 — warned, but still surprising (each is a live `warnOnce`)
 
@@ -105,14 +109,16 @@ The third is the worst of these — wrong-user data, not merely missing updates.
 
 ### Recommended starting point
 
-**The `Live.list` cluster (#3), starting with auto-deps parity** — it fails silently, which makes it
-the worst remaining defect. Then #1, which is now well-defined: give app code a way to register raw
-routes and assets under `kiln dev`/`kiln start`, and jags-list can finally exercise islands.
+**Ordering now lives in `docs/superpowers/plans/2026-07-31-framework-fix-sequencing.md`** (merged
+via PR #33) — it ranks every remaining framework item by framework severity and records a measured
+conflict map. Read that first; this section only summarises.
 
-The theory that #1 and #2 would "collapse together" was **tested and only half held**. Fixing #2 did
-remove auth as a reason to own the entry, but jags-list still needs a custom entry for better-auth's
-catch-all and its FSR wiring — so #1 survived, in reduced form. Recorded because the prediction was
-explicit and the outcome should be too.
+Landed 2026-07-31: PR #31 (actions receive `res`), PR #32 (`Live.list` auto-deps).
+
+The theory that P0 #1 and #2 would "collapse together" was **tested and only half held**. Fixing #2
+removed auth as a reason to own the entry, but jags-list still needs a custom entry for
+better-auth's catch-all and its FSR wiring — so #1 survived, in reduced form. Recorded because the
+prediction was explicit and the outcome should be too.
 
 ### Known test-harness limitation (found 2026-07-31)
 
@@ -120,4 +126,3 @@ explicit and the outcome should be too.
 fails with `PostgresError: Connection closed` (3 pass / 10 fail). Each suite spawns its own server
 and the connections collide. **This is pre-existing, not a regression**: verified identical on
 unmodified `main` @ `f5fa13a`. Run the suites one file at a time; all seven pass individually.
-Worth fixing eventually, but it is a harness issue, not a framework defect.
