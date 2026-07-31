@@ -163,6 +163,46 @@ function rowTextValues(row: unknown): string[] {
     .map(([, value]) => String(value));
 }
 
+const VOID_ELEMENTS = new Set([
+  "area", "base", "br", "col", "embed", "hr", "img", "input",
+  "link", "meta", "source", "track", "wbr",
+]);
+
+/** The innermost element enclosing `index`. Unlike findNearestOpenTag this
+ * takes no tag name — an explicitly-marked row can sit inside any container,
+ * so the container has to be discovered rather than assumed. Scans forward
+ * keeping a stack, which is what makes "innermost still-open" correct. */
+export function findEnclosingOpenTag(html: string, index: number): Range | null {
+  if (index <= 0) return null;
+  const tagPattern = /<(\/?)([A-Za-z][A-Za-z0-9:-]*)\b[^>]*?(\/?)>/g;
+  const stack: Array<Range & { tagName: string }> = [];
+  let match: RegExpExecArray | null;
+
+  while ((match = tagPattern.exec(html)) !== null) {
+    if (match.index >= index) break;
+    const openEnd = match.index + match[0].length;
+
+    const isClosing = match[1] === "/";
+    const tagName = match[2]!.toLowerCase();
+    const selfClosing = match[3] === "/" || VOID_ELEMENTS.has(tagName);
+
+    if (selfClosing) continue;
+    if (isClosing) {
+      for (let i = stack.length - 1; i >= 0; i--) {
+        if (stack[i]!.tagName === tagName) {
+          stack.length = i;
+          break;
+        }
+      }
+      continue;
+    }
+    stack.push({ start: match.index, openEnd, end: openEnd, tagName });
+  }
+
+  const top = stack[stack.length - 1];
+  return top ? { start: top.start, openEnd: top.openEnd, end: top.end } : null;
+}
+
 function findNextElement(html: string, tagName: string, offset: number): Range | null {
   const open = new RegExp(`<${tagName}\\b[^>]*>`, "gi");
   open.lastIndex = offset;
