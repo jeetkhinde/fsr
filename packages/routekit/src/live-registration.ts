@@ -16,6 +16,7 @@ import { bakeSegment, type FsrStore, type FsrWatcher } from '@kiln/engine';
 import { withDepCapture } from '@kiln/core/sql';
 import { applyLiveListMarkers, extractLiveListRowHtml } from './live-list-render.js';
 import { unwrapLiveProps } from './html-markers.js';
+import { warnOnce } from './dedup.js';
 
 export async function materializeLiveLists(loadResult: any, store?: FsrStore): Promise<any> {
   if (!loadResult || typeof loadResult !== 'object') return loadResult;
@@ -96,6 +97,25 @@ export async function registerLiveLists(input: {
     if (!meta) continue;
     const rows = value as unknown[];
     const dependsOn = resolveListDeps(meta, input.autoDeps !== false);
+    if (dependsOn.length === 0) {
+      // Branch on the EFFECTIVE revalidate — the same expression used when
+      // building the target below — because a list with no deps is not
+      // necessarily dead: fetchStaleLists also refreshes on
+      // COALESCE(revalidate_secs, 300) > 0. Only revalidate:false (stored as
+      // 0) removes that fallback.
+      const effectiveRevalidate = meta.revalidate ?? input.defaultRevalidate;
+      warnOnce(
+        `live-list-no-deps:${input.route}:${name}`,
+        `[kiln] Live.list "${name}" on route "${input.route}" has no dependencies: none were ` +
+          `declared via dependsOn, and none were captured from its query. ` +
+          (effectiveRevalidate === false
+            ? `With revalidate: false it will never update.`
+            : `It will refresh only on the revalidate timer (~300s by default), not when the ` +
+              `underlying data changes.`) +
+          ` Auto-deps only sees queries made through a createKilnSql client, and cannot see a ` +
+          `dynamically-interpolated table name — give the list an explicit dependsOn if either applies.`,
+      );
+    }
     const rendered = extractLiveListRowHtml(input.finalHtml, name);
     const snapshotRows = rows.map((row) => {
       const key = meta.keyOf(row);
