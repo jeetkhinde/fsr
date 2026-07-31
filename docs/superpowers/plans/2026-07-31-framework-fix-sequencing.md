@@ -125,7 +125,7 @@ end-to-end proof is ever wanted.
 
 ---
 
-### 2. `Live.list` cannot mark non-`<ul>/<li>` markup
+### 2. `Live.list` cannot mark non-`<ul>/<li>` markup — **DONE** (PR #35)
 
 **Severity**: largest capability hole. `applyLiveListMarkers` finds rows by scanning for `<li>`
 inside the nearest `<ul>`/`<ol>` (`packages/routekit/src/live-list-render.ts:90,131`), so a
@@ -225,13 +225,13 @@ Not startable until that is answered.
 |---|---|---|---|
 | 0 | `.env.example` + preflight | XS / DX | Yes — zero conflict |
 | 1 | ~~SSE user scoping on dynamic routes~~ | **Highest** | **DONE — PR #34** |
-| 2 | `Live.list` non-`<li>` markup | High | Yes — zero file overlap |
+| 2 | ~~`Live.list` non-`<li>` markup~~ | High | **DONE — PR #35** |
 | 3 | Layout scalar auto-deps | Moderate | Prefer after #32 |
 | 4 | `Live.list` in islands + `target` | Moderate | **No — blocked by #32** |
 | 5 | App entry + islands | Moderate | Prefer after #31 |
 | 6 | Three remaining warned combos | Low | Measure when started |
 | 7 | External watcher | — | Blocked on maintainer decision |
 
-**Item 1 shipped as PR #34** (`match-pattern.ts` + a shared `resolveRouteUserKey`; unit 244/0,
-integration exit 0, build exit 0). **Next: item 2**, `Live.list` non-`<li>` markup — it touches
-`live-list-render.ts`, which no open PR touches, so it can start immediately off `main`.
+**Items 1 and 2 shipped** (PR #34, PR #35). Item 1 (`match-pattern.ts` + a shared `resolveRouteUserKey`; unit 244/0,
+integration exit 0, build exit 0). **Next: item 3**, layout scalar auto-deps — small, and it completes the parity story #32 began.
+Item 4 stays blocked until #32 merges.
