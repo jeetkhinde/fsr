@@ -104,23 +104,24 @@ patches "will not be correctly scoped to the subscribing user" — then proceeds
 **What the fix needs.** A concrete-path → registered-pattern matcher. **No such helper exists** —
 searched `packages/routekit/src` and `packages/engine/src` for `matchPattern`/`matchRoute`/
 `patternToRegex` and found nothing; the Elysia adapter does its own routing and does not expose it.
-So this needs a small, tested matcher (a pattern with `:param` / `*` segments compiled to a regex,
-longest-literal-prefix wins on ambiguity), used at both `boot.ts` sites. The `page-render.ts`
-`warnOnce` then goes away, or narrows to whatever genuinely remains unsupported.
+So this needs a small, tested matcher, used at both `boot.ts` sites. The `page-render.ts` `warnOnce`
+then goes away — it becomes false once resolution works.
 
-Design question worth a brainstorm before coding: whether to match at subscribe time (cheap, but a
-matcher per SSE connection) or to have the client send the pattern alongside the concrete path
-(faster, but a client/server contract change and a spoofable input that must not be trusted for
-identity decisions). **The second is only safe if the pattern is used solely to look up bake mode
-and never to derive the user key** — `identity(req)` must stay the sole source of the user key.
+**Designed 2026-07-31**, see `docs/superpowers/specs/2026-07-31-sse-user-scoping-design.md`.
+Server-side matching at subscribe time; the client contract is unchanged. Having the client send its
+pattern was considered and rejected — a contract change for no real gain, and it puts a
+client-supplied value into a server-side decision. `identity(req)` remains the only source of the
+user key; the matched pattern selects a bake mode and nothing else.
 
 **Conflict**: touches `boot.ts` (#31's file) and `page-render.ts` (both PRs' file), but at
 **line 301/366 and 661** — outside every hunk listed above. #31's nearest `boot.ts` hunk covers
 282-288, thirteen lines clear of 301. **Safe to start now, off `main`.**
 
-**Falsification**: two subscribers on the same dynamic `bake='user'` route must receive different
-patches. jags-list cannot express this today (no dynamic `bake='user'` page), so the test belongs in
-`test-app` or a routekit integration test — do **not** add a jags-list page just to host it.
+**Falsification**: the resolution helper must return the subscriber's uid for a dynamic
+`bake='user'` pattern subscribed with a concrete path — it returns `''` on `main`'s logic, so the
+test fails before the fix. jags-list cannot express this combination (no dynamic `bake='user'` page)
+and must **not** be extended to host a framework test; `test-app` is the correct home if an
+end-to-end proof is ever wanted.
 
 ---
 
