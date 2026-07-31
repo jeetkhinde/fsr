@@ -648,25 +648,6 @@ export function buildPageHandler(
           `updates are not supported yet (scalar LiveProp fields are) and were skipped.`,
       );
     }
-    // bake='user' on a dynamic-segment pattern (e.g. "/users/:id") is a
-    // supported combination per ADR-017, but the /__kiln/fsr SSE + snapshot
-    // handlers gate identity scoping via bakeByPattern (keyed by page.pattern,
-    // step 5 below), matched against the concrete request pathname
-    // ("/users/5"). That exact-string match never hits a dynamic pattern, so
-    // sseUserKey silently resolves to '' (the shared key) instead of this
-    // user's identity — this page's live SSE patches would not be correctly
-    // scoped to the subscribing user. Warn loudly (once per pattern) rather
-    // than let it fail silently; keyed by pattern (not req.path) so every
-    // concrete instance of this dynamic route shares one warning.
-    if (bakeMode === 'user' && watcher && pageMeta.pattern.includes(':') && pageLiveFields.length > 0) {
-      warnOnce(
-        `dynamic-user-live:${pageMeta.pattern}`,
-        `[kiln] route "${pageMeta.pattern}" combines bake='user' with a dynamic path segment ` +
-          `and LiveProp field(s); live SSE identity scoping does not currently resolve dynamic ` +
-          `path segments, so this page's live patches will not be correctly scoped to the ` +
-          `subscribing user.`,
-      );
-    }
 
     if (watcher && !tombstoned && !variant) {
       await registerLiveLists({
@@ -679,6 +660,7 @@ export function buildPageHandler(
         watcher,
         defaultDebounce: options.debounce ?? kilnConfig?.fsr?.patchDebounceSecs,
         defaultRevalidate: options.revalidate ?? kilnConfig?.fsr?.revalidateSeconds,
+        autoDeps: kilnConfig?.fsr?.autoDeps !== false,
       });
       for (let index = 0; index < layoutEntries.length; index++) {
         const layoutRoute = layoutPatterns[index] ?? '/';
@@ -709,6 +691,7 @@ export function buildPageHandler(
           isLayout: true,
           defaultDebounce: layoutOptions.debounce ?? kilnConfig?.fsr?.patchDebounceSecs,
           defaultRevalidate: layoutOptions.revalidate ?? kilnConfig?.fsr?.revalidateSeconds,
+          autoDeps: kilnConfig?.fsr?.autoDeps !== false,
         });
       }
     }
@@ -767,7 +750,7 @@ export function buildPageHandler(
     // any client logic — purely so this can be verified from the outside.
     const cacheHitPatterns = layoutPatterns.filter((_, i) => layoutFromCache[i]);
     if (cacheHitPatterns.length > 0) {
-      res.headers['x-kiln-layout-cache-hit'] = cacheHitPatterns.join(',');
+      res.headers.set('x-kiln-layout-cache-hit', cacheHitPatterns.join(','));
     }
 
     respondWithNavigationShape(res, req, layoutPatterns, pageMeta.pattern, finalHtml);

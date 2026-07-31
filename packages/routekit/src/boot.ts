@@ -7,9 +7,12 @@ import type { CacheOptions, PageErrorFiles } from './handler-types.js';
 import { applyLivePropMarkers, escapeAttribute, escapeHtml, extractLayoutFragment, materializeLayoutSegment, respondWithNavigationShape, unwrapLiveProps, warnDomLiveInsideIslands, wrapPageSegment } from './html-markers.js';
 
 import { discoverRoutes } from './discover.js';
+import { createPatternMatcher, type PatternMatcher } from './match-pattern.js';
+import { warnOnce } from './dedup.js';
 import { extractPageOptions, type BakeMode } from './page-options.js';
 import type { PageRoute, LayoutNode } from './manifest.js';
 import type {
+  KilnAction,
   KilnRequest,
   KilnResponse,
   KilnConfig,
@@ -57,7 +60,7 @@ export type { CacheOptions, PageErrorFiles } from './handler-types.js';
 // ---------------------------------------------------------------------------
 
 export function buildActionHandler(
-  actions: Record<string, any>,
+  actions: Record<string, KilnAction>,
   opts?: { cache?: KilnCache; identity?: KilnIdentity; bake?: BakeMode }
 ) {
   // Read-your-own-writes for bake='user' pages: the actor must see their own
@@ -85,8 +88,21 @@ export function buildActionHandler(
     }
 
     try {
-      const result = await actions[actionName](req);
+      const result = await actions[actionName](req, res);
       await invalidateActor(req);
+      // Same rule as the `handle` hook (KilnHandle): if the action committed a
+      // response itself, send that. Warn rather than silently discarding a
+      // returned value — an invisible asymmetry is how the Live.list auto-deps
+      // gap became a bug rather than a documented limitation.
+      if (res.bodyType) {
+        if (result !== undefined) {
+          warnOnce(
+            `action-body-conflict:${req.path}:${actionName}`,
+            `[kiln] action "${actionName}" on ${req.path} both wrote to res and returned a value; the return value was ignored.`,
+          );
+        }
+        return;
+      }
       res.json(result || { success: true });
     } catch (err: any) {
       if (err.type === 'Redirect') {
@@ -98,6 +114,41 @@ export function buildActionHandler(
       res.json({ error: err.message || 'Action failed' });
     }
   };
+}
+
+// ---------------------------------------------------------------------------
+// Live subscription user key
+// ---------------------------------------------------------------------------
+
+/** The SSE user key for a subscribed concrete path.
+ *
+ * bakeByPattern is keyed by PATTERN, but the live client subscribes with
+ * window.location.pathname, so the path must be matched to a pattern first —
+ * without that, every dynamic route missed the lookup and fell back to the
+ * shared key, and subscribers silently received nothing.
+ *
+ * identity(req) is the ONLY source of the user key. The matched pattern
+ * selects a bake mode and nothing else, so no client-supplied value can
+ * influence whose data is read. */
+export function resolveRouteUserKey(input: {
+  route: string;
+  matcher: PatternMatcher;
+  bakeByPattern: Map<string, BakeMode | undefined>;
+  identity?: KilnIdentity;
+  req: KilnRequest;
+}): string {
+  const pattern = input.matcher.match(input.route);
+  if (pattern === null) {
+    warnOnce(
+      `sse-unmatched-route:${input.route}`,
+      `[kiln] live subscription for "${input.route}" matches no registered route pattern; ` +
+        `treating it as a shared route. If this is a bake='user' page, its live updates will ` +
+        `not be scoped to the subscriber.`,
+    );
+    return '';
+  }
+  const bake = input.bakeByPattern.get(pattern);
+  return bake === 'user' && input.identity ? input.identity(input.req) ?? '' : '';
 }
 
 // ---------------------------------------------------------------------------
@@ -244,6 +295,11 @@ export async function startKiln(
     // @kiln/client not installed
   }
 
+  // Built once, after every page's bake mode is known. The live client
+  // subscribes with a concrete path, which must be matched back to its
+  // registered pattern before that bake mode can be read.
+  const routeMatcher: PatternMatcher = createPatternMatcher([...bakeByPattern.keys()]);
+
   // 6b. Islands bootstrap + manifest (ADR-014). The manifest is served
   // no-store and maps island NAMES to current chunk URLs — cached HTML never
   // embeds URLs, so week-old promoted shells hydrate against today's build.
@@ -254,7 +310,7 @@ export async function startKiln(
     // @kiln/client not installed
   }
   adapter.registerPage('/_kiln/islands.json', [], async (_req, res) => {
-    res.headers['cache-control'] = 'no-store';
+    res.headers.set('cache-control', 'no-store');
     // Dev: the CLI points this at the Vite dev server's manifest.
     if (options.islandsManifestUrl) {
       try {
@@ -282,7 +338,7 @@ export async function startKiln(
   // 7. Serve FSR live client script when FSR is active
   if (fsrEnabled) {
     adapter.registerPage('/_kiln/live.js', [], async (_req, res) => {
-      res.headers['content-type'] = 'application/javascript; charset=utf-8';
+      res.headers.set('content-type', 'application/javascript; charset=utf-8');
       res.html(KILN_LIVE_CLIENT_SCRIPT);
     });
   }
@@ -298,8 +354,13 @@ export async function startKiln(
       // identity hook is configured for the app: a shared route must always
       // get userKey='' (the shared row) even when other routes declare
       // bake='user', or its shared patches never reach this subscriber.
-      const routeBake = bakeByPattern.get(route);
-      const sseUserKey = routeBake === 'user' && identity ? identity(req) ?? '' : '';
+      const sseUserKey = resolveRouteUserKey({
+        route,
+        matcher: routeMatcher,
+        bakeByPattern,
+        identity,
+        req,
+      });
       // A subscriber watching this (route, user) snapshot counts as activity
       // — a page someone has open gets eager patches even though nobody is
       // re-requesting it (which is what would otherwise bump last_active_at).
@@ -363,8 +424,13 @@ export async function startKiln(
       const slots = (req.query.slots || '').split(',').filter(Boolean);
       // Same bake='user' gate as the SSE handler above — a shared route's
       // snapshot must not be narrowed to the caller's identity.
-      const routeBake = bakeByPattern.get(route);
-      const snapshotUserKey = routeBake === 'user' && identity ? identity(req) ?? '' : '';
+      const snapshotUserKey = resolveRouteUserKey({
+        route,
+        matcher: routeMatcher,
+        bakeByPattern,
+        identity,
+        req,
+      });
       const { fsrSnapshotHandler } = await import('@kiln/engine' as any);
       const snapshot = await fsrSnapshotHandler(route, slots, options.store, snapshotUserKey);
       res.json(snapshot);
@@ -407,8 +473,8 @@ export async function startKiln(
     const { generateServiceWorker } = await import('./sw-template.js');
     const swContent = generateServiceWorker((config as any).serviceWorker);
     adapter.registerPage('/sw.js', [], async (_req, res) => {
-      res.headers['content-type'] = 'application/javascript; charset=utf-8';
-      res.headers['cache-control'] = 'no-cache';
+      res.headers.set('content-type', 'application/javascript; charset=utf-8');
+      res.headers.set('cache-control', 'no-cache');
       res.html(swContent);
     });
   }

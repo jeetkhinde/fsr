@@ -23,6 +23,11 @@ export interface ListChunkCache {
 export interface LiveListMeta<T = unknown> {
   kind: 'list';
   dependsOn: string[];
+  /** Tables observed while this list's own query ran, captured per-list in
+   * materializeLiveLists. Unioned into dependsOn at registration unless
+   * fsr.autoDeps is false. Absent when no capture ran (no store, or a query
+   * that used a non-capturing SQL client). */
+  autoDeps?: string[];
   debounce?: number;
   revalidate?: number | false;
   keyOf(row: T): string;
@@ -70,15 +75,24 @@ export function getLiveListMeta<T>(value: LiveList<T> | unknown): LiveListMeta<T
   return (value as any)[LIVE_LIST_META] as LiveListMeta<T>;
 }
 
-export function cloneLiveListRows<T>(source: LiveList<T>, rows: T[]): LiveList<T> {
+export function cloneLiveListRows<T>(
+  source: LiveList<T>,
+  rows: T[],
+  extraMeta?: Partial<Pick<LiveListMeta<T>, 'autoDeps'>>,
+): LiveList<T> {
   const meta = getLiveListMeta(source);
   if (!meta) {
     throw new Error('cloneLiveListRows requires a Live.list value');
   }
 
+  // A NEW meta object, never a mutation of the source's: the source meta is
+  // shared with the value the caller still holds, and per-request capture
+  // results must not leak onto it.
+  const nextMeta = extraMeta ? { ...meta, ...extraMeta } : meta;
+
   const clone = [...rows] as LiveList<T>;
   Object.defineProperty(clone, LIVE_LIST_META, {
-    value: meta,
+    value: nextMeta,
     enumerable: false,
     configurable: false,
   });

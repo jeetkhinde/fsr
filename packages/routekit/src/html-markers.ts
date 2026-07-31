@@ -71,7 +71,7 @@ export function respondWithNavigationShape(
   }
   const deepestPresent = deepestPresentIndex >= 0 ? layoutPatterns[deepestPresentIndex] : undefined;
   if (!deepestPresent) {
-    res.headers['silcrow-full-reload'] = 'true';
+    res.headers.set('silcrow-full-reload', 'true');
     res.html(html);
     return;
   }
@@ -83,7 +83,7 @@ export function respondWithNavigationShape(
   // (e.g. switching between sibling pages/tabs under the same layout).
   const nextPattern = layoutPatterns[deepestPresentIndex + 1] ?? pagePattern;
   const fragmentBody = extractLayoutFragment(html, nextPattern) ?? html;
-  res.headers['content-type'] = 'text/html; x-ps-fragment=1';
+  res.headers.set('content-type', 'text/html; x-ps-fragment=1');
   res.html(
     `<div data-ps-slot="${escapeAttribute(deepestPresent)}" style="display:contents">${fragmentBody}</div>`,
   );
