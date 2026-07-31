@@ -10,6 +10,9 @@ import {
   type LiveList,
 } from '@kiln/core';
 import { bakeSegment, type FsrStore, type FsrWatcher } from '@kiln/engine';
+// Server-only subpath: withDepCapture pulls in node:async_hooks, so it must
+// never be reached through the client-bundleable '@kiln/core' barrel.
+import { withDepCapture } from '@kiln/core/sql';
 import { applyLiveListMarkers, extractLiveListRowHtml } from './live-list-render.js';
 import { unwrapLiveProps } from './html-markers.js';
 
@@ -26,8 +29,16 @@ export async function materializeLiveLists(loadResult: any, store?: FsrStore): P
       }
       continue;
     }
-    const rows = await store.executeLiveListQuery(meta.query);
-    next[name] = cloneLiveListRows(value as LiveList<unknown>, rows);
+    // Capture the tables THIS list's own query touches, in its own scope: the
+    // page's capture wraps only load(), and `initial` is optional, so a list
+    // that omits it would otherwise contribute nothing. Runs unconditionally —
+    // only the union at registration is gated on fsr.autoDeps.
+    const { result: rows, tables } = await withDepCapture(() =>
+      store.executeLiveListQuery(meta.query),
+    );
+    next[name] = cloneLiveListRows(value as LiveList<unknown>, rows, {
+      autoDeps: [...tables],
+    });
   }
   return next;
 }
