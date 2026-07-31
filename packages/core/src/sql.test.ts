@@ -93,6 +93,82 @@ assert.equal(warnings.length, 0, `no capture scope means no auto-deps to miss; g
 
 console.log('auto-deps under-capture warning tests passed');
 
+// ── Capture through handles bun hands out itself ────────────────────────────
+// Each of these was a silent under-capture: the query ran through bun's own
+// object rather than the wrapper, so its tables were never recorded and a live
+// field reading only through it would never revalidate. Nothing was logged,
+// because from the wrapper's point of view no query happened at all.
+
+// .begin(tx) — the transaction handle is bun's, not ours, until wrapped.
+{
+  const { tables } = await withDepCapture(async () => {
+    await sql.begin(async (tx: any) => {
+      await tx`SELECT id FROM captest`;
+    });
+  });
+  assert.ok(tables.has('captest'), `begin(): expected captest in ${[...tables]}`);
+}
+
+// A savepoint nested inside that transaction must capture too — the wrapper
+// has to be applied recursively, not just at the top level.
+{
+  const { tables } = await withDepCapture(async () => {
+    await sql.begin(async (tx: any) => {
+      await tx.savepoint(async (sp: any) => {
+        await sp`SELECT id FROM captest2`;
+      });
+    });
+  });
+  assert.ok(tables.has('captest2'), `savepoint(): expected captest2 in ${[...tables]}`);
+}
+
+// .unsafe(query) — the SQL is a plain string argument, so there was never a
+// reason for it to be invisible.
+{
+  const { tables } = await withDepCapture(async () => {
+    await sql.unsafe('SELECT id FROM captest');
+  });
+  assert.ok(tables.has('captest'), `unsafe(): expected captest in ${[...tables]}`);
+}
+
+// .reserve() borrows a connection; queries on it are queries on the app's data.
+{
+  const { tables } = await withDepCapture(async () => {
+    const conn: any = await (sql as any).reserve();
+    try {
+      await conn`SELECT id FROM captest`;
+    } finally {
+      conn.release?.();
+    }
+  });
+  assert.ok(tables.has('captest'), `reserve(): expected captest in ${[...tables]}`);
+}
+
+// Outside a capture scope every one of these must still just work.
+await sql.begin(async (tx: any) => {
+  const rows = await tx`SELECT id FROM captest`;
+  assert.equal(rows[0].id, 1);
+});
+assert.equal((await sql.unsafe('SELECT id FROM captest'))[0].id, 1);
+
+// Transactions must still roll back — the wrapper substitutes the handle, so
+// a bug there could silently break atomicity while all the capture assertions
+// above still passed.
+await assert.rejects(
+  sql.begin(async (tx: any) => {
+    await tx`INSERT INTO captest VALUES (99)`;
+    throw new Error('rollback please');
+  }),
+  /rollback please/,
+);
+assert.equal(
+  (await sql`SELECT count(*)::int AS n FROM captest WHERE id = 99`)[0].n,
+  0,
+  'a throwing begin() must still roll back through the wrapper',
+);
+
+console.log('capture through begin/savepoint/unsafe/reserve tests passed');
+
 await sql`DROP TABLE IF EXISTS captest CASCADE`;
 await sql`DROP TABLE IF EXISTS captest2 CASCADE`;
 await sql.end();

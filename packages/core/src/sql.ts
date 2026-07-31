@@ -62,11 +62,42 @@ function isTemplateStringsArray(value: unknown): value is TemplateStringsArray {
   return Array.isArray(value) && Array.isArray((value as { raw?: unknown }).raw);
 }
 
-/** A bun SQL client that records queried tables into the active capture scope
- * (withDepCapture). Outside a scope it is a plain client. Opt-in: apps that
- * keep `new SQL(url)` simply get no auto-deps. */
-export function createKilnSql(url: string): SQL {
-  const base = new SQL(url);
+/** Record a query string's tables into the active capture scope, if any. */
+function captureQuery(query: string): void {
+  const scope = depScope.getStore();
+  if (!scope) return;
+  const found = extractTables(query);
+  if (found.length === 0) warnUnresolvedTableRef(query);
+  for (const t of found) scope.add(t);
+}
+
+/**
+ * Members that hand out a NEW query interface. Each one used to be a hole in
+ * dependency capture: the callback's `tx` (or the reserved connection) is
+ * bun's own object, so every query run through it bypassed the wrapper
+ * entirely and its tables were never recorded — silent under-capture, the one
+ * direction that serves stale data with nothing logged. Wrapping what they
+ * yield closes that, and does so recursively: a savepoint inside a
+ * transaction gets the same treatment.
+ */
+const SCOPE_YIELDING = new Set(['begin', 'transaction', 'savepoint']);
+
+/** True for bun-sql's `Promise`-returning connection borrow. */
+const CONNECTION_YIELDING = new Set(['reserve']);
+
+function isThenable(value: unknown): value is Promise<unknown> {
+  return typeof (value as { then?: unknown } | null)?.then === 'function';
+}
+
+/**
+ * Wrap a bun-sql callable (the client, a transaction, a reserved connection)
+ * so tagged-template queries run through it record their tables.
+ *
+ * Split out of `createKilnSql` so a transaction handle gets exactly the same
+ * treatment as the client it came from — that equivalence is the whole fix
+ * for the `.begin()` capture gap.
+ */
+function wrapCapturing<T extends object>(base: T): T {
   const wrapped = (strings: unknown, ...values: unknown[]) => {
     // Only a real tagged-template call carries dep-capturable table names;
     // every other calling convention (raw string, Helper-style value/array
@@ -74,32 +105,74 @@ export function createKilnSql(url: string): SQL {
     // (never causes an under-invalidation; see extractTables), while
     // assuming every call is a template would crash on these shapes
     // whenever a capture scope is active (Plan 3 review Important #3).
-    if (isTemplateStringsArray(strings)) {
-      const scope = depScope.getStore();
-      if (scope) {
-        const query = strings.join(' ? ');
-        const found = extractTables(query);
-        if (found.length === 0) warnUnresolvedTableRef(query);
-        for (const t of found) scope.add(t);
-      }
-    }
+    if (isTemplateStringsArray(strings)) captureQuery(strings.join(' ? '));
     return (base as any)(strings, ...values);
   };
   // Preserve helpers (.begin, .unsafe, .close, .end, etc.) by proxying misses.
   // Bound functions are memoized per property: re-binding on every access
   // made `sql.unsafe !== sql.unsafe`, which breaks identity comparison and
   // any caller memoizing on the reference, and allocated a closure per read.
-  const boundCache = new Map<string | symbol, unknown>();
+  const memberCache = new Map<string | symbol, unknown>();
   return new Proxy(wrapped as any, {
     get(_t, prop) {
       const v = (base as any)[prop];
       if (typeof v !== 'function') return v;
-      let bound = boundCache.get(prop);
-      if (bound === undefined) {
-        bound = v.bind(base);
-        boundCache.set(prop, bound);
+      let member = memberCache.get(prop);
+      if (member === undefined) {
+        member = makeCapturingMember(base, prop, v);
+        memberCache.set(prop, member);
       }
-      return bound;
+      return member;
     },
-  }) as unknown as SQL;
+  }) as T;
+}
+
+function makeCapturingMember(base: object, prop: string | symbol, fn: Function): unknown {
+  // `.unsafe(query, params?)` takes the SQL as a plain string — the text is
+  // right there, so there is no reason it was ever invisible to capture.
+  if (prop === 'unsafe') {
+    return (query: unknown, ...rest: unknown[]) => {
+      if (typeof query === 'string') captureQuery(query);
+      return fn.call(base, query, ...rest);
+    };
+  }
+
+  // `.begin(fn)` / `.begin(options, fn)` / `.savepoint(fn)`: the callback is
+  // handed bun's raw handle. Substitute a wrapped one.
+  if (SCOPE_YIELDING.has(prop as string)) {
+    return (...args: unknown[]) => {
+      const index = args.findIndex((a) => typeof a === 'function');
+      if (index === -1) return fn.apply(base, args);
+      const original = args[index] as (handle: unknown) => unknown;
+      const next = [...args];
+      next[index] = (handle: unknown) =>
+        original(handle && typeof handle === 'object' || typeof handle === 'function'
+          ? wrapCapturing(handle as object)
+          : handle);
+      return fn.apply(base, next);
+    };
+  }
+
+  // `.reserve()` resolves to a borrowed connection — same object shape, same
+  // need. Only the resolved value is wrapped; the promise itself is passed on.
+  if (CONNECTION_YIELDING.has(prop as string)) {
+    return (...args: unknown[]) => {
+      const out = fn.apply(base, args);
+      if (!isThenable(out)) return out;
+      return out.then((conn: unknown) =>
+        conn && (typeof conn === 'object' || typeof conn === 'function')
+          ? wrapCapturing(conn as object)
+          : conn,
+      );
+    };
+  }
+
+  return fn.bind(base);
+}
+
+/** A bun SQL client that records queried tables into the active capture scope
+ * (withDepCapture). Outside a scope it is a plain client. Opt-in: apps that
+ * keep `new SQL(url)` simply get no auto-deps. */
+export function createKilnSql(url: string): SQL {
+  return wrapCapturing(new SQL(url) as object) as unknown as SQL;
 }
