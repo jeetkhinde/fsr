@@ -17,3 +17,7 @@ graphify-out/
 test-results/
 data/
 .remember/
+
+# Local git worktrees (see .memory/active-work.md — they need their own
+# `bun install && bun run build` and a copied `.env`, so nothing here is shareable)
+.worktrees/

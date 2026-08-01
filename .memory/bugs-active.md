@@ -88,14 +88,21 @@ here so they are tracked as defects rather than living only in a session transcr
 
 Recorded so they aren't re-filed as bugs. Full rationale in `.codebase-memory/adr.md` § ADR-018.
 
-*   DELETE-driven tombstoning is not owner-scoped (`notifyDelete` → `tombstoneDependentRoutes`);
-    only INSERT/UPDATE are.
+*   ~~DELETE-driven tombstoning is not owner-scoped (`notifyDelete` → `tombstoneDependentRoutes`);
+    only INSERT/UPDATE are.~~ — **FIXED 2026-08-01** by PR #37 (`fix/known-defects`). `owner` is now
+    threaded through to `FsrStore.tombstoneDependentRoutes` and `FsrListStore.deleteDependentRoutes`,
+    both scoped `(user_key = '' OR user_key = ${owner})`. An owner-less payload still fans out
+    route-wide, deliberately. This entry sat here for a day after the fix because PR #37's doc commit
+    updated `decisions.md` and `bugs-resolved.md` only — see [bugs-resolved.md](bugs-resolved.md) §0.
 *   ~~Auto-deps not exercised end-to-end through a page with live fields~~ — **CLOSED by PR #24**
-    (Jag's List Plan 3a). `apps/jags-list/pages/projects/[id]/activity.tsx` declares a `Live.list`
-    with `dependsOn: 'activity'`, and `apps/jags-list/tests/live.integration.test.ts` drives the
-    whole chain: real INSERT → `kiln_emit_event` trigger → LISTEN/NOTIFY → `FsrWatcher` → Redis →
-    a subscribed SSE client. Deleting the list's `dependsOn` makes that suite fail on a 20s
-    timeout, so the coverage has teeth.
+    (Jag's List Plan 3a), and **strengthened by PR #32**.
+    `apps/jags-list/pages/projects/[id]/activity.tsx` declares a `Live.list` with **no `dependsOn`
+    at all** — PR #24 had it pinned to `'activity'`; PR #32 removed the pin so the page runs on
+    auto-captured deps (`activity`, plus `user` via the join). `apps/jags-list/tests/live.integration.test.ts`
+    drives the whole chain: real INSERT → `kiln_emit_event` trigger → LISTEN/NOTIFY → `FsrWatcher` →
+    Redis → a subscribed SSE client. Regressing auto-deps now makes that suite fail on a 20s
+    timeout, so the coverage has teeth against the mechanism itself, not just against a hand-written
+    dep key.
 *   ~~Dynamic-segment `bake='user'` + live fields falls back to shared-key SSE scoping~~ — **FIXED
     2026-07-31**: the SSE and snapshot endpoints now match the concrete path back to its registered
     pattern before reading bake mode. See [bugs-resolved.md](bugs-resolved.md) §0.
