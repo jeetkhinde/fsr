@@ -64,6 +64,12 @@ export async function startDbNotificationPipeline(
         });
         reconnectDelay = 1000;
         console.info('FSR DB listener: reconnected to Postgres');
+        // Every event emitted while we were disconnected is sitting in
+        // kiln_fsr_events and will never arrive as a notification. Without
+        // this, a reconnect logged the reassuring line above and silently
+        // dropped the whole gap. After LISTEN, never before — see
+        // FsrWatcher.catchUpMissedEvents.
+        await watcher.catchUpMissedEvents();
       } catch (err: any) {
         console.error('FSR DB listener: reconnect attempt failed:', err.message);
         reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY_MS);
@@ -82,6 +88,13 @@ export async function startDbNotificationPipeline(
     console.warn('FSR DB listener: connection error, reconnecting:', err.message);
     reconnect();
   });
+
+  // Also on the FIRST connect, not just reconnects. `FsrWatcher.start()` runs
+  // its own catch-up, but callers start the watcher before this pipeline
+  // (main.ts does), so anything emitted between those two moments would fall
+  // through the gap. Replaying once more after LISTEN is established closes
+  // it; a repeat invalidation is a no-op.
+  await watcher.catchUpMissedEvents();
 
   return client;
 }

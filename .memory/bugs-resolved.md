@@ -6,6 +6,71 @@ Historical record of fixed framework bugs, kept out of the active file to keep s
 
 ## 0. Fixed 2026-08-01
 
+### `fix/event-catch-up-never-replayed` — the recovery path recovered nothing
+
+Found by auditing for more bugs of the `fix/sigterm-hangs-with-open-sse` class
+(paths that only run after something else has already failed). Two defects that
+compounded into "missed invalidation events are recovered **never**".
+
+*   **`catchUpMissedEvents` had never invalidated anything.**
+    `FsrStore.fetchEventsSince` returned the jsonb `payload` column untouched,
+    and bun's SQL hands jsonb back as a **string** — the same quirk this repo
+    already hit for BIGINT and jsonb. `watcher.ts` then did
+    `const { depKey, id } = event.payload`, destructuring a string: both
+    `undefined`, so every branch was skipped. Worse, `lastProcessed = event.id`
+    ran regardless and the cursor was persisted, so the events were **consumed
+    and unrecoverable** — a second boot could not retry them.
+
+    Proved before the fix: a pending event with the cursor behind it left the
+    slot `stale = false` across two boots, with the cursor sitting on the
+    event's own id.
+
+    Fixed with `decodeEventPayload` in `store.ts` (accepts a string or an
+    already-decoded object, returns `null` — never `{}` — for anything it
+    cannot decode, so "undecodable" stays distinguishable from "no dep key").
+
+*   **A LISTEN reconnect replayed nothing.** `catchUpMissedEvents` was private
+    and called from exactly one place, `FsrWatcher.start()`. A mid-life drop
+    (PG restart, failover, network blip) re-subscribed, logged the reassuring
+    `FSR DB listener: reconnected to Postgres`, and dropped the entire gap.
+    Now public and called from `startDbNotificationPipeline` after `LISTEN` is
+    established — on the first connect as well as reconnects, since callers
+    start the watcher *before* the pipeline (`main.ts` does) and events in
+    between fell through that seam too. After LISTEN, never before: events
+    arriving during the replay then also arrive as notifications, and a double
+    invalidation is a no-op, whereas the reverse order leaves a real gap.
+
+**A hazard the fix itself created, and the guard for it.** `kiln_fsr_events` is
+never pruned, and nothing creates the watcher's `cacheDir`, so a failed cursor
+write meant the next boot replayed from id 0. That was harmless only while
+catch-up was a no-op; once it worked it became a full-history invalidation
+stampede on every cold start. Guarded three ways: `persistCursor` now `mkdir`s
+first; the cursor is held **in memory** as well as on disk, so a reconnect
+replays the right window even where the file cannot be written; and a boot with
+no cursor anywhere adopts the current `MAX(id)` and replays nothing, since no
+cursor means no known prior state and therefore no gap to close.
+
+**Known limitation, unchanged by this fix:** the cursor lives on local disk
+while the events live in shared Postgres, so a container without a persistent
+cache dir takes the adopt-head branch on every restart and cannot recover a
+restart-sized gap. Reconnect gaps are still covered (in-memory cursor). Moving
+the cursor into Postgres is the real fix and was out of scope here.
+
+**Deliberately NOT changed:** catch-up stays route-wide rather than
+owner-scoped. The payload *does* carry `owner` when the trigger names an owner
+column, and the old comment claiming otherwise ("the events table doesn't yet
+persist `owner` in a queryable column") was simply wrong and is corrected — but
+catch-up runs precisely when state is uncertain, and over-invalidating costs a
+re-render while under-invalidating serves stale data. Narrowing it needs a test
+that fails when the owner is wrong.
+
+Regression test: `packages/engine/src/catch-up.test.ts`, wired into
+`test:integration`. Falsified per-defect — reverting the decode fails on the
+payload assertion; reverting the reconnect call fails on the reconnect
+assertion; reverting the cold-start guard trips the restart test's precondition
+(the stampede invalidates the slot early), which is a coarser signal than test
+4's own assertion but still a hard failure.
+
 ### `fix/sigterm-hangs-with-open-sse` — the framework never shut down cleanly
 
 *   **SIGTERM did not terminate a server with an open SSE stream.**

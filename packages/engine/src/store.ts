@@ -49,6 +49,19 @@ export interface InspectRow {
 
 const REQUERY_TIMEOUT_MS = 10_000;
 
+/** jsonb through bun's SQL arrives as a string; other drivers hand back an
+ * object. Returns null for anything undecodable so the caller can say so. */
+export function decodeEventPayload(raw: unknown): Record<string, any> | null {
+  if (raw && typeof raw === 'object') return raw as Record<string, any>;
+  if (typeof raw !== 'string') return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 export class FsrStore {
   readonly lists: FsrListStore;
 
@@ -635,6 +648,20 @@ export class FsrStore {
     return rows;
   }
 
+  /**
+   * Events since the cursor, for crash/disconnect catch-up.
+   *
+   * `payload` is decoded here rather than at the call site because bun's SQL
+   * hands jsonb back as a **string** (same quirk as BIGINT). It was previously
+   * returned untouched, so `const { depKey } = event.payload` in the watcher
+   * destructured a string and got `undefined` — every event a silent no-op
+   * while the cursor still advanced past it. Accepts an already-parsed object
+   * too, so a driver that decodes jsonb keeps working.
+   *
+   * A payload that cannot be decoded is returned as `null` and left for the
+   * caller to report; never `{}`, which would be indistinguishable from a
+   * real event carrying no dep key.
+   */
   async fetchEventsSince(cursorId: number): Promise<Array<{ id: number, eventType: string, payload: any }>> {
     const rows = await this.sql`
       SELECT id, event_type as "eventType", payload
@@ -645,8 +672,15 @@ export class FsrStore {
     return rows.map((r: any) => ({
       id: Number(r.id),
       eventType: r.eventType,
-      payload: r.payload,
+      payload: decodeEventPayload(r.payload),
     }));
+  }
+
+  /** Highest recorded event id, or 0 when the table is empty. Used to adopt a
+   * starting point when no cursor exists, instead of replaying all history. */
+  async getLatestEventId(): Promise<number> {
+    const rows = await this.sql`SELECT COALESCE(MAX(id), 0) AS id FROM kiln_fsr_events`;
+    return Number(rows[0]?.id ?? 0);
   }
 
   async getRoutePatchMode(route: string, userKey = ''): Promise<'json' | 'both' | null> {

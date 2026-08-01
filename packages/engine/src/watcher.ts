@@ -308,29 +308,100 @@ export class FsrWatcher {
     return path.join(this.config.cacheDir ?? '.kiln-cache', 'cursor');
   }
 
+  /**
+   * Last event id this process has handled. The file is the cross-restart
+   * copy; this is the authority while the process lives, so a reconnect
+   * replays the right window even if the file could never be written (a
+   * container with no writable cache dir, say).
+   */
+  private lastEventId: number | null = null;
+
   updateCursor(eventId: number): void {
-    fs.writeFile(this.cursorPath(), String(eventId), 'utf8').catch((err: any) => {
+    this.lastEventId = eventId;
+    this.persistCursor(eventId).catch((err: any) => {
       console.warn(`FSR watcher: failed to persist cursor (eventId=${eventId}):`, err.message);
     });
   }
 
-  private async catchUpMissedEvents(): Promise<void> {
+  /** mkdir first: nothing else creates the cache dir, and a failed cursor
+   * write used to mean the next boot replayed from 0 — which was harmless only
+   * while catch-up was a no-op, and is a stampede now that it works. */
+  private async persistCursor(eventId: number): Promise<void> {
+    await fs.mkdir(path.dirname(this.cursorPath()), { recursive: true });
+    await fs.writeFile(this.cursorPath(), String(eventId), 'utf8');
+  }
+
+  private async readPersistedCursor(): Promise<number | null> {
     try {
-      const cursorPath = this.cursorPath();
-      let cursor = 0;
-      try {
-        const parsed = Number(await fs.readFile(cursorPath, 'utf8'));
-        if (Number.isFinite(parsed)) cursor = parsed;
-      } catch {}
+      const parsed = Number(await fs.readFile(this.cursorPath(), 'utf8'));
+      return Number.isFinite(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Replay every invalidation event recorded since the persisted cursor.
+   *
+   * Public, and called from two places: `start()`, and the DB notification
+   * pipeline every time it (re)establishes `LISTEN`. The second caller is the
+   * point — a mid-life connection drop used to re-LISTEN, log "reconnected to
+   * Postgres" and replay nothing, so events emitted during the gap were lost
+   * until a process restart. Always call it *after* LISTEN is established:
+   * events arriving during the replay then also arrive as notifications, and
+   * a double invalidation is a no-op (both paths set `stale = TRUE`), whereas
+   * the reverse order leaves a real gap.
+   */
+  async catchUpMissedEvents(): Promise<void> {
+    try {
+      let cursor = this.lastEventId ?? (await this.readPersistedCursor());
+
+      if (cursor === null) {
+        // No cursor anywhere: this process has never handled an event and no
+        // previous run left a mark. There is no gap to close, and
+        // kiln_fsr_events is never pruned — replaying from 0 would invalidate
+        // against the app's entire history on every cold start. Adopt the
+        // current head instead and start recovering from here.
+        //
+        // KNOWN LIMITATION: the cursor lives on local disk while the events
+        // live in shared Postgres, so a container without a persistent cache
+        // dir takes this branch on every restart and cannot recover a
+        // restart-sized gap (a reconnect gap is still covered — that uses the
+        // in-memory cursor). Moving the cursor into Postgres is the real fix
+        // and is out of scope here.
+        const head = await this.store.getLatestEventId();
+        this.lastEventId = head;
+        if (head > 0) await this.persistCursor(head);
+        console.info(
+          `FSR watcher: no event cursor found; adopting current head (eventId=${head}) ` +
+            `without replaying history`,
+        );
+        return;
+      }
 
       const events = await this.store.fetchEventsSince(cursor);
       let lastProcessed = cursor;
+      let undecodable = 0;
+      let replayed = 0;
 
       for (const event of events) {
-        const { depKey, id } = event.payload;
-        // owner-less by design: the events table doesn't yet persist `owner`
-        // in a queryable column, so cursor catch-up conservatively
-        // invalidates route-wide rather than per-owner.
+        // Never `event.payload.depKey` on an unchecked value: this destructured
+        // a jsonb string for two releases, so `depKey` was always undefined and
+        // every event silently did nothing while the cursor advanced past it.
+        // fetchEventsSince now decodes, and hands back null when it cannot.
+        const payload = event.payload;
+        if (!payload) {
+          undecodable++;
+          lastProcessed = event.id;
+          continue;
+        }
+        const { depKey, id } = payload;
+        // Route-wide rather than owner-scoped, deliberately. The payload DOES
+        // carry `owner` when the trigger names an owner column (see
+        // schema.ts's kiln_emit_event) — but catch-up runs precisely when
+        // state is uncertain, and over-invalidating costs a re-render while
+        // under-invalidating serves stale data. Narrow this only with a test
+        // that fails when the owner is wrong.
         if (event.eventType === 'DELETE') {
           if (depKey) await this.store.tombstoneDependentRoutes(depKey);
           if (depKey && id !== undefined && id !== null) await this.store.tombstoneDependentRoutes(`${depKey}:${id}`);
@@ -338,11 +409,27 @@ export class FsrWatcher {
           if (depKey) await this.store.invalidateDepKey(depKey);
           if (depKey && id !== undefined && id !== null) await this.store.invalidateDepKey(`${depKey}:${id}`);
         }
+        if (depKey) replayed++;
+        else undecodable++;
         lastProcessed = event.id;
       }
 
+      if (undecodable > 0) {
+        // Loud on purpose. The cursor still advances past these so one bad row
+        // cannot wedge recovery forever — but silence is what let the whole
+        // mechanism sit broken, so a skipped event must never be quiet again.
+        console.warn(
+          `FSR watcher: catch-up skipped ${undecodable} event(s) with no usable depKey ` +
+            `(cursor advanced past them; they will not be retried)`,
+        );
+      }
+      if (replayed > 0) {
+        console.info(`FSR watcher: replayed ${replayed} missed invalidation event(s)`);
+      }
+
       if (lastProcessed > cursor) {
-        await fs.writeFile(cursorPath, String(lastProcessed), 'utf8');
+        this.lastEventId = lastProcessed;
+        await this.persistCursor(lastProcessed);
       }
     } catch (err: any) {
       console.warn(`FSR watcher: failed to catch up missed events:`, err.message);
