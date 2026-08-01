@@ -16,7 +16,7 @@ describe.skipIf(!process.env.DATABASE_URL)('invites', () => {
       await sql`DELETE FROM invites WHERE email = ${email}`;
       await sql`DELETE FROM "user" WHERE email = ${email}`;
     }
-    await sql.close();
+    // Deliberately no sql.close() here — see db/client.ts.
   });
 
   it('creates and resolves a valid invite', async () => {

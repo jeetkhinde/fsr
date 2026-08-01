@@ -7,7 +7,7 @@ const EMAIL = 'auth-itest@example.com';
 describe.skipIf(!process.env.DATABASE_URL)('better-auth integration', () => {
   afterAll(async () => {
     await sql`DELETE FROM "user" WHERE email = ${EMAIL}`;
-    await sql.close();
+    // Deliberately no sql.close() here — see db/client.ts.
   });
 
   it('creates a user with role + handle, signs in, resolves the session', async () => {

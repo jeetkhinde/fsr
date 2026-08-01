@@ -75,9 +75,10 @@ standing backlog is in [roadmap.md](roadmap.md).
 
 ### ~~Known test-harness limitation~~ — FIXED 2026-08-01, and the recorded cause was wrong
 
-`cd apps/jags-list && RUN_APP_TESTS=1 bun test tests/` now runs clean: **24 pass / 0 fail across 7
-files**, exit 0. Previously 3 pass / 10 fail with `PostgresError: Connection closed` — and only 13
-of the 24 tests ever reached execution.
+`cd apps/jags-list && RUN_APP_TESTS=1 bun test` now runs clean: **53 pass / 0 fail across 16
+files**, exit 0 (and `bun test tests/` alone is 24 pass / 0 fail). Previously the whole-app run was
+38 pass / 15 fail and `tests/` alone was 3 pass / 10 fail, both with `PostgresError: Connection
+closed`.
 
 **The cause recorded here on 2026-07-31 — "each suite spawns its own server and the connections
 collide" — was wrong.** So was the follow-up diagnosis that blamed concurrency. Measured
@@ -90,8 +91,17 @@ module registry, so all seven files share that pool. The first file's `afterAll`
 `sql.close()`, leaving a dead pool for every file that ran *after* it. Deterministic, not flaky —
 which the "collision" framing would have predicted wrongly.
 
-Fixed by deleting the `sql.close()` calls; nothing needs to close it, since the pool's lifetime is
-the process's. Rationale is in `db/client.ts` so it doesn't get re-added.
+Fixed by deleting the `sql.close()` calls from all **twelve** integration test files — six under
+`tests/`, two under `lib/`, four under `db/`. Fixing only `tests/` looks like a fix if you verify
+with `bun test tests/`, but leaves `bun test` from the app root still failing, since `lib/` and
+`db/` suites share the same pool. The one-shot scripts under `scripts/` still close it, correctly:
+they are their own process and exist to terminate. Rationale is in `db/client.ts` so the calls
+don't get re-added.
+
+**Separate, still-open flakiness (found while verifying this):** two app-test runs back to back can
+fail with `Unable to connect` — the previous run's spawned servers have not released their ports
+yet. Not the pool, and not fixed here; leave a few seconds between runs, or the suites need
+dynamic ports.
 
 **Scope note:** this was an *app* test-harness bug, not a framework one — the framework's own
 `test:integration` runs each suite as a separate `bun` invocation, so it never shared a pool.

@@ -6,7 +6,7 @@ describe.skipIf(!process.env.DATABASE_URL)('logActivity', () => {
   let projectId = 0;
   afterAll(async () => {
     if (projectId) await sql`DELETE FROM projects WHERE id = ${projectId}`;
-    await sql.close();
+    // Deliberately no sql.close() here — see db/client.ts.
   });
 
   it('inserts an activity row with verb + jsonb payload', async () => {

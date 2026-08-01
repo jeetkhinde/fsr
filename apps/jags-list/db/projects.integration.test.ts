@@ -7,7 +7,7 @@ describe.skipIf(!process.env.DATABASE_URL)('projects + columns', () => {
   let projectId = 0;
   afterAll(async () => {
     if (projectId) await sql`DELETE FROM projects WHERE id = ${projectId}`;
-    await sql.close();
+    // Deliberately no sql.close() here — see db/client.ts.
   });
 
   it('createProject seeds Backlog / In Progress / Done (Done terminal)', async () => {
