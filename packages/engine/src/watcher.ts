@@ -379,6 +379,12 @@ export class FsrWatcher {
         return;
       }
 
+      // Adopt the resolved cursor in memory even when the replay below finds
+      // nothing: otherwise a cursor that came from the file leaves lastEventId
+      // null, and a later reconnect would have to re-read a file that may by
+      // then be unreadable — the exact dependency this field exists to remove.
+      this.lastEventId = Math.max(this.lastEventId ?? 0, cursor);
+
       const events = await this.store.fetchEventsSince(cursor);
       let lastProcessed = cursor;
       let undecodable = 0;
@@ -428,7 +434,10 @@ export class FsrWatcher {
       }
 
       if (lastProcessed > cursor) {
-        this.lastEventId = lastProcessed;
+        // Monotonic, never a plain assignment: a live notification can land
+        // mid-replay and call updateCursor() with a HIGHER id, and finishing
+        // the replay must not drag the cursor back behind it.
+        this.lastEventId = Math.max(this.lastEventId ?? 0, lastProcessed);
         await this.persistCursor(lastProcessed);
       }
     } catch (err: any) {
