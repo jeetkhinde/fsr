@@ -75,6 +75,15 @@ here so they are tracked as defects rather than living only in a session transcr
     `await proc.exited` to the jags-list test teardown turned a silent production hang into a
     5s hook timeout in exactly one suite — the only one that leaves an SSE stream open.
 
+*   ~~**Crash/disconnect event catch-up had never worked**~~ — **FIXED 2026-08-01** on
+    `fix/event-catch-up-never-replayed`. Two defects, both silent: (a) `fetchEventsSince` returned
+    the jsonb `payload` untouched and bun's SQL hands jsonb back as a **string**, so
+    `const { depKey } = event.payload` was always `undefined` — every event a no-op **while the
+    cursor still advanced past it**, making them unrecoverable; (b) catch-up was private and called
+    only from `FsrWatcher.start()`, so a LISTEN reconnect logged "reconnected to Postgres" and
+    replayed nothing. Together: missed events were recovered *never*. See
+    [bugs-resolved.md](bugs-resolved.md) §0.
+
 *   **Nothing open in this section.** Every gap surveyed on 2026-07-31 is now closed; the sequence
     that ordered them is `docs/superpowers/plans/2026-07-31-framework-fix-sequencing.md`.
 
