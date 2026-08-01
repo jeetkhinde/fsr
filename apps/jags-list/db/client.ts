@@ -9,3 +9,16 @@ const databaseUrl =
 // packages/core/src/sql.ts. Outside a capture scope this behaves exactly
 // like `new SQL(url)`.
 export const sql = createKilnSql(databaseUrl);
+
+// A module-level singleton, which is what makes it shared — and what makes
+// closing it from a test's afterAll() a mistake. `bun test` runs every test
+// FILE sequentially inside ONE process, so all seven suites in tests/ import
+// this same instance. The first afterAll() to call sql.close() therefore
+// leaves a dead pool for every file that runs after it, and they all fail
+// with ERR_POSTGRES_CONNECTION_CLOSED before their first assertion. That is
+// deterministic, not a race: the files never overlap.
+//
+// Nothing needs to close it. The pool's lifetime is the process's lifetime —
+// in tests bun tears it down at exit (verified: exit 0, no hang), and in the
+// server it should stay open for as long as the server runs.
+

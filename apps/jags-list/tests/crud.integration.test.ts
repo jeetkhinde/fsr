@@ -41,7 +41,7 @@ describe.skipIf(!run)('crud routes', () => {
     proc?.kill();
     for (const id of createdProjectIds) await sql`DELETE FROM projects WHERE id = ${id}`;
     for (const u of [ADMIN, MEMBER]) await sql`DELETE FROM "user" WHERE email = ${u.email}`;
-    await sql.close();
+    // Deliberately no sql.close() here — see db/client.ts.
   });
 
   async function post(path: string, cookie: string, form: Record<string, string>) {

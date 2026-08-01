@@ -58,7 +58,7 @@ describe.skipIf(!run)('cross-user render isolation', () => {
   afterAll(async () => {
     proc?.kill();
     for (const u of [TOM, ADAM]) await sql`DELETE FROM "user" WHERE email = ${u.email}`;
-    await sql.close();
+    // Deliberately no sql.close() here — see db/client.ts.
   });
 
   it("never serves one user's home render to the other, on any hit", async () => {

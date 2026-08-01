@@ -68,7 +68,7 @@ describe.skipIf(!run)('auth gate holds without requireUser in load()', () => {
     proc?.kill();
     await sql`DELETE FROM projects WHERE id = ${projectId}`;
     await sql`DELETE FROM "user" WHERE email = ${MEMBER.email}`;
-    await sql.close();
+    // Deliberately no sql.close() here — see db/client.ts.
   });
 
   it('redirects an anonymous browser away from the activity feed', async () => {

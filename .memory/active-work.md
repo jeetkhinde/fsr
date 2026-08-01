@@ -73,9 +73,25 @@ the registration site alone.
 **Nothing from that survey remains open.** The next framework work needs a fresh survey; the
 standing backlog is in [roadmap.md](roadmap.md).
 
-### Known test-harness limitation (found 2026-07-31)
+### ~~Known test-harness limitation~~ — FIXED 2026-08-01, and the recorded cause was wrong
 
-`cd apps/jags-list && RUN_APP_TESTS=1 bun test tests/` — running all suites in **one** invocation —
-fails with `PostgresError: Connection closed` (3 pass / 10 fail). Each suite spawns its own server
-and the connections collide. **This is pre-existing, not a regression**: verified identical on
-unmodified `main` @ `f5fa13a`. Run the suites one file at a time; all seven pass individually.
+`cd apps/jags-list && RUN_APP_TESTS=1 bun test tests/` now runs clean: **24 pass / 0 fail across 7
+files**, exit 0. Previously 3 pass / 10 fail with `PostgresError: Connection closed` — and only 13
+of the 24 tests ever reached execution.
+
+**The cause recorded here on 2026-07-31 — "each suite spawns its own server and the connections
+collide" — was wrong.** So was the follow-up diagnosis that blamed concurrency. Measured
+2026-08-01: `bun test` runs test **files sequentially in a single process** (two files with
+overlapping timers show the same pid and no interleaving), so nothing ever ran concurrently and
+nothing collided.
+
+The real cause: `db/client.ts` exports a module-level `sql` singleton, and one process means one
+module registry, so all seven files share that pool. The first file's `afterAll` called
+`sql.close()`, leaving a dead pool for every file that ran *after* it. Deterministic, not flaky —
+which the "collision" framing would have predicted wrongly.
+
+Fixed by deleting the `sql.close()` calls; nothing needs to close it, since the pool's lifetime is
+the process's. Rationale is in `db/client.ts` so it doesn't get re-added.
+
+**Scope note:** this was an *app* test-harness bug, not a framework one — the framework's own
+`test:integration` runs each suite as a separate `bun` invocation, so it never shared a pool.

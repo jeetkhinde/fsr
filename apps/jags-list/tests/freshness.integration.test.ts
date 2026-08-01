@@ -92,7 +92,7 @@ describe.skipIf(!run)('freshness — auto-deps + owner-scoped invalidation (ADR-
     proc?.kill();
     await sql`DELETE FROM kiln_fsr WHERE route IN (${ROUTE_PROJECTS}, ${ROUTE_NOTIFS})`;
     await sql`DELETE FROM notifications WHERE user_id IN (${OWNER_TOM}, ${OWNER_ADAM})`;
-    await sql.close();
+    // Deliberately no sql.close() here — see db/client.ts.
   });
 
   it('a load() reading `projects` with NO manual dep key auto-invalidates when a project row changes', async () => {
