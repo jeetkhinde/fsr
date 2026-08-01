@@ -14,7 +14,7 @@ describe.skipIf(!process.env.DATABASE_URL)('tasks', () => {
   });
   afterAll(async () => {
     if (projectId) await sql`DELETE FROM projects WHERE id = ${projectId}`;
-    await sql.close();
+    // Deliberately no sql.close() here — see db/client.ts.
   });
 
   it('createTask appends to the end of its column and starts at version 1', async () => {

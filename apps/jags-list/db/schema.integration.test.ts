@@ -20,7 +20,7 @@ describe.skipIf(!url)('jags-list schema', () => {
   afterAll(async () => {
     if (projectId) await sql`DELETE FROM projects WHERE id = ${projectId}`;
     await listener.end();
-    await sql.close();
+    // Deliberately no sql.close() here — see db/client.ts.
   });
 
   // Task 9: the hand-written jags_notify_projects/columns/tasks/... triggers

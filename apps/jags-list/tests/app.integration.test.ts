@@ -35,7 +35,7 @@ describe.skipIf(!run)('app auth gate', () => {
   afterAll(async () => {
     proc?.kill();
     await sql`DELETE FROM "user" WHERE email = ${EMAIL}`;
-    await sql.close();
+    // Deliberately no sql.close() here — see db/client.ts.
   });
 
   it('redirects anonymous page requests to /login', async () => {

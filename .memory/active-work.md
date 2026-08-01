@@ -73,9 +73,35 @@ the registration site alone.
 **Nothing from that survey remains open.** The next framework work needs a fresh survey; the
 standing backlog is in [roadmap.md](roadmap.md).
 
-### Known test-harness limitation (found 2026-07-31)
+### ~~Known test-harness limitation~~ — FIXED 2026-08-01, and the recorded cause was wrong
 
-`cd apps/jags-list && RUN_APP_TESTS=1 bun test tests/` — running all suites in **one** invocation —
-fails with `PostgresError: Connection closed` (3 pass / 10 fail). Each suite spawns its own server
-and the connections collide. **This is pre-existing, not a regression**: verified identical on
-unmodified `main` @ `f5fa13a`. Run the suites one file at a time; all seven pass individually.
+`cd apps/jags-list && RUN_APP_TESTS=1 bun test` now runs clean: **53 pass / 0 fail across 16
+files**, exit 0 (and `bun test tests/` alone is 24 pass / 0 fail). Previously the whole-app run was
+38 pass / 15 fail and `tests/` alone was 3 pass / 10 fail, both with `PostgresError: Connection
+closed`.
+
+**The cause recorded here on 2026-07-31 — "each suite spawns its own server and the connections
+collide" — was wrong.** So was the follow-up diagnosis that blamed concurrency. Measured
+2026-08-01: `bun test` runs test **files sequentially in a single process** (two files with
+overlapping timers show the same pid and no interleaving), so nothing ever ran concurrently and
+nothing collided.
+
+The real cause: `db/client.ts` exports a module-level `sql` singleton, and one process means one
+module registry, so all seven files share that pool. The first file's `afterAll` called
+`sql.close()`, leaving a dead pool for every file that ran *after* it. Deterministic, not flaky —
+which the "collision" framing would have predicted wrongly.
+
+Fixed by deleting the `sql.close()` calls from all **twelve** integration test files — six under
+`tests/`, two under `lib/`, four under `db/`. Fixing only `tests/` looks like a fix if you verify
+with `bun test tests/`, but leaves `bun test` from the app root still failing, since `lib/` and
+`db/` suites share the same pool. The one-shot scripts under `scripts/` still close it, correctly:
+they are their own process and exist to terminate. Rationale is in `db/client.ts` so the calls
+don't get re-added.
+
+**Separate, still-open flakiness (found while verifying this):** two app-test runs back to back can
+fail with `Unable to connect` — the previous run's spawned servers have not released their ports
+yet. Not the pool, and not fixed here; leave a few seconds between runs, or the suites need
+dynamic ports.
+
+**Scope note:** this was an *app* test-harness bug, not a framework one — the framework's own
+`test:integration` runs each suite as a separate `bun` invocation, so it never shared a pool.
