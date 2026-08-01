@@ -33,7 +33,9 @@ describe.skipIf(!run)('app auth gate', () => {
   }, 30_000);
 
   afterAll(async () => {
+    // kill() only signals — await exited, or the port outlives this file.
     proc?.kill();
+    await proc?.exited;
     await sql`DELETE FROM "user" WHERE email = ${EMAIL}`;
     // Deliberately no sql.close() here — see db/client.ts.
   });

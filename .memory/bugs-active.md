@@ -61,6 +61,20 @@ here so they are tracked as defects rather than living only in a session transcr
     (`scripts/preflight-env.ts`), wired as the first step of `test:integration`. See
     [bugs-resolved.md](bugs-resolved.md).
 
+*   ~~**SIGTERM never terminated a server with an open SSE stream**~~ — **FIXED 2026-08-01** on
+    `fix/sigterm-hangs-with-open-sse`. `ElysiaAdapter.listen`'s signal handler awaited
+    `this.app.stop()` with no argument, which drains in-flight requests — and an SSE stream never
+    drains, so `process.exit(0)` was unreachable. Measured against `apps/jags-list`: **10ms** to exit
+    with no subscriber, **still alive after 10s** with one. Every Kiln app using a live field — the
+    framework's headline feature — would have stalled its orchestrator's full termination grace
+    period on every rolling deploy, then taken a SIGKILL that drops the other in-flight requests the
+    polite drain was meant to protect. Now `stop(true)`. Regression test:
+    `packages/adapter-elysia/src/shutdown.test.ts`. See [bugs-resolved.md](bugs-resolved.md) §0.
+
+    **Found by accident, and that is the point.** Nobody was looking at shutdown; adding
+    `await proc.exited` to the jags-list test teardown turned a silent production hang into a
+    5s hook timeout in exactly one suite — the only one that leaves an SSE stream open.
+
 *   **Nothing open in this section.** Every gap surveyed on 2026-07-31 is now closed; the sequence
     that ordered them is `docs/superpowers/plans/2026-07-31-framework-fix-sequencing.md`.
 

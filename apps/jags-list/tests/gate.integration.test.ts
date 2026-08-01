@@ -65,7 +65,9 @@ describe.skipIf(!run)('auth gate holds without requireUser in load()', () => {
   }, 30_000);
 
   afterAll(async () => {
+    // kill() only signals — await exited, or the port outlives this file.
     proc?.kill();
+    await proc?.exited;
     await sql`DELETE FROM projects WHERE id = ${projectId}`;
     await sql`DELETE FROM "user" WHERE email = ${MEMBER.email}`;
     // Deliberately no sql.close() here — see db/client.ts.

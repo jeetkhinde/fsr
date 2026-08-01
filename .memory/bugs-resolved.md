@@ -6,6 +6,45 @@ Historical record of fixed framework bugs, kept out of the active file to keep s
 
 ## 0. Fixed 2026-08-01
 
+### `fix/sigterm-hangs-with-open-sse` — the framework never shut down cleanly
+
+*   **SIGTERM did not terminate a server with an open SSE stream.**
+    `ElysiaAdapter.listen` (`packages/adapter-elysia/src/adapter.ts`) registered
+    `process.once('SIGTERM', shutdown)` where `shutdown` awaited
+    `this.app.stop()` — no argument, so Bun waits for in-flight requests to
+    drain. An SSE stream never drains, so `process.exit(0)` was never reached.
+
+    Measured against `apps/jags-list` (real server, authenticated subscriber on
+    `/__kiln/fsr`): **10ms** SIGTERM→exit with no subscriber, **still alive
+    after 10,000ms** with one. Not slow — unbounded.
+
+    Blast radius is every Kiln app that uses a live field, i.e. the feature the
+    framework exists for. Under Docker/k8s the container ignores SIGTERM for the
+    whole termination grace period (30s by default) and is then SIGKILLed —
+    which drops the other in-flight requests that waiting politely was supposed
+    to protect. So the polite `stop()` achieved the opposite of its intent.
+
+    Fixed with `await this.app.stop(true)` (Elysia 1.4.28: close active
+    connections). SSE clients reconnect by design, so closing them is the
+    correct trade. Note `packages/cli/src/cli.ts`'s `registerShutdown` was
+    always fine — it never awaited `app.stop()` — so apps started by the Kiln
+    CLI could win the race, while apps owning their entry point via ADR-020's
+    `config.server.setup` (jags-list) got only the adapter handler and hung
+    deterministically.
+
+    Regression test: `packages/adapter-elysia/src/shutdown.test.ts`, wired into
+    `test:integration`. Out-of-process by necessity (the code under test calls
+    `process.exit`), needs no Postgres or Redis, and falsified — restoring
+    `stop()` makes it fail with the diagnosis in the message.
+
+    **How it surfaced is worth keeping.** It was not found by looking at
+    shutdown. `apps/jags-list`'s six server-spawning suites called `proc.kill()`
+    without awaiting `proc.exited`; adding the await (to close an intermittent
+    port-rebind failure — measured: rebinding immediately after `kill()` fails
+    ~2 times in 3) converted a silent production hang into a hard 5s hook
+    timeout in exactly one suite: `live.integration.test.ts`, the only one whose
+    helper leaves an SSE reader open. A test-hygiene fix was the detector.
+
 ### `fix/known-defects` — the two limitations that outlived the bug ledger
 
 Both were recorded as "known limitations / future work" in

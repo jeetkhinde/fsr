@@ -98,10 +98,22 @@ with `bun test tests/`, but leaves `bun test` from the app root still failing, s
 they are their own process and exist to terminate. Rationale is in `db/client.ts` so the calls
 don't get re-added.
 
-**Separate, still-open flakiness (found while verifying this):** two app-test runs back to back can
-fail with `Unable to connect` — the previous run's spawned servers have not released their ports
-yet. Not the pool, and not fixed here; leave a few seconds between runs, or the suites need
-dynamic ports.
+~~**Separate, still-open flakiness (found while verifying this):** two app-test runs back to back
+can fail with `Unable to connect`.~~ — **FIXED 2026-08-01** on `fix/sigterm-hangs-with-open-sse`,
+and the recommended workaround was the wrong one. The suggestion here — "leave a few seconds
+between runs, or the suites need dynamic ports" — treated a missing `await` as a scheduling
+problem. All six server-spawning suites called `proc.kill()` and moved on; `kill()` only *signals*.
+Measured: rebinding the same port immediately after `kill()` fails **2 times in 3**, so the ports
+were fine and the teardown was not. Fixed with `await proc?.exited`; dynamic ports were never
+needed.
 
-**Scope note:** this was an *app* test-harness bug, not a framework one — the framework's own
-`test:integration` runs each suite as a separate `bun` invocation, so it never shared a pool.
+**That await then found a real framework bug.** With it, `live.integration.test.ts` — the one suite
+that leaves an SSE reader open — began timing out its teardown at 5s, because
+`ElysiaAdapter.listen`'s SIGTERM handler awaited `app.stop()` and an SSE stream never drains. Any
+Kiln app with a live field hung forever on SIGTERM. Fixed to `stop(true)`; see
+[bugs-resolved.md](bugs-resolved.md) §0.
+
+**Scope note:** the pool bug was an *app* test-harness bug — the framework's own `test:integration`
+runs each suite as a separate `bun` invocation, so it never shared a pool. The shutdown bug found
+downstream of it was **not**: it was in `@kiln/adapter-elysia` and shipped to every app. Worth
+remembering that the test vehicle earned its keep exactly as intended.
