@@ -89,7 +89,9 @@ describe.skipIf(!run)('freshness — auto-deps + owner-scoped invalidation (ADR-
   }, 30_000);
 
   afterAll(async () => {
+    // kill() only signals — await exited, or the port outlives this file.
     proc?.kill();
+    await proc?.exited;
     await sql`DELETE FROM kiln_fsr WHERE route IN (${ROUTE_PROJECTS}, ${ROUTE_NOTIFS})`;
     await sql`DELETE FROM notifications WHERE user_id IN (${OWNER_TOM}, ${OWNER_ADAM})`;
     // Deliberately no sql.close() here — see db/client.ts.

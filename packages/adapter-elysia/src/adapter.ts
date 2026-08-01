@@ -153,7 +153,14 @@ export class ElysiaAdapter implements ServerAdapter {
     });
 
     const shutdown = async () => {
-      await this.app.stop();
+      // `stop()` with no argument waits for in-flight requests to drain — and an
+      // SSE stream never drains, so any app with a live field (the whole point
+      // of FSR) hung here forever: measured 10ms to exit with no subscriber,
+      // still alive after 10s with one. Orchestrators answer a hang with
+      // SIGKILL once the grace period expires, which drops every OTHER in-flight
+      // request too — so waiting politely cost more than it bought. `stop(true)`
+      // closes active connections; SSE clients reconnect by design.
+      await this.app.stop(true);
       process.exit(0);
     };
     process.once('SIGTERM', shutdown);

@@ -38,7 +38,9 @@ describe.skipIf(!run)('crud routes', () => {
   }, 30_000);
 
   afterAll(async () => {
+    // kill() only signals — await exited, or the port outlives this file.
     proc?.kill();
+    await proc?.exited;
     for (const id of createdProjectIds) await sql`DELETE FROM projects WHERE id = ${id}`;
     for (const u of [ADMIN, MEMBER]) await sql`DELETE FROM "user" WHERE email = ${u.email}`;
     // Deliberately no sql.close() here — see db/client.ts.
