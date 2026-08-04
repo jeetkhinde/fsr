@@ -49,8 +49,22 @@ export interface InspectRow {
 
 const REQUERY_TIMEOUT_MS = 10_000;
 
-/** jsonb through bun's SQL arrives as a string; other drivers hand back an
- * object. Returns null for anything undecodable so the caller can say so. */
+/**
+ * Normalizes an event payload to an object, or null if it cannot be.
+ *
+ * **Corrected 2026-08-04:** this used to say "jsonb through bun's SQL arrives
+ * as a string". Measured against bun 1.3.14, it does not — a jsonb object
+ * comes back as a JS object and a jsonb array as a JS array. What arrives as a
+ * string is a value *stored* through `${JSON.stringify(x)}::jsonb`, which
+ * binds the JS string as a jsonb **string** (`jsonb_typeof` = string):
+ * double-encoded going in, decoded faithfully coming out. Every payload
+ * `kiln_emit_event` writes uses `jsonb_build_object`, so production events are
+ * real objects and always were.
+ *
+ * The string branch therefore guards double-encoded rows and other drivers,
+ * not a bun quirk. Kept — it costs one typeof and the alternative is silently
+ * skipped events — but no longer sold as the cause of anything.
+ */
 export function decodeEventPayload(raw: unknown): Record<string, any> | null {
   if (raw && typeof raw === 'object') return raw as Record<string, any>;
   if (typeof raw !== 'string') return null;
@@ -651,12 +665,13 @@ export class FsrStore {
   /**
    * Events since the cursor, for crash/disconnect catch-up.
    *
-   * `payload` is decoded here rather than at the call site because bun's SQL
-   * hands jsonb back as a **string** (same quirk as BIGINT). It was previously
-   * returned untouched, so `const { depKey } = event.payload` in the watcher
-   * destructured a string and got `undefined` — every event a silent no-op
-   * while the cursor still advanced past it. Accepts an already-parsed object
-   * too, so a driver that decodes jsonb keeps working.
+   * `payload` is normalized here rather than at the call site so the watcher
+   * never destructures a value whose shape depends on the driver. See
+   * `decodeEventPayload` — and note the rationale recorded here on 2026-08-01
+   * ("bun's SQL hands jsonb back as a string, so every event was a silent
+   * no-op") was **wrong**, and is corrected there. Trigger-emitted payloads
+   * are jsonb objects and always decoded correctly; what was actually broken
+   * was catch-up never running on a LISTEN reconnect.
    *
    * A payload that cannot be decoded is returned as `null` and left for the
    * caller to report; never `{}`, which would be indistinguishable from a
