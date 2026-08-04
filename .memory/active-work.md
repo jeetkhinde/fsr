@@ -2,16 +2,20 @@
 
 **Kiln framework** workspace only. Completed-session history → [work-log.md](work-log.md). App-specific work lives under `apps/<app>/.memory/`.
 
-Last updated: 2026-07-31
+Last updated: 2026-08-04
 
 ## Current State
 
-**In flight: `feat/action-response-api`** (worktree `.worktrees/feat-action-response-api`) — P0 #2,
-complete and verified, not yet merged. `main` @ `f5fa13a`.
+**In flight: `fix/event-cursor-in-postgres`** (worktree `.worktrees/fix-cursor-in-postgres`) — moves
+the catch-up cursor off local disk into a shared `kiln_fsr_cursor` row (ADR-022). `main` @ `5ad5553`.
 
-Last full framework verification: **2026-07-31** on `feat/action-response-api` — `bun run test:unit`
-**248 pass / 60 skip / 0 fail**, `bun run test:integration` exit 0 (live PG + Redis),
-`bun run build` exit 0, and all seven `apps/jags-list` suites green individually (24 pass / 0 fail).
+(The entry that stood here — "In flight: `feat/action-response-api`" — was stale for four days; it
+merged as PR #31 on 2026-07-31.)
+
+Last full framework verification: **2026-08-04** on `fix/event-cursor-in-postgres` —
+`bun run test:unit` **340 pass / 60 skip / 0 fail**, `bun run test:integration` exit 0 (live PG +
+Redis), `bun run build` exit 0, and `apps/jags-list` **53 pass / 0 fail across 16 files** in one
+`RUN_APP_TESTS=1 bun test` invocation.
 
 Note for fresh worktrees: they start with no `node_modules` and no `packages/*/dist`, so
 `bun install && bun run build` must run before any test, and `.env` files must be copied in

@@ -84,6 +84,21 @@ here so they are tracked as defects rather than living only in a session transcr
     replayed nothing. Together: missed events were recovered *never*. See
     [bugs-resolved.md](bugs-resolved.md) §0.
 
+*   ~~**The catch-up cursor lived on local disk while its events lived in shared Postgres**~~ —
+    **FIXED 2026-08-04** on `fix/event-cursor-in-postgres`. A container with no persistent cache dir
+    found no cursor on every restart, took the adopt-current-head branch and dropped the whole
+    restart-sized gap; catch-up therefore recovered restarts only on a machine that kept its own
+    disk, i.e. in development. The cursor is now one shared `kiln_fsr_cursor` row, advanced with
+    `GREATEST` and read as the greatest of {in-memory mark, row, legacy file (one-release shim)}.
+    Shared rather than per-instance because replay writes only to the shared `kiln_fsr` tables — see
+    ADR-022. Regression test: `packages/engine/src/catch-up.test.ts` case 2, which now uses a
+    *different* temp dir for the replacement instance and fails on the old code with
+    "a replacement instance with no local cursor file did not replay the restart gap".
+
+    **The known limitation was the bug.** It sat in this file for three days as a design note
+    ("moving the cursor into Postgres is the real fix") rather than a defect, which understated it:
+    the recovery path it degraded was already the one nobody exercises.
+
 *   **Nothing open in this section.** Every gap surveyed on 2026-07-31 is now closed; the sequence
     that ordered them is `docs/superpowers/plans/2026-07-31-framework-fix-sequencing.md`.
 
@@ -129,6 +144,12 @@ Recorded so they aren't re-filed as bugs. Full rationale in `.codebase-memory/ad
 *   ~~Dynamic-segment `bake='user'` + live fields falls back to shared-key SSE scoping~~ — **FIXED
     2026-07-31**: the SSE and snapshot endpoints now match the concrete path back to its registered
     pattern before reading bake mode. See [bugs-resolved.md](bugs-resolved.md) §0.
+*   ~~The catch-up cursor is per-container while the events are shared, so a restart-sized gap is
+    unrecoverable without a persistent cache dir.~~ — **FIXED 2026-08-04**, see § 1 above and
+    ADR-022.
+*   `kiln_fsr_events` is never pruned. Bounded in effect (a cold start adopts head rather than
+    replaying), but the table grows without limit. Now that the cursor is in Postgres, pruning below
+    `MIN(event_id)` is possible; **not done** — no profiling evidence yet.
 *   The dormant check costs one awaited Postgres SELECT per validated cache hit on routes with no
     local SSE-active mark. **Decision 2026-07-27: leave as-is** — correctness over a sub-ms indexed
     read; revisit only with profiling evidence.
