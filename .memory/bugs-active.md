@@ -76,13 +76,29 @@ here so they are tracked as defects rather than living only in a session transcr
     5s hook timeout in exactly one suite — the only one that leaves an SSE stream open.
 
 *   ~~**Crash/disconnect event catch-up had never worked**~~ — **FIXED 2026-08-01** on
-    `fix/event-catch-up-never-replayed`. Two defects, both silent: (a) `fetchEventsSince` returned
-    the jsonb `payload` untouched and bun's SQL hands jsonb back as a **string**, so
-    `const { depKey } = event.payload` was always `undefined` — every event a no-op **while the
-    cursor still advanced past it**, making them unrecoverable; (b) catch-up was private and called
-    only from `FsrWatcher.start()`, so a LISTEN reconnect logged "reconnected to Postgres" and
-    replayed nothing. Together: missed events were recovered *never*. See
-    [bugs-resolved.md](bugs-resolved.md) §0.
+    `fix/event-catch-up-never-replayed`, but **defect (a) as recorded was wrong — corrected
+    2026-08-04.**
+
+    (a) was filed as: `fetchEventsSince` returned the jsonb `payload` untouched, bun's SQL hands
+    jsonb back as a **string**, so `const { depKey } = event.payload` was always `undefined`.
+    **Measured against bun 1.3.14: it does not.** A jsonb object comes back as a JS object and a
+    jsonb array as a JS array. What comes back as a string is a value *stored* through
+    `${JSON.stringify(x)}::jsonb`, which binds the JS string as a jsonb **string**
+    (`jsonb_typeof` = `string`) — double-encoded going in, decoded faithfully coming out. Every
+    payload `kiln_emit_event` writes uses `jsonb_build_object`, so production events were objects
+    and destructured correctly all along. The strings were the *test suite's own fixtures*.
+    `decodeEventPayload` is kept as normalization (it does cover double-encoded rows and other
+    drivers) but it fixed nothing on the production path.
+
+    (b) **was real**: catch-up was private and called only from `FsrWatcher.start()`, so a LISTEN
+    reconnect logged "reconnected to Postgres" and replayed nothing. That is what made missed events
+    unrecoverable across a reconnect, and `catch-up.test.ts` case 3 covers it.
+
+    **The lesson is the one already in this file, applied to us:** a test that constructs its own
+    fixture can measure the fixture instead of the system. The suite inserted double-encoded
+    payloads no trigger ever produces, then concluded the driver was at fault. It now emits through
+    `jsonb_build_object`, matching `kiln_emit_event`, with the double-encoded shape kept as an
+    explicit separate case. See [bugs-resolved.md](bugs-resolved.md) §0.
 
 *   ~~**The catch-up cursor lived on local disk while its events lived in shared Postgres**~~ —
     **FIXED 2026-08-04** on `fix/event-cursor-in-postgres`. A container with no persistent cache dir
@@ -98,6 +114,24 @@ here so they are tracked as defects rather than living only in a session transcr
     **The known limitation was the bug.** It sat in this file for three days as a design note
     ("moving the cursor into Postgres is the real fix") rather than a defect, which understated it:
     the recovery path it degraded was already the one nobody exercises.
+
+*   ~~**The LISTEN client's `once('error')` missed pg's second error event**~~ — **FIXED 2026-08-04**
+    on `fix/minor-recovery-findings`. pg emits two `error` events when a backend is terminated under
+    an in-flight query (the query's, then "Connection terminated unexpectedly"); `once` had already
+    detached, so the second reached an emitter with no listener. Bun printed a stack from inside
+    pg's `client.js` and survived (measured exit 0) — on Node the same path throws. Now a permanent
+    listener plus a latch, so nothing is unhandled *and* exactly one reconnect is scheduled per
+    client (a plain `on` would have doubled the clients on every drop). Unit test:
+    `packages/engine/src/db-notify-error.test.ts`, all three cases fail with `once`.
+
+*   ~~**`reExecuteQuery` drops params when `queryParams` is a jsonb string**~~ — **DOES NOT
+    REPRODUCE, closed 2026-08-04.** Same false premise as (a) above: `upsertSlot([2])` stores a real
+    jsonb array and `fetchStaleSlots` returns a real JS array, so `Array.isArray` is true and the
+    requery binds its parameters. Verified by falsification in the opposite direction — the proposed
+    decode was added, then removed, and the test passed identically both times, so it was not
+    committed. The end-to-end round trip is now covered as a characterization test in
+    `store.test.ts` (`reExecuteQuery` with parameters), which had no coverage at all before because
+    the only production caller passes a null query.
 
 *   **Nothing open in this section.** Every gap surveyed on 2026-07-31 is now closed; the sequence
     that ordered them is `docs/superpowers/plans/2026-07-31-framework-fix-sequencing.md`.

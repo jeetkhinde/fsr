@@ -9,25 +9,38 @@ Historical record of fixed framework bugs, kept out of the active file to keep s
 ### `fix/event-catch-up-never-replayed` — the recovery path recovered nothing
 
 Found by auditing for more bugs of the `fix/sigterm-hangs-with-open-sse` class
-(paths that only run after something else has already failed). Two defects that
-compounded into "missed invalidation events are recovered **never**".
+(paths that only run after something else has already failed). Filed as two
+defects compounding into "missed events are recovered **never**" — **one of the
+two was not real**, see the retraction below. The accurate statement is that a
+LISTEN reconnect recovered nothing; a restart with a readable cursor file did
+replay correctly.
 
-*   **`catchUpMissedEvents` had never invalidated anything.**
-    `FsrStore.fetchEventsSince` returned the jsonb `payload` column untouched,
-    and bun's SQL hands jsonb back as a **string** — the same quirk this repo
-    already hit for BIGINT and jsonb. `watcher.ts` then did
-    `const { depKey, id } = event.payload`, destructuring a string: both
-    `undefined`, so every branch was skipped. Worse, `lastProcessed = event.id`
-    ran regardless and the cursor was persisted, so the events were **consumed
-    and unrecoverable** — a second boot could not retry them.
+*   ~~**`catchUpMissedEvents` had never invalidated anything.**~~ — **THIS DEFECT
+    WAS NOT REAL. Retracted 2026-08-04.**
 
-    Proved before the fix: a pending event with the cursor behind it left the
-    slot `stale = false` across two boots, with the cursor sitting on the
-    event's own id.
+    It was recorded as: `fetchEventsSince` returned the jsonb `payload` column
+    untouched, bun's SQL hands jsonb back as a **string**, so
+    `const { depKey, id } = event.payload` destructured a string and skipped
+    every branch while the cursor advanced past it.
 
-    Fixed with `decodeEventPayload` in `store.ts` (accepts a string or an
-    already-decoded object, returns `null` — never `{}` — for anything it
-    cannot decode, so "undecodable" stays distinguishable from "no dep key").
+    **Measured against bun 1.3.14, the premise is false.** A jsonb object comes
+    back as a JS object; a jsonb array as a JS array. What comes back as a
+    string is a value that was *stored* through `${JSON.stringify(x)}::jsonb`,
+    which binds the JS string as a jsonb **string** — `jsonb_typeof` returns
+    `string`, not `object`. Double-encoded going in, decoded faithfully coming
+    out. `kiln_emit_event` builds every payload with `jsonb_build_object`, so
+    production events were objects and destructured correctly all along.
+
+    **The "proof before the fix" proved the fixture.** The pending event it used
+    was inserted by the test as `${JSON.stringify({depKey})}::jsonb` — a shape
+    no trigger produces. The suite emits through `jsonb_build_object` now, the
+    double-encoded shape is kept as its own explicit case, and
+    `decodeEventPayload` stays as normalization for that case and for other
+    drivers — but it is no longer described as fixing anything.
+
+    Verification for the retraction: a real trigger fired on a probe table, its
+    row read back — `jsonb_typeof` = `object`, JS `typeof` = `object`,
+    `const { depKey } = payload` yields the dep key.
 
 *   **A LISTEN reconnect replayed nothing.** `catchUpMissedEvents` was private
     and called from exactly one place, `FsrWatcher.start()`. A mid-life drop

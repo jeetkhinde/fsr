@@ -4,6 +4,38 @@ import { FsrWatcher } from './watcher.js';
 
 const MAX_RECONNECT_DELAY_MS = 30_000;
 
+/**
+ * Attach a permanent 'error' listener that fires `onFirst` exactly once.
+ *
+ * `once` was wrong in both halves. pg emits a SECOND 'error' on a terminated
+ * backend — one from the in-flight query, then 'Connection terminated
+ * unexpectedly' from the connection itself — and `once` has already detached
+ * by then, so that second error reaches an emitter with no 'error' listener.
+ * Node treats that as an unhandled 'error' event and throws; Bun prints a full
+ * stack from inside pg's client.js and survives, which is how this stayed
+ * cosmetic long enough to be filed as log noise rather than a bug.
+ *
+ * A plain `on` alone would fix the noise and break the reconnect instead —
+ * both errors would each schedule one, doubling the clients every drop. Hence
+ * a listener that stays attached (so nothing is ever unhandled) plus a latch
+ * (so exactly one reconnect is scheduled per client).
+ */
+export function attachListenerErrorHandler(
+  client: { on(event: 'error', listener: (err: any) => void): unknown },
+  onFirst: (err: any) => void,
+): void {
+  let fired = false;
+  client.on('error', (err: any) => {
+    if (fired) {
+      // The follow-up error for a connection already being replaced. Swallowed
+      // deliberately: it describes the same failure the reconnect is handling.
+      return;
+    }
+    fired = true;
+    onFirst(err);
+  });
+}
+
 function wireClient(client: pg.Client, watcher: FsrWatcher): void {
   client.on('notification', async (msg) => {
     if (msg.channel === 'kiln_invalidate' && msg.payload) {
@@ -57,7 +89,7 @@ export async function startDbNotificationPipeline(
         await client.connect();
         await client.query('LISTEN kiln_invalidate');
         wireClient(client, watcher);
-        client.once('error', (err) => {
+        attachListenerErrorHandler(client, (err) => {
           console.warn('FSR DB listener: connection error, reconnecting:', err.message);
           reconnectDelay = 1000;
           reconnect();
@@ -84,7 +116,7 @@ export async function startDbNotificationPipeline(
   await client.query('LISTEN kiln_invalidate');
   wireClient(client, watcher);
 
-  client.once('error', (err) => {
+  attachListenerErrorHandler(client, (err) => {
     console.warn('FSR DB listener: connection error, reconnecting:', err.message);
     reconnect();
   });

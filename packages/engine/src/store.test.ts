@@ -419,6 +419,61 @@ async function runTests() {
       'markFresh without expectedVersion clears unconditionally',
     );
 
+    // A parameterised slot, round-tripped through the jsonb query_params
+    // column and requeried. Nothing covered this: the only production caller
+    // (page-render.ts) passes a null query, so reExecuteQuery's parameter
+    // path had never been executed by a test.
+    //
+    // Added while checking a filed claim that it dropped its parameters —
+    // that `Array.isArray(slot.queryParams)` was false because bun's SQL
+    // returns jsonb as a string. **It does not.** Measured against bun
+    // 1.3.14: a jsonb array comes back as a JS array and a jsonb object as a
+    // JS object. What returns a string is a value that was *stored* through
+    // `${JSON.stringify(x)}::jsonb`, which binds the JS string as a jsonb
+    // string — double-encoded on the way in, faithfully decoded on the way
+    // out. So the test kept passing with the proposed decode removed, and the
+    // decode was dropped rather than committed as a fix for nothing.
+    //
+    // This stays as a characterization test: it pins the round trip that the
+    // claim was about, so if a driver upgrade ever does start handing back
+    // strings, this fails instead of a production requery.
+    console.log('Testing reExecuteQuery with parameters through jsonb...');
+    await bunSql.unsafe('DROP TABLE IF EXISTS kiln_params_probe');
+    await bunSql.unsafe('CREATE TABLE kiln_params_probe (id int primary key, val text)');
+    await bunSql.unsafe("INSERT INTO kiln_params_probe VALUES (1, 'one'), (2, 'two')");
+    try {
+      // fetchStaleSlots joins the route-level row (slot = ''), so the slot is
+      // invisible without it.
+      await store.ensureRouteRow('/params-probe');
+      await store.upsertSlot(
+        '/params-probe',
+        'val',
+        'SELECT val FROM kiln_params_probe WHERE id = $1',
+        [2],
+        ['kiln_params_probe'],
+        0,
+        'val',
+      );
+      await store.invalidateDepKey('kiln_params_probe');
+      const staleParams = await store.fetchStaleSlots();
+      const probeSlot = staleParams.find((s) => s.route === '/params-probe' && s.slot === 'val');
+      assert.ok(probeSlot, 'the parameterised slot did not come back stale');
+      assert.ok(
+        Array.isArray(probeSlot!.queryParams),
+        'a jsonb array must come back as a JS array; if this fails the driver ' +
+          'changed and reExecuteQuery needs an explicit decode',
+      );
+      assert.equal(
+        await store.reExecuteQuery(probeSlot!),
+        'two',
+        'reExecuteQuery dropped its parameters — the requery ran without $1',
+      );
+      console.log('  ✓ reExecuteQuery keeps parameters that round-tripped through jsonb');
+    } finally {
+      await bunSql.unsafe('DROP TABLE IF EXISTS kiln_params_probe');
+      await bunSql`DELETE FROM kiln_fsr WHERE route = '/params-probe'`;
+    }
+
     console.log('🎉 FsrStore and RedisCache integration tests PASSED!');
   } finally {
     await bunSql.unsafe('DELETE FROM kiln_fsr');

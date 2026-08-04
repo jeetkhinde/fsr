@@ -2,17 +2,22 @@
  * Event catch-up: the recovery path that runs only after something else has
  * already gone wrong, and was therefore never exercised.
  *
- * Two defects, both silent, found 2026-08-01:
+ * Defects found 2026-08-01:
  *
- *  1. `fetchEventsSince` returned the jsonb `payload` untouched and bun's SQL
+ *  1. ~~`fetchEventsSince` returned the jsonb `payload` untouched and bun's SQL
  *     hands jsonb back as a **string**, so `const { depKey } = event.payload`
- *     in the watcher always got `undefined`. Every event was a no-op — while
- *     the cursor still advanced past it, so the events were consumed and
- *     unrecoverable. Catch-up had never invalidated anything.
+ *     always got `undefined`.~~ **This was wrong, corrected 2026-08-04.** bun
+ *     1.3.14 returns a jsonb object as a JS object; `kiln_emit_event` writes
+ *     payloads with `jsonb_build_object`, so real events destructured fine and
+ *     always had. The strings were this suite's own fixtures, stored through
+ *     `${JSON.stringify(x)}::jsonb` — which binds a jsonb *string*. The test
+ *     was measuring the test. `decodeEventPayload` is kept as normalization
+ *     (case 1b) but it fixed nothing on the production path.
  *
  *  2. Catch-up was private and called only from `FsrWatcher.start()`, so a
  *     mid-life LISTEN drop re-subscribed, logged "reconnected to Postgres" and
- *     replayed nothing. Combined with (1): missed events were recovered never.
+ *     replayed nothing. **This one was real** and is what made missed events
+ *     unrecoverable across a reconnect (case 3).
  *
  * Also pins the guard added with the fix — a cold start with no cursor must
  * adopt the current head rather than replay all of `kiln_fsr_events`, which is
@@ -85,10 +90,16 @@ async function runTests() {
     const rows = await sql`SELECT stale FROM kiln_fsr WHERE route = ${ROUTE} AND slot = 'probe'`;
     return !!rows[0]?.stale;
   };
+  // jsonb_build_object, exactly as kiln_emit_event writes it. This used to be
+  // `${JSON.stringify({ depKey: DEP })}::jsonb`, which binds the JS string as
+  // a jsonb *string* — `jsonb_typeof` = string, not object. Every event in
+  // this suite was therefore double-encoded and shaped unlike anything a real
+  // trigger produces, which is what made a payload look like "a string bun
+  // handed back" when it was a string the test had stored.
   const emitEvent = async (): Promise<number> => {
     const rows = await sql`
       INSERT INTO kiln_fsr_events (event_type, payload)
-      VALUES ('UPDATE', ${JSON.stringify({ depKey: DEP })}::jsonb) RETURNING id`;
+      VALUES ('UPDATE', jsonb_build_object('depKey', ${DEP}::text)) RETURNING id`;
     return Number(rows[0].id);
   };
   const makeWatcher = (cacheDir: string) =>
@@ -104,21 +115,42 @@ async function runTests() {
     });
   const tmpDir = async () => fs.mkdtemp(path.join(os.tmpdir(), 'kiln-catchup-'));
 
-  // 1. The decode itself. This is the assertion that fails if jsonb ever comes
-  //    back as a raw string again.
+  // 1. A trigger-shaped payload survives the round trip usably. Weaker than it
+  //    used to read: the driver hands a jsonb object back as an object, so
+  //    this passes with or without `decodeEventPayload`. It is here to catch a
+  //    driver that stops doing that, not to prove the normalization earns its
+  //    keep — that is case 1b.
   {
     await cleanup();
     const id = await emitEvent();
     const events = await store.fetchEventsSince(id - 1);
     const event = events.find((e) => e.id === id);
     assert.ok(event, 'fetchEventsSince did not return the event just inserted');
+    assert.equal(typeof event!.payload, 'object', 'payload did not arrive as an object');
+    assert.equal(event!.payload.depKey, DEP, 'payload lost its depKey');
+    console.log('  ✓ a trigger-shaped payload round-trips as a usable object');
+  }
+
+  // 1b. The case decodeEventPayload actually exists for: a row whose payload
+  //     was stored double-encoded (`${JSON.stringify(x)}::jsonb` — a jsonb
+  //     STRING). Written straight to the table because no trigger produces
+  //     this; it is the shape this suite used to test against by accident.
+  {
+    await cleanup();
+    const rows = await sql`
+      INSERT INTO kiln_fsr_events (event_type, payload)
+      VALUES ('UPDATE', ${JSON.stringify({ depKey: DEP })}::jsonb) RETURNING id`;
+    const id = Number(rows[0].id);
+    const typing = await sql`SELECT jsonb_typeof(payload) as jt FROM kiln_fsr_events WHERE id = ${id}`;
+    assert.equal(typing[0].jt, 'string', 'precondition: this insert stores a jsonb string');
+
+    const event = (await store.fetchEventsSince(id - 1)).find((e) => e.id === id);
     assert.equal(
-      typeof event!.payload,
-      'object',
-      'payload must be decoded, not handed back as a jsonb string',
+      event!.payload?.depKey,
+      DEP,
+      'a double-encoded payload must still yield its depKey, not a bare string',
     );
-    assert.equal(event!.payload.depKey, DEP, 'decoded payload lost its depKey');
-    console.log('  ✓ fetchEventsSince decodes the jsonb payload');
+    console.log('  ✓ a double-encoded payload is normalized rather than skipped');
   }
 
   // 2. Crash then restart, on a container that does NOT share the old one's
