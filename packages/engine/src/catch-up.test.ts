@@ -217,9 +217,10 @@ async function runTests() {
     console.log('  ✓ a LISTEN reconnect replays events missed during the gap');
   }
 
-  // 4. Cold start must not stampede. kiln_fsr_events is never pruned, so
-  //    replaying from 0 whenever the cursor is absent would invalidate against
-  //    the app's entire history on every fresh deploy.
+  // 4. Cold start must not stampede. Replaying from 0 whenever the cursor is
+  //    absent would invalidate against the app's whole retained history on
+  //    every fresh deploy — and pruning (case 7) deliberately never empties
+  //    the table on its own, so "history exists" stays the normal case.
   {
     const dir = await tmpDir(); // empty: no legacy file either
     await clearCursor();
@@ -279,6 +280,66 @@ async function runTests() {
       'the upgrade shim did not carry the cursor into Postgres',
     );
     console.log('  ✓ an upgrade reads the legacy file cursor once, then owns the row');
+  }
+
+  // 7. Pruning the event log. `kiln_fsr_events` is append-only — one row per
+  //    write on every registered table — and nothing deleted from it until
+  //    now, so it grew for the life of the database.
+  //
+  //    The watermark is what matters: an event ABOVE the cursor has not been
+  //    applied everywhere and must survive, however old it is. Deleting one is
+  //    unrecoverable — the row is the only record that the invalidation was
+  //    owed.
+  {
+    await clearCursor();
+    await cleanup();
+    // The whole table, not just this suite's rows: pruneAppliedEvents returns
+    // a GLOBAL count, so leftovers from earlier runs make the counts below
+    // meaningless. (Found the hard way — the first run of this case deleted 69
+    // real events accumulated by previous suites and failed on the number.)
+    await sql`DELETE FROM kiln_fsr_events`;
+
+    const applied = await emitEvent();
+    const unapplied = await emitEvent();
+    await store.writeEventCursor(applied); // fleet has applied up to `applied`
+
+    const idsLeft = async (): Promise<number[]> => {
+      const rows = await sql`
+        SELECT id FROM kiln_fsr_events WHERE payload->>'depKey' = ${DEP} ORDER BY id`;
+      return rows.map((r: any) => Number(r.id));
+    };
+
+    // Retention holds the line first: everything here was written seconds ago.
+    assert.equal(await store.pruneAppliedEvents(3_600), 0, 'prune ignored its retention window');
+    assert.deepEqual(await idsLeft(), [applied, unapplied], 'a retained event was deleted');
+
+    // Now with no grace period. The applied one goes; the one above the
+    // cursor stays, which is the assertion the whole feature rests on.
+    const deleted = await store.pruneAppliedEvents(0);
+    // Survivors first, so a regression reports what was lost rather than an
+    // off-by-one on a count.
+    assert.deepEqual(
+      await idsLeft(),
+      [unapplied],
+      'prune deleted an event the cursor had not reached — that invalidation is now lost',
+    );
+    assert.equal(deleted, 1, 'prune did not delete the applied event');
+
+    // Re-running is a no-op rather than an error.
+    assert.equal(await store.pruneAppliedEvents(0), 0, 'a second prune deleted something');
+
+    // No cursor row at all: nothing is known to be applied, so nothing goes.
+    // `id <= NULL` is NULL, so this falls out of SQL's null semantics — pin it,
+    // because a future rewrite using COALESCE(MAX(...), 0) or a join would
+    // quietly turn "no progress recorded" into "delete everything".
+    await clearCursor();
+    assert.equal(
+      await store.pruneAppliedEvents(0),
+      0,
+      'prune emptied the log while no cursor row existed',
+    );
+    assert.deepEqual(await idsLeft(), [unapplied], 'the log was pruned with no watermark to go on');
+    console.log('  ✓ pruning deletes applied events only, and never without a watermark');
   }
 
   await cleanup();

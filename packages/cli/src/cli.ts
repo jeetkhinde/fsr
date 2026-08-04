@@ -55,6 +55,7 @@ async function initFsr(config: KilnConfig): Promise<FsrRuntime> {
     purgeSweepSeconds: config.fsr.purgeSweepSeconds,
     revalidateSeconds: config.fsr.revalidateSeconds,
     activeWindowSecs: config.fsr.activeWindowSecs ?? 30,
+    eventRetentionSecs: config.fsr.eventRetentionSecs,
     cacheDir: config.cache?.dir ?? '.kiln-cache',
     scheduledInvalidations: [],
   });

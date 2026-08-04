@@ -181,9 +181,15 @@ Recorded so they aren't re-filed as bugs. Full rationale in `.codebase-memory/ad
 *   ~~The catch-up cursor is per-container while the events are shared, so a restart-sized gap is
     unrecoverable without a persistent cache dir.~~ — **FIXED 2026-08-04**, see § 1 above and
     ADR-022.
-*   `kiln_fsr_events` is never pruned. Bounded in effect (a cold start adopts head rather than
-    replaying), but the table grows without limit. Now that the cursor is in Postgres, pruning below
-    `MIN(event_id)` is possible; **not done** — no profiling evidence yet.
+*   ~~`kiln_fsr_events` is never pruned.~~ — **FIXED 2026-08-04** on `fix/prune-event-log`.
+    `FsrStore.pruneAppliedEvents(retentionSecs)` deletes rows at or below `MIN(event_id)` across
+    every `kiln_fsr_cursor` row and older than `fsr.eventRetentionSecs` (default 86400), driven from
+    the existing `purgeSweepSeconds` sweep. An empty cursor table deletes nothing, by SQL's null
+    semantics, and a test pins that. See ADR-022's amended consequence.
+
+    Worth noting what the first test run measured: on this machine's test database the sweep found
+    **69** applied events accumulated by previous suites — the table had been growing since the
+    events mechanism landed, exactly as the entry predicted.
 *   The dormant check costs one awaited Postgres SELECT per validated cache hit on routes with no
     local SSE-active mark. **Decision 2026-07-27: leave as-is** — correctness over a sub-ms indexed
     read; revisit only with profiling evidence.

@@ -450,9 +450,20 @@ per instance for no benefit.
 *   `WatcherConfig.cacheDir` is deprecated and now read-only, for the shim.
     Delete it, `readLegacyFileCursor`, and the `fs`/`path` imports after a
     release.
-*   `kiln_fsr_events` is still never pruned. With the cursor in Postgres,
-    pruning below `MIN(event_id)` across cursor rows becomes possible — not
-    done here.
+*   ~~`kiln_fsr_events` is still never pruned.~~ **Done 2026-08-04**, in the
+    follow-up that this bullet predicted. `FsrStore.pruneAppliedEvents` deletes
+    rows at or below `MIN(event_id)` across **every** `kiln_fsr_cursor` row (a
+    lagging second consumer must not have its history deleted), older than
+    `fsr.eventRetentionSecs` (default 86400). It rides the existing
+    `purgeSweepSeconds` timer in the idle-eviction loop rather than adding a
+    second supervised loop, so `purgeSweepSeconds: 0` disables it too.
+
+    An empty cursor table deletes **nothing**: `id <= NULL` is NULL, so the
+    WHERE matches no rows. That is load-bearing rather than incidental — "no
+    progress recorded" is not "everything applied" — and it is pinned by a test
+    that fails if the expression is ever rewritten with a `COALESCE` default.
+    Retention is a grace buffer for reading the log; the watermark is the
+    safety property.
 
 **Amends** ADR-018 (recovery path; the "cursor lives on local disk" limitation
 recorded against it is closed).

@@ -731,6 +731,39 @@ export class FsrStore {
     `;
   }
 
+  /**
+   * Delete applied events, oldest first. `kiln_fsr_events` is append-only —
+   * the trigger inserts a row per write on every registered table — and until
+   * now nothing ever removed one, so the table grew for the life of the
+   * database.
+   *
+   * The watermark is `MIN(event_id)` across **every** row of
+   * `kiln_fsr_cursor`, not the `'events'` row alone: a second consumer that
+   * lags behind must not have its history deleted out from under it. An event
+   * at or below that id has been applied to the shared `kiln_fsr` tables by
+   * some instance and can never be needed again — replay resumes from the
+   * cursor, and an instance with no cursor adopts head (ADR-022).
+   *
+   * `retentionSecs` is a grace buffer on top, not the safety property: it
+   * keeps recent applied events around so an operator can still read what
+   * happened. Correctness comes from the watermark alone.
+   *
+   * No cursor row at all deletes **nothing** — `id <= NULL` is NULL, so the
+   * WHERE matches no rows. That is the wanted behaviour and it falls out of
+   * SQL's null semantics rather than needing a guard, but it is load-bearing:
+   * an empty cursor table means "nobody has recorded progress", which is not
+   * the same as "everything is applied".
+   */
+  async pruneAppliedEvents(retentionSecs: number): Promise<number> {
+    const rows = await this.sql`
+      DELETE FROM kiln_fsr_events
+      WHERE id <= (SELECT MIN(event_id) FROM kiln_fsr_cursor)
+        AND created_at < NOW() - (${retentionSecs} * interval '1 second')
+      RETURNING id
+    `;
+    return rows.length;
+  }
+
   /** Highest recorded event id, or 0 when the table is empty. Used to adopt a
    * starting point when no cursor exists, instead of replaying all history. */
   async getLatestEventId(): Promise<number> {

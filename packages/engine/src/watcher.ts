@@ -26,6 +26,12 @@ export interface WatcherConfig {
   patchDebounceSecs: number;
   purgeAfterSeconds: number;
   purgeSweepSeconds?: number;
+  /** How long an *already-applied* event is kept in `kiln_fsr_events` before
+   * the purge sweep deletes it. Default 86400 (a day). A grace buffer for
+   * humans reading the log — safety comes from the cursor watermark, see
+   * `FsrStore.pruneAppliedEvents`. Pruning rides the `purgeSweepSeconds`
+   * timer, so it is off entirely when that is 0. */
+  eventRetentionSecs?: number;
   revalidateSeconds?: number;
   /** Only eagerly revalidate stale slots on routes active within this many
    * seconds (last_active_at). Undefined = revalidate all stale slots
@@ -540,6 +546,19 @@ export class FsrWatcher {
         } catch (err: any) {
           console.error('FSR: idle eviction loop failed:', err.message);
         }
+
+        // Separate try: the event log grows whether or not route eviction
+        // works, so one failing must not stop the other. Hung off this sweep
+        // rather than a timer of its own — both are hourly housekeeping, and a
+        // second supervised loop would be a second thing to shut down.
+        try {
+          const pruned = await this.store.pruneAppliedEvents(this.eventRetentionSecs());
+          if (pruned > 0) {
+            console.log(`FSR: pruned ${pruned} applied invalidation event(s)`);
+          }
+        } catch (err: any) {
+          console.error('FSR: event log prune failed:', err.message);
+        }
       }
     };
     run();
@@ -547,6 +566,10 @@ export class FsrWatcher {
 
   private purgeSweepSeconds(): number {
     return this.config.purgeSweepSeconds ?? 3_600;
+  }
+
+  private eventRetentionSecs(): number {
+    return this.config.eventRetentionSecs ?? 86_400;
   }
 
   private purgeAfterSeconds(): number {
