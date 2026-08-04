@@ -73,6 +73,13 @@ export interface FsrConfig {
    * many seconds (last_active_at). Dormant routes' stale snapshots are left
    * for lazy rebuild-on-read instead. Default 30 when unset (see initFsr). */
   activeWindowSecs?: number;
+  /** How long an already-applied invalidation event is kept in
+   * `kiln_fsr_events` before the purge sweep deletes it. Default 86400.
+   * Only events at or below the shared cursor watermark are ever eligible —
+   * this is a grace buffer for reading the log, not the safety property.
+   * Pruning runs on the `purgeSweepSeconds` timer, so `purgeSweepSeconds: 0`
+   * disables it along with idle eviction. */
+  eventRetentionSecs?: number;
 }
 
 export interface ReactRuntimeConfig {
@@ -374,6 +381,7 @@ function validateConfig(c: KilnConfig): void {
   nonNegative('fsr.purgeAfterSeconds', c.fsr?.purgeAfterSeconds);
   nonNegative('fsr.purgeSweepSeconds', c.fsr?.purgeSweepSeconds);
   nonNegative('fsr.activeWindowSecs', c.fsr?.activeWindowSecs);
+  nonNegative('fsr.eventRetentionSecs', c.fsr?.eventRetentionSecs);
   nonNegative('fsr.connectionTtlSecs', c.fsr?.connectionTtlSecs);
   nonNegative('fsr.keepaliveSecs', c.fsr?.keepaliveSecs);
   nonNegative('fsr.maxSseConnections', c.fsr?.maxSseConnections);
