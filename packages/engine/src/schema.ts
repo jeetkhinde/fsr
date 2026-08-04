@@ -28,6 +28,22 @@ CREATE TABLE IF NOT EXISTS kiln_fsr_events (
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+-- Event catch-up cursor. Lives here, next to the events it points into, rather
+-- than on each process's local disk: the invalidations catch-up replays are
+-- writes to the SHARED kiln_fsr tables, so "how far the stream has been
+-- applied" is a property of the database, not of any one container. A local
+-- file meant a container with no persistent cache dir adopted the current head
+-- on every restart and could never recover a restart-sized gap.
+--
+-- One row per consumer name ('events' is the only one today) so a second
+-- consumer can be added without a schema change. event_id is only ever moved
+-- FORWARD — see FsrStore.writeEventCursor.
+CREATE TABLE IF NOT EXISTS kiln_fsr_cursor (
+  name TEXT PRIMARY KEY,
+  event_id BIGINT NOT NULL,
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 CREATE OR REPLACE FUNCTION kiln_emit_event() RETURNS trigger AS $$
 DECLARE
   -- TEXT, not BIGINT: this is an AFTER ... FOR EACH ROW trigger, so anything

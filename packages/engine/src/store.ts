@@ -676,6 +676,46 @@ export class FsrStore {
     }));
   }
 
+  /**
+   * The shared catch-up cursor: the highest event id whose invalidations have
+   * been applied to `kiln_fsr` by *some* process. Null when no process has ever
+   * recorded one.
+   *
+   * Shared rather than per-process on purpose. Replay writes only to the shared
+   * tables (`invalidateDepKey` / `tombstoneDependentRoutes`), so once any
+   * instance has applied an event, every instance's view of it is settled — a
+   * restarting container should resume from where the fleet got to, not from
+   * where its own local disk happened to be.
+   */
+  async readEventCursor(name = 'events'): Promise<number | null> {
+    const rows = await this.sql`
+      SELECT event_id as "eventId" FROM kiln_fsr_cursor WHERE name = ${name}
+    `;
+    const raw = rows[0]?.eventId;
+    if (raw === undefined || raw === null) return null;
+    // Number(): bun's SQL hands BIGINT back as a string, same as elsewhere in
+    // this file. A string cursor would make `lastProcessed > cursor` a
+    // lexicographic comparison ('9' > '10') and silently stall the cursor.
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  /**
+   * Move the cursor forward. GREATEST, never a plain assignment: instances
+   * advance it concurrently and out of order, and a late write from a lagging
+   * instance must not drag the fleet's cursor backwards — that would re-replay
+   * (harmless) or, worse, interleave with a peer that then skips the window it
+   * thought was already covered.
+   */
+  async writeEventCursor(eventId: number, name = 'events'): Promise<void> {
+    await this.sql`
+      INSERT INTO kiln_fsr_cursor (name, event_id) VALUES (${name}, ${eventId})
+      ON CONFLICT (name) DO UPDATE
+        SET event_id = GREATEST(kiln_fsr_cursor.event_id, EXCLUDED.event_id),
+            updated_at = NOW()
+    `;
+  }
+
   /** Highest recorded event id, or 0 when the table is empty. Used to adopt a
    * starting point when no cursor exists, instead of replaying all history. */
   async getLatestEventId(): Promise<number> {

@@ -413,6 +413,52 @@ out-of-process watcher must RPC back into an app process. Tracked in
 
 ---
 
+## ADR-022: The Event Catch-Up Cursor Lives in Postgres, Shared by the Fleet
+
+**Status:** ACCEPTED (2026-08-04)
+**Decision:** The catch-up cursor moves from a file on each process's local
+disk (`<cacheDir>/cursor`) to a single shared row in a new `kiln_fsr_cursor`
+table (`name` PK, `event_id BIGINT`). One row per consumer name; `'events'` is
+the only one today. It is advanced with `GREATEST(existing, incoming)` and read
+by `FsrWatcher.catchUpMissedEvents` as the greatest of {in-memory mark, the
+row, a legacy file read once as an upgrade shim}.
+
+**Why:** the cursor indexed events in shared Postgres but was stored per
+container. A deployment with no persistent cache dir — the normal case — found
+no cursor on every restart, took the adopt-current-head branch, and could never
+recover a restart-sized gap. Catch-up worked (ADR-018's recovery path, fixed
+2026-08-01) but only for a process that got its own disk back, which in
+practice meant local development.
+
+**Why shared rather than per-instance:** replay's only effect is on the shared
+`kiln_fsr`/`kiln_fsr_lists` tables (`invalidateDepKey`,
+`tombstoneDependentRoutes`) — it never mutates process-local state. So once any
+instance has applied an event, it is applied for the whole fleet, and a
+restarting instance should resume from where the fleet got to, not from its own
+last-seen id. A per-instance cursor (keyed by an instance id) would need a
+stable identity containers don't have, and would re-replay the same events once
+per instance for no benefit.
+
+**Consequences:**
+*   Cursor writes are coalesced on a 1s timer instead of written per event. A
+    database round-trip per event would put every instance on the same row lock
+    in the hot invalidation path; lagging costs only a few re-replayed events,
+    and replay is idempotent (both paths set `stale = TRUE`).
+*   `FsrWatcher.stop()` flushes the pending cursor, capped at 1s. Uncapped, an
+    unreachable database on the SIGTERM path would reintroduce the shutdown
+    hang fixed the same week.
+*   `WatcherConfig.cacheDir` is deprecated and now read-only, for the shim.
+    Delete it, `readLegacyFileCursor`, and the `fs`/`path` imports after a
+    release.
+*   `kiln_fsr_events` is still never pruned. With the cursor in Postgres,
+    pruning below `MIN(event_id)` across cursor rows becomes possible — not
+    done here.
+
+**Amends** ADR-018 (recovery path; the "cursor lives on local disk" limitation
+recorded against it is closed).
+
+---
+
 ## ADR-010: Explicit Dependency Key Model
 
 **Status:** LOCKED

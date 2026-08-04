@@ -31,7 +31,9 @@ export interface WatcherConfig {
    * seconds (last_active_at). Undefined = revalidate all stale slots
    * unconditionally (today's behavior, no dormancy tier). */
   activeWindowSecs?: number;
-  /** Directory the watcher's event cursor file lives in. Default '.kiln-cache'. */
+  /** @deprecated Only the pre-Postgres cursor file is read from here, as a
+   * one-release upgrade shim; the cursor itself now lives in `kiln_fsr_cursor`.
+   * See FsrWatcher.readLegacyFileCursor. Default '.kiln-cache'. */
   cacheDir?: string;
   scheduledInvalidations: ScheduledInvalidation[];
 }
@@ -62,6 +64,12 @@ const variantOf = (userKey?: string) => (userKey ? `u:${userKey}` : undefined);
 // Losing an entry just means the next cache hit for that (route, userKey)
 // falls back to the Postgres dormant-staleness check, never incorrect.
 const LOCAL_ACTIVE_MAX = 10_000;
+
+// How long the event cursor may lag behind the events this process has already
+// applied. See updateCursor for why it is coalesced rather than written per
+// event, and stop() for the shutdown cap.
+const CURSOR_FLUSH_MS = 1_000;
+const CURSOR_FLUSH_TIMEOUT_MS = 1_000;
 
 export class FsrWatcher {
   private active = false;
@@ -263,6 +271,19 @@ export class FsrWatcher {
   async stop(): Promise<void> {
     this.active = false;
     this.abortController.abort();
+    if (this.cursorFlushTimer) {
+      clearTimeout(this.cursorFlushTimer);
+      this.cursorFlushTimer = null;
+    }
+    // Bounded on purpose. This runs on the SIGTERM path, and an unbounded await
+    // on an unreachable database is how the last shutdown hang happened
+    // (bugs-resolved §0). Giving up costs at most CURSOR_FLUSH_MS of cursor
+    // advance, which the next boot simply re-replays.
+    const cap = new Promise<void>((resolve) => {
+      const t = setTimeout(resolve, CURSOR_FLUSH_TIMEOUT_MS);
+      t.unref?.();
+    });
+    await Promise.race([this.flushCursor(), cap]);
   }
 
   /** Returns a promise so callers (e.g. the DB notification pipeline) can
@@ -304,36 +325,69 @@ export class FsrWatcher {
     });
   }
 
-  private cursorPath(): string {
-    return path.join(this.config.cacheDir ?? '.kiln-cache', 'cursor');
-  }
-
   /**
-   * Last event id this process has handled. The file is the cross-restart
-   * copy; this is the authority while the process lives, so a reconnect
-   * replays the right window even if the file could never be written (a
-   * container with no writable cache dir, say).
+   * Last event id this process has handled. `kiln_fsr_cursor` is the durable,
+   * fleet-wide copy; this is the authority while the process lives, so a
+   * reconnect replays the right window even if the database write could never
+   * land. The two are reconciled by taking the greater — see
+   * `catchUpMissedEvents`.
    */
   private lastEventId: number | null = null;
 
+  /** Highest id updateCursor has seen but flushCursor hasn't written yet. */
+  private pendingCursorId: number | null = null;
+  private cursorFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
   updateCursor(eventId: number): void {
-    this.lastEventId = eventId;
-    this.persistCursor(eventId).catch((err: any) => {
-      console.warn(`FSR watcher: failed to persist cursor (eventId=${eventId}):`, err.message);
-    });
+    // Monotonic: notifications are processed through a queue and a replay can
+    // finish alongside them, so an out-of-order call must not rewind the mark.
+    this.lastEventId = Math.max(this.lastEventId ?? 0, eventId);
+    this.pendingCursorId = Math.max(this.pendingCursorId ?? 0, eventId);
+
+    // Coalesced rather than written per event. The cursor used to be a local
+    // file write; a database round-trip per event would instead put every
+    // instance in the fleet on the same single row, serializing them on one
+    // row lock in the hot invalidation path. Lagging up to CURSOR_FLUSH_MS
+    // only ever costs a few re-replayed events on recovery, and replay is
+    // idempotent (both paths just set stale = TRUE) — the safe direction.
+    if (this.cursorFlushTimer) return;
+    this.cursorFlushTimer = setTimeout(() => {
+      this.cursorFlushTimer = null;
+      void this.flushCursor();
+    }, CURSOR_FLUSH_MS);
+    this.cursorFlushTimer.unref?.();
   }
 
-  /** mkdir first: nothing else creates the cache dir, and a failed cursor
-   * write used to mean the next boot replayed from 0 — which was harmless only
-   * while catch-up was a no-op, and is a stampede now that it works. */
-  private async persistCursor(eventId: number): Promise<void> {
-    await fs.mkdir(path.dirname(this.cursorPath()), { recursive: true });
-    await fs.writeFile(this.cursorPath(), String(eventId), 'utf8');
-  }
-
-  private async readPersistedCursor(): Promise<number | null> {
+  private async flushCursor(): Promise<void> {
+    const eventId = this.pendingCursorId;
+    if (eventId === null) return;
+    this.pendingCursorId = null;
     try {
-      const parsed = Number(await fs.readFile(this.cursorPath(), 'utf8'));
+      await this.persistCursor(eventId);
+    } catch (err: any) {
+      // Put it back so the next flush retries. Dropping it would leave the
+      // durable cursor behind forever while this process kept advancing in
+      // memory, which is precisely the gap this table exists to close.
+      this.pendingCursorId = Math.max(this.pendingCursorId ?? 0, eventId);
+      console.warn(`FSR watcher: failed to persist cursor (eventId=${eventId}):`, err.message);
+    }
+  }
+
+  private async persistCursor(eventId: number): Promise<void> {
+    await this.store.writeEventCursor(eventId);
+  }
+
+  /**
+   * The pre-Postgres cursor location, read once as an upgrade shim: without
+   * it, the first boot on this version finds no row, adopts the current head
+   * and drops exactly the restart-sized gap the move to Postgres is meant to
+   * stop losing. Never written — the durable copy is `kiln_fsr_cursor` now.
+   * Delete this, `cacheDir` and the `fs`/`path` imports after a release.
+   */
+  private async readLegacyFileCursor(): Promise<number | null> {
+    try {
+      const legacyPath = path.join(this.config.cacheDir ?? '.kiln-cache', 'cursor');
+      const parsed = Number(await fs.readFile(legacyPath, 'utf8'));
       return Number.isFinite(parsed) ? parsed : null;
     } catch {
       return null;
@@ -354,21 +408,23 @@ export class FsrWatcher {
    */
   async catchUpMissedEvents(): Promise<void> {
     try {
-      let cursor = this.lastEventId ?? (await this.readPersistedCursor());
+      // Greatest of the three, not first-non-null. The in-memory mark can be
+      // ahead of the table (a flush that hasn't landed, or failed); the table
+      // can be ahead of this process (a peer instance handled the events while
+      // this one was down, and its replay wrote the same shared rows). Either
+      // way, an event below the maximum has already been applied by someone.
+      const stored = await this.store.readEventCursor();
+      const legacy = stored === null ? await this.readLegacyFileCursor() : null;
+      const known = [this.lastEventId, stored, legacy].filter(
+        (n): n is number => typeof n === 'number',
+      );
+      let cursor = known.length > 0 ? Math.max(...known) : null;
 
       if (cursor === null) {
-        // No cursor anywhere: this process has never handled an event and no
-        // previous run left a mark. There is no gap to close, and
-        // kiln_fsr_events is never pruned — replaying from 0 would invalidate
-        // against the app's entire history on every cold start. Adopt the
-        // current head instead and start recovering from here.
-        //
-        // KNOWN LIMITATION: the cursor lives on local disk while the events
-        // live in shared Postgres, so a container without a persistent cache
-        // dir takes this branch on every restart and cannot recover a
-        // restart-sized gap (a reconnect gap is still covered — that uses the
-        // in-memory cursor). Moving the cursor into Postgres is the real fix
-        // and is out of scope here.
+        // No cursor anywhere: nothing in the fleet has ever recorded one.
+        // There is no gap to close, and kiln_fsr_events is never pruned —
+        // replaying from 0 would invalidate against the app's entire history
+        // on every fresh deploy. Adopt the current head and recover from here.
         const head = await this.store.getLatestEventId();
         this.lastEventId = head;
         if (head > 0) await this.persistCursor(head);
@@ -380,9 +436,10 @@ export class FsrWatcher {
       }
 
       // Adopt the resolved cursor in memory even when the replay below finds
-      // nothing: otherwise a cursor that came from the file leaves lastEventId
-      // null, and a later reconnect would have to re-read a file that may by
-      // then be unreadable — the exact dependency this field exists to remove.
+      // nothing: otherwise a cursor that came from the table leaves lastEventId
+      // null, and a later reconnect would have to re-read a row a momentarily
+      // unreachable database may not hand back — the exact dependency this
+      // field exists to remove.
       this.lastEventId = Math.max(this.lastEventId ?? 0, cursor);
 
       const events = await this.store.fetchEventsSince(cursor);
