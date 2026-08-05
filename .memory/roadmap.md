@@ -121,3 +121,54 @@ audit's findings and their resolutions stay traceable.
    it. Declaring `@kiln/cli` as a workspace devDependency (already the case) has no effect. The root
    build is now two phases — `packages/*` then the consumers. Verified against successive fresh
    `git clone`s until one passed in a single pass.
+
+## Phase 6: DX backlog raised by dogfooding jags-list (2026-08-05)
+
+Found while migrating `apps/jags-list` onto `kiln dev`/`kiln start` and building its board island.
+The two **correctness** defects that surfaced in the same run are in
+[bugs-active.md](bugs-active.md) § 1, not here.
+
+Ordered by how much pain each one caused, most first.
+
+1. **A cache hit is invisible from the outside.** Nothing in a response says whether it was served
+   from a baked artifact or re-rendered — only `x-kiln-layout-cache-hit` exists, and only for
+   layouts. Diagnosing the `hasRegisteredRoute` bug took four throwaway probe scripts and depended
+   on the lucky accident that dnd-kit stamps an incrementing `aria-describedby` counter per render.
+   A page with a fully deterministic render would have hidden it completely, and any app author
+   asking "is FSR actually working?" has no way to answer. **Proposal:** an
+   `x-kiln-cache: hit|miss|bypass` response header (dev-only, or behind a config flag). This is the
+   single highest-value item here — it converts a class of silent performance regressions into an
+   assertable fact, and would have caught the defect above the day it landed.
+
+2. **Baking is invisible to tests too, so suites race the first-hit bake.** Warming a route is
+   `fetch` + `Bun.sleep(300)` and hope; the artifact is written after the response goes out, so any
+   test comparing two responses is racing it. Item 1 fixes the diagnosis half. The other half wants
+   a documented "the route is now baked" signal — an awaitable, or at minimum a documented recipe
+   in `docs/agents/rendering-and-caching.md`. Cost this run: one test failure initially misread as
+   a caching bug.
+
+3. **`ServerAdapter.registerRaw` is optional (`registerRaw?`), so every caller writes `!` or `?.`.**
+   The ADR-020 docstring itself models `adapter.registerRaw?.('/api/auth/*', …)` — which silently
+   mounts nothing on an adapter that lacks it, and for an auth catch-all that means every sign-in
+   404s with no error anywhere. jags-list throws explicitly instead. Either make it required on the
+   interface (the one shipped adapter implements it) or have `runServerSetup` fail fast when an app
+   needs it and the adapter has none.
+
+4. **Hand-built entry points drift from the CLI's runtime wiring, silently.** jags-list's
+   `src/main.ts` had already been patched once by hand (`pollIntervalMs ?? 1000`, after that default
+   reached `setTimeout` as `NaN`) and had never picked up `cache.namespace` or `eventRetentionSecs`
+   threading. Both were latent rather than live — but nothing would have told anyone. ADR-020
+   removed the *reason* to own an entry point; the follow-up is to remove the *pattern*: no
+   in-repo app should construct `FsrStore`/`FsrWatcher`/`startKiln` by hand, and `docs/agents/`
+   should say so. jags-list was the last one and is now migrated.
+
+5. **The `test:unit` ignore list is a 13-entry `--path-ignore-patterns` chain.** Every DB-backed
+   suite must be named twice (once to exclude, once to run in `test:integration`), and running
+   `bun test packages/<pkg>/src/` ad hoc fails with a confusing `database "<username>" does not
+   exist` from `sync-triggers.test.ts`. The apps already solved this with a naming convention —
+   `*.integration.test.ts` — which would collapse the chain to one pattern.
+
+6. **`kiln start` ignores `PORT`.** `test-app` listens on 3000 regardless, because the CLI reads
+   `config.port` and only jags-list's config happens to read `process.env.PORT` itself. Either the
+   CLI should honour `PORT` (it already honours `--port`) or the generated config template should
+   read it, so containers behave predictably.

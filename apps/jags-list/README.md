@@ -74,12 +74,18 @@ invites are the only way in.
     bun run test:freshness                                # spawns the app; auto-dep + owner-scoped invalidation
     bun run test:gate                                     # spawns the app; auth gate + live-list markers
     bun run test:live                                     # spawns the app; end-to-end SSE live drill
+    bun run test:board                                    # spawns the app; bakeability, 409 moves, island pipeline, live board
+
+`test:board`'s island-pipeline case needs `bun run build` first — it fetches
+the chunk the manifest points at. The suites spawn `kiln start`
+(`tests/spawn-app.ts`), so a break in CLI boot fails them.
 
 ## Live surfaces
 
 | Route | Mechanism | Dep |
 |---|---|---|
 | `/projects/:id/activity` | `Live.list` on `events` | `activity` (explicit — required) |
+| `/projects/:id/board` | store-target `LiveProp` on `boardState` | `tasks`, `columns` (+ `projects` auto-captured) |
 
 **Rule: `Live.list` does NOT receive auto-deps — always pass `dependsOn`.**
 Scalar `LiveProp` fields union the request's observed tables; live lists do
@@ -102,12 +108,41 @@ and never marks a `<ul>`, so seed at least one row before the first render if
 you need the markers. Row matching also requires every string-valued field of
 a row to appear inside its `<li>`.
 
+## Islands
+
+The board is a hydrated React island; everything else is baked HTML that
+silcrow owns. Island names must equal their file basename under `islands/`.
+
+Live data reaches an island **only** through the store — declare the field
+`target: 'store'` and read it with `useLiveValue(name, bakeTimeValue)`.
+Silcrow never patches DOM inside `[data-kiln-island]`, so there is no other
+channel. Pass the bake-time value as the fallback or SSR and the first client
+render disagree. Object-valued store fields arrive as **real objects** on both
+the patch and the snapshot path — no `JSON.parse`.
+
+The board deliberately uses one object-valued field rather than `Live.list`:
+the board renders divs, list markers only attach to rows the list machinery
+can find, and list patches are dropped inside islands anyway. The tradeoff is
+whole-board payloads instead of row-level diffs, which is fine at this scale.
+
+`bun run build` runs `kiln build`, which bundles `islands/*` into
+`dist/client` and writes the manifest that `/_kiln/islands.json` serves. The
+manifest maps island *names* to hashed chunk URLs, so HTML baked last week
+still hydrates against today's build.
+
 ## Auth architecture (short version)
 
-- better-auth owns `/api/auth/*`; `POST /auth/login` / `/auth/logout` are raw
-  Elysia form routes (Kiln actions can't set cookies — spec §9 gap 3).
-- `hooks.ts onRequest` gates every route not on the public allowlist,
-  including promoted pages and the `/__kiln/fsr` SSE endpoint.
+- better-auth owns `/api/auth/*`, mounted as a **raw** route from
+  `kiln.config.ts`'s `server.setup` via `adapter.registerRaw` (ADR-020). Raw
+  means `hooks.ts` `handle` never runs for it — which is the point: you can't
+  require a session on the endpoint that creates one.
+- Login/logout are ordinary Kiln **actions** on `pages/login.tsx`. They set
+  cookies through `res.cookies` (ADR-019); they used to be raw Elysia routes
+  because actions had no response to touch.
+- This app has no entry point of its own. `server.setup` is the whole reason —
+  before it, one raw route cost an app the CLI, and with it Vite and islands.
+- `hooks.ts` `handle` gates every route not on the public allowlist, including
+  promoted pages and the `/__kiln/fsr` SSE endpoint.
 
 ## Two Kiln realities this app works around (see repo `.memory/bugs-active.md`)
 
