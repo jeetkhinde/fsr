@@ -128,7 +128,7 @@ Found while migrating `apps/jags-list` onto `kiln dev`/`kiln start` and building
 The two **correctness** defects that surfaced in the same run are in
 [bugs-active.md](bugs-active.md) § 1, not here.
 
-Ordered by how much pain each one caused, most first.
+Ordered by how much pain each one caused, most first. Items 1-6 came from the migration and board work; item 7 from debugging a form-submit report afterwards.
 
 1. **A cache hit is invisible from the outside.** Nothing in a response says whether it was served
    from a baked artifact or re-rendered — only `x-kiln-layout-cache-hit` exists, and only for
@@ -172,3 +172,15 @@ Ordered by how much pain each one caused, most first.
    `config.port` and only jags-list's config happens to read `process.env.PORT` itself. Either the
    CLI should honour `PORT` (it already honours `--port`) or the generated config template should
    read it, so containers behave predictably.
+
+7. **A dev server running against the same Postgres silently breaks live-update tests.**
+   ADR-022 made the catch-up cursor fleet-shared, on the sound reasoning that "once any instance
+   applies an event, it's applied for the whole fleet". The consequence nobody wrote down: a
+   `kiln dev` left running on port 3200 is a fleet member, so it consumes invalidation events that
+   a test server on another port is waiting for. `apps/jags-list`'s `test:board` live drill failed
+   on a 20s timeout, reproducibly, for exactly this reason — and the failure looks like a code
+   regression, not an environment collision. It passed immediately once the dev server was stopped.
+   **Proposal:** either give the cursor row a per-fleet name derived from `cache.namespace` (so a
+   dev instance and a test instance are different fleets), or have the app suites refuse to start
+   when something else is already listening on the configured Postgres. At minimum this belongs in
+   `docs/agents/rendering-and-caching.md` and in the app README's test section.

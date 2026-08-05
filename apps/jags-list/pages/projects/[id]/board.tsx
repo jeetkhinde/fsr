@@ -156,19 +156,20 @@ export default function BoardPage({
         }}
       />
 
-      {/* Drag-and-drop board. Its SSR output IS the board with JS off; the
-          per-task move forms below stay the no-JS control surface. */}
+      {/* The board itself: drag-and-drop when hydrated, and its SSR output is
+          a perfectly readable board when not. */}
       <Board projectId={projectId} initialState={{ columns, tasks }} />
 
-      <div className="board board-forms">
-        {columns.map((col) => (
-          <div key={col.id} className="board-column">
-            <h4>{col.name}</h4>
-            {byColumn(col.id).map((t) => (
-              <div key={t.id} className="task-move">
-                {/* JS-free move: pick a destination column and submit. No
-                    expected_version — see the moveTask action. */}
-                <form method="post" action="?/moveTask" className="inline-form">
+      {/* Moving a task WITHOUT JavaScript. Inside <noscript> because with JS
+          the island already offers dragging, and rendering these unconditionally
+          drew the whole board a second time. */}
+      <noscript>
+        <div className="board board-forms">
+          {columns.map((col) => (
+            <div key={col.id} className="board-column">
+              <h4>{col.name}</h4>
+              {byColumn(col.id).map((t) => (
+                <form key={t.id} method="post" action="?/moveTask" className="inline-form">
                   <input type="hidden" name="task_id" value={t.id} />
                   <span className="task-move-title">{t.title}</span>
                   <select name="column_id" defaultValue={col.id} aria-label="Move to column">
@@ -178,17 +179,35 @@ export default function BoardPage({
                   </select>
                   <button type="submit">Move</button>
                 </form>
-              </div>
-            ))}
-            <form method="post" action="?/createTask" className="inline-form">
+              ))}
+            </div>
+          ))}
+        </div>
+      </noscript>
+
+      {/* Adding a task is needed in BOTH modes — the island only moves tasks —
+          so this row stays outside <noscript>.
+
+          `s-post` opts the form into silcrow, which submits it with the nav
+          headers and swaps the returned fragment. WITHOUT it silcrow's onSubmit
+          bails (its form handler is opt-in, keyed on these verb attributes) and
+          the browser does a native POST → 303 → GET; that GET carries no
+          `silcrow-target`, so the server correctly answers with a whole
+          document and the page hard-reloads — while a nav link right beside it
+          swaps a fragment. `method`/`action` stay for the no-JS path, which
+          wants exactly that full-document reload. */}
+      <div className="board board-add">
+        {columns.map((col) => (
+          <div key={col.id} className="board-column">
+            <form method="post" action="?/createTask" s-post="?/createTask" className="inline-form">
               <input type="hidden" name="column_id" value={col.id} />
-              <input name="title" placeholder="New task" required maxLength={200} />
+              <input name="title" placeholder={`New task in ${col.name}`} required maxLength={200} />
               <button type="submit">Add</button>
             </form>
           </div>
         ))}
       </div>
-      <form method="post" action="?/createColumn" className="create-form">
+      <form method="post" action="?/createColumn" s-post="?/createColumn" className="create-form">
         <h2>Add column</h2>
         <label>Name<input name="name" required maxLength={60} /></label>
         <button type="submit">Add column</button>

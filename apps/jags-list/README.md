@@ -85,6 +85,12 @@ invites are the only way in.
 the chunk the manifest points at. The suites spawn `kiln start`
 (`tests/spawn-app.ts`), so a break in CLI boot fails them.
 
+**Stop your dev server before running the live suites.** The catch-up cursor is
+fleet-shared (ADR-022): a `kiln dev` on the same Postgres consumes the
+invalidation events the test server is waiting for, and `test:board` /
+`test:live` then fail on a 20s timeout that looks exactly like a code
+regression. Verified both ways — 8/9 with a dev server up, 9/9 without.
+
 ## Live surfaces
 
 | Route | Mechanism | Dep |

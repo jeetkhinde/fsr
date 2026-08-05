@@ -230,3 +230,10 @@ Recorded so they aren't re-filed as bugs. Full rationale in `.codebase-memory/ad
 *   The dormant check costs one awaited Postgres SELECT per validated cache hit on routes with no
     local SSE-active mark. **Decision 2026-07-27: leave as-is** — correctness over a sub-ms indexed
     read; revisit only with profiling evidence.
+
+*   **`apps/jags-list` `test:freshness` is flaky at roughly 1 run in 3** — the owner-scoped
+    notifications case fails on a 5s deadline. **Pre-existing, not branch-related**: measured
+    2026-08-05 at 1/3 failures on `feat/jags-list-cli-migration` AND 1/3 on `main` with the same
+    command, so it is characterised rather than fixed here. Likely the same timing sensitivity as
+    roadmap Phase 6 item 7 (fleet-shared event cursor), but that is a hypothesis — it has not been
+    traced. Do not read a red `test:freshness` as a regression without re-running it.
