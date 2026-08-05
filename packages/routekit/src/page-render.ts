@@ -362,7 +362,7 @@ export function buildPageHandler(
       materialized = null;
     }
     if (materialized) {
-      if (!watcher || watcher.hasRegisteredRoute(req.path)) {
+      if (!watcher || watcher.hasRegisteredRoute(req.path, userKey)) {
         respondWithNavigationShape(res, req, layoutPatterns, pageMeta.pattern, materialized);
         return;
       }
