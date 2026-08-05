@@ -4,8 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun --watch src/main.ts",
-    "build": "tsc --noEmit",
+    "dev": "bun ../../packages/cli/dist/cli.js dev",
+    "start": "bun ../../packages/cli/dist/cli.js start",
+    "build": "bun ../../packages/cli/dist/cli.js build",
+    "typecheck": "tsc --noEmit",
     "db:migrate": "bun scripts/migrate.ts",
     "db:sync-triggers": "bun ../../packages/cli/dist/cli.js sync-triggers",
     "auth:migrate": "bunx @better-auth/cli@latest migrate -y",
@@ -23,6 +25,7 @@
     "@kiln/adapter-elysia": "workspace:*",
     "@kiln/core": "workspace:*",
     "@kiln/engine": "workspace:*",
+    "@kiln/react": "workspace:*",
     "@kiln/routekit": "workspace:*",
     "better-auth": "^1.6.23",
     "elysia": "^1.0.12",
@@ -31,11 +34,14 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@kiln/cli": "workspace:*",
     "@types/bun": "^1.3.14",
     "@types/node": "^20.12.7",
     "@types/pg": "^8.11.10",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "typescript": "^5.4.5"
+    "@vitejs/plugin-react": "^4.2.1",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.11"
   }
 }

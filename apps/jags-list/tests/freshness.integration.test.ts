@@ -17,6 +17,7 @@
 // `fsr.triggerTables` config), delivered over real LISTEN/NOTIFY to the real
 // running app's embedded FsrWatcher, which marks the slot stale.
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { SPAWN_APP } from './spawn-app.js';
 import { fileURLToPath } from 'node:url';
 import { withDepCapture } from '@kiln/core/sql';
 import { FsrStore } from '@kiln/engine';
@@ -77,7 +78,7 @@ describe.skipIf(!run)('freshness — auto-deps + owner-scoped invalidation (ADR-
     await sql`DELETE FROM kiln_fsr WHERE route IN (${ROUTE_PROJECTS}, ${ROUTE_NOTIFS})`;
     await sql`DELETE FROM notifications WHERE user_id IN (${OWNER_TOM}, ${OWNER_ADAM})`;
 
-    proc = Bun.spawn(['bun', 'src/main.ts'], {
+    proc = Bun.spawn(SPAWN_APP, {
       cwd: appDir,
       env: { ...process.env, PORT: String(PORT), BETTER_AUTH_URL: BASE },
       stdout: 'inherit', stderr: 'inherit',

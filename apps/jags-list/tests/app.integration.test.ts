@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { SPAWN_APP } from './spawn-app.js';
 import { fileURLToPath } from 'node:url';
 import { createAppUser } from '../lib/auth.js';
 import { sql } from '../db/client.js';
@@ -16,7 +17,7 @@ describe.skipIf(!run)('app auth gate', () => {
     await createAppUser({
       email: EMAIL, password: PASSWORD, name: 'Gate Test', role: 'user', handle: 'gatetest',
     });
-    proc = Bun.spawn(['bun', 'src/main.ts'], {
+    proc = Bun.spawn(SPAWN_APP, {
       cwd: fileURLToPath(new URL('..', import.meta.url)),
       env: { ...process.env, PORT: String(PORT), BETTER_AUTH_URL: BASE },
       stdout: 'inherit',
