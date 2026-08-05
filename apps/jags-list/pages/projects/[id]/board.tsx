@@ -1,21 +1,41 @@
 import React from 'react';
-import { AppError, type KilnRequest } from '@kiln/core';
+import { AppError, Live, type KilnRequest } from '@kiln/core';
+import { island } from '@kiln/react';
 import { requireAdmin, requireUser } from '../../../lib/session.js';
 import { projectById } from '../../../db/projects.js';
 import { listColumns, createColumn, renameColumn, deleteColumn, columnById } from '../../../db/columns.js';
 import { listTasksByProject, createTask, moveTask, positionForEndOfColumn, taskById } from '../../../db/tasks.js';
 import { validColumnName, validTaskTitle } from '../../../db/validation.js';
 import { logActivity } from '../../../lib/activity.js';
+import BoardIsland, { type BoardColumn, type BoardTask } from '../../../islands/BoardIsland.js';
 
+const Board = island(BoardIsland, 'BoardIsland');
 
 export async function load(req: KilnRequest) {
-  requireUser(req);
+  // No requireUser and no req.query read. hooks.ts `handle` gates this route,
+  // the watcher re-runs loaders with empty locals, and either read marks the
+  // render impure — which under ADR-016 'auto' latches the demotion for the
+  // whole process. The validation banner is rendered client-side instead.
   const projectId = Number(req.params.id);
   const project = await projectById(projectId);
   if (!project || project.archived_at) throw AppError.notFound('Project not found');
   const columns = await listColumns(projectId);
   const tasks = await listTasksByProject(projectId);
-  return { projectId, columns, tasks, error: req.query.error ?? null };
+  return {
+    projectId,
+    columns,
+    tasks,
+    // Whole-board live state for the island, as ONE object-valued field
+    // rather than a Live.list: the board renders divs, and
+    // applyLiveListMarkers only marks <li> inside <ul>/<ol> — and list
+    // patches are dropped inside islands anyway. target:'store' is what
+    // makes it reach the island; silcrow never patches island DOM.
+    boardState: Live.value<{ columns: typeof columns; tasks: typeof tasks }>(
+      { columns, tasks },
+      ['tasks', 'columns'],
+      { target: 'store' },
+    ),
+  };
 }
 
 async function requireProjectId(req: KilnRequest): Promise<number> {
@@ -51,7 +71,17 @@ export const actions = {
     if (!task || task.project_id !== projectId) throw AppError.notFound('Task not found');
     if (!target || target.project_id !== projectId) throw AppError.notFound('Column not found');
     const position = await positionForEndOfColumn(toColumnId);
-    await moveTask(taskId, toColumnId, position);
+    // The island states the version it rendered; the JS-free form cannot and
+    // omits it, keeping last-write-wins for that path.
+    const rawExpected = form.get('expected_version');
+    const expectedVersion = rawExpected === null ? undefined : Number(rawExpected);
+    const moved = await moveTask(taskId, toColumnId, position, expectedVersion);
+    if (!moved) {
+      // Someone moved it first. The island rolls back its optimistic overlay
+      // off this status and waits for the next store patch; a JS-free post
+      // never gets here, having sent no expected_version.
+      throw AppError.conflict('Task was moved by someone else');
+    }
     await logActivity({ projectId, taskId, actorId: me.id, verb: 'task.moved', payload: { to: target.name } });
     if (target.is_terminal) {
       await logActivity({ projectId, taskId, actorId: me.id, verb: 'task.completed', payload: { title: task.title } });
@@ -95,34 +125,52 @@ export const actions = {
   },
 };
 
-interface Col { id: number; name: string; is_terminal: boolean }
-interface T { id: number; column_id: number; title: string; priority: number; assignee_id: string | null }
+// The island owns these shapes; the page renders the same rows into its
+// JS-free fallback, so it reuses them rather than keeping a second copy.
+type Col = BoardColumn;
+type T = BoardTask & { assignee_id: string | null };
 
 export default function BoardPage({
+  projectId,
   columns,
   tasks,
-  error,
 }: {
   projectId: number;
   columns: Col[];
   tasks: T[];
-  error: string | null;
 }) {
   const byColumn = (cid: number) => tasks.filter((t) => t.column_id === cid);
   return (
     <>
-      {error === 'title' && <p className="error">Enter a task title.</p>}
-      {error === 'column' && <p className="error">Enter a column name (1–60 characters).</p>}
-      <div className="board">
+      {/* Filled in by the script below from location.search. load() must not
+          read req.query — one impure read and this route stops baking. */}
+      <p className="error" data-form-error hidden />
+      <script
+        dangerouslySetInnerHTML={{
+          __html:
+            "(function(){var e=new URLSearchParams(location.search).get('error');" +
+            "if(!e)return;var n=document.querySelector('[data-form-error]');if(!n)return;" +
+            "n.textContent=e==='title'?'Enter a task title.':" +
+            "e==='column'?'Enter a column name (1-60 characters).':'Could not save your changes.';" +
+            "n.hidden=false;})();",
+        }}
+      />
+
+      {/* Drag-and-drop board. Its SSR output IS the board with JS off; the
+          per-task move forms below stay the no-JS control surface. */}
+      <Board projectId={projectId} initialState={{ columns, tasks }} />
+
+      <div className="board board-forms">
         {columns.map((col) => (
           <div key={col.id} className="board-column">
-            <h3>{col.name}</h3>
+            <h4>{col.name}</h4>
             {byColumn(col.id).map((t) => (
-              <div key={t.id} className={`task-card prio-${t.priority}`}>
-                <a href={`/tasks/${t.id}`}>{t.title}</a>
-                {/* JS-free move: pick a destination column and submit. */}
+              <div key={t.id} className="task-move">
+                {/* JS-free move: pick a destination column and submit. No
+                    expected_version — see the moveTask action. */}
                 <form method="post" action="?/moveTask" className="inline-form">
                   <input type="hidden" name="task_id" value={t.id} />
+                  <span className="task-move-title">{t.title}</span>
                   <select name="column_id" defaultValue={col.id} aria-label="Move to column">
                     {columns.map((c) => (
                       <option key={c.id} value={c.id}>{c.name}</option>

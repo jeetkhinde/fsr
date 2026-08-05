@@ -38,9 +38,28 @@ describe.skipIf(!process.env.DATABASE_URL)('tasks', () => {
   it('moveTask changes column + position and bumps version', async () => {
     const [t] = await listTasksByProject(projectId);
     const moved = await moveTask(t.id, cols[1].id, 5000);
-    expect(moved.column_id).toBe(cols[1].id);
-    expect(moved.position).toBe(5000);
-    expect(moved.version).toBe(t.version + 1);
+    expect(moved).not.toBeNull();
+    expect(moved!.column_id).toBe(cols[1].id);
+    expect(moved!.position).toBe(5000);
+    expect(moved!.version).toBe(t.version + 1);
     expect((await taskById(t.id))?.column_id).toBe(cols[1].id);
+  });
+
+  it('moveTask returns null — and writes nothing — on a stale expected version', async () => {
+    const [t] = await listTasksByProject(projectId);
+    const staleVersion = t.version - 1;
+    const conflicted = await moveTask(t.id, cols[0].id, 7000, staleVersion);
+    expect(conflicted).toBeNull();
+    const unchanged = await taskById(t.id);
+    expect(unchanged?.column_id).toBe(t.column_id);
+    expect(unchanged?.version).toBe(t.version);
+  });
+
+  it('moveTask applies the move when the expected version is current', async () => {
+    const [t] = await listTasksByProject(projectId);
+    const moved = await moveTask(t.id, cols[0].id, 7000, t.version);
+    expect(moved).not.toBeNull();
+    expect(moved!.column_id).toBe(cols[0].id);
+    expect(moved!.version).toBe(t.version + 1);
   });
 });

@@ -19,9 +19,12 @@
     "test:crud": "RUN_APP_TESTS=1 bun --env-file=.env test tests/crud.integration.test.ts",
     "test:freshness": "RUN_APP_TESTS=1 bun --env-file=.env test tests/freshness.integration.test.ts",
     "test:gate": "RUN_APP_TESTS=1 bun --env-file=.env test tests/gate.integration.test.ts",
-    "test:live": "RUN_APP_TESTS=1 bun --env-file=.env test tests/live.integration.test.ts"
+    "test:live": "RUN_APP_TESTS=1 bun --env-file=.env test tests/live.integration.test.ts",
+    "test:board": "RUN_APP_TESTS=1 bun --env-file=.env test tests/board.integration.test.ts"
   },
   "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
     "@kiln/adapter-elysia": "workspace:*",
     "@kiln/core": "workspace:*",
     "@kiln/engine": "workspace:*",
