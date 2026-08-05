@@ -50,14 +50,19 @@ defect (ADR-015); the framework bug entry it used to cite is gone from
 
 ## Known bug found during Plan 3a (PRE-EXISTING, filed separately)
 
-**Dynamic-segment layouts are cached by route PATTERN, not concrete path.**
+~~**Dynamic-segment layouts are cached by route PATTERN, not concrete path.**
 `packages/engine/src/cache.ts` `diskLayoutHtmlPath(pattern)` produces
 `.kiln-cache/layouts/v3/projects/:id/shell.html` — one file for every project.
 So `pages/projects/[id]/_layout.tsx`, which loads `projectById(req.params.id)`,
 renders the FIRST-baked project's name and nav links on every other project's
 board and activity pages. Page bodies are correct; only the chrome leaks.
 Reproduced with AND without the Plan 3a change (control run), so it is not
-caused by this work. Not fixed here — Plan 3a is scoped to no framework edits.
+caused by this work.~~ — **FIXED by PR #27** (framework repo root
+`.memory/decisions.md` § ADR-011 "own-params amendment", 2026-07-28). The
+layout cache key now includes the layout's own params
+(`…:<pattern>|<instance-token>`), so `/projects/7/*` and `/projects/8/*` bake
+separately. This entry sat here as open for a while after the fix landed —
+left visible, struck through, rather than deleted, so it isn't re-filed.
 
 ## Next
 

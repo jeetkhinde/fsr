@@ -130,6 +130,26 @@ This file documents the major architecture decisions and developer experience (D
     *   Deferred to a future plan, per this plan's stated Global Constraints (not attempted here): shared-shell dedup (one immutable shell + per-user JSON), eager actor re-materialization after actions (Plan 2 keeps delete-on-write), row-level auto-deps via `WHERE`-clause parsing, and auto-`owner` inference (owner column stays a declared config, not detected from schema).
 *   **Extends** ADR-016 (bake classes; purity classifier untouched) and ADR-017 (per-user artifacts; owner scoping builds directly on the `user_key` variant plumbing and the `identity(req)` hook).
 
+### ADR-019: Actions Receive the Response
+*   **Status**: ACCEPTED 2026-07-31
+*   **Decision**: Page actions are invoked as `actions[name](req, res)`, not `(req)`. `KilnResponse.headers` is now a web `Headers` (not a plain record), so it can carry multiple `Set-Cookie` values; `KilnResponse.cookies` (`set`/`delete`, `path` defaulting to `/`) is a required member. A body the action commits itself wins over its return value; returning a value *and* committing a body emits a `warnOnce`. `AppError.conflict()` (409) added for the throw-from-deep-in-the-stack case.
+*   **Rationale**: cookies (e.g. session-setting on login) previously forced an app off the collocated-actions surface onto a raw adapter route. One-argument actions keep working — the extra parameter is just ignored.
+
+### ADR-020: App-Contributed Server Routes (`config.server.setup`)
+*   **Status**: ACCEPTED 2026-07-31
+*   **Decision**: An app declares non-page server wiring via `server.setup({ adapter, config, mode })` in `kiln.config.ts`, called by both `kiln dev` and `kiln start` after the FSR runtime is up and before `startKiln` mounts pages. `ServerAdapter.registerRaw(pattern, handler, { method })` mounts a raw-`Request`-in/`Response`-out handler outside the Kiln pipeline — no `KilnRequest` wrapping, no `hooks.ts` `handle`, no request timeout.
+*   **Rationale**: an app needing one non-page endpoint (better-auth's `/api/auth/*` catch-all) previously had to abandon the CLI for a hand-built entry point, losing Vite wiring, islands, and the FSR supervisors in the process. Bypassing `handle` is deliberate — a sign-in endpoint must be reachable without a session; anything that should be gated belongs in a page or action instead.
+
+### ADR-021: The Only Watcher Mode Is `embedded`
+*   **Status**: ACCEPTED 2026-07-31
+*   **Decision**: `fsr.watcher: 'external'` is removed; the union is `'embedded'` only, and `validateConfig` rejects `'external'` by name.
+*   **Rationale**: it was typed for two releases with nothing behind it — no watcher process, no IPC, no daemon. Its only real effect was silently disabling caching (re-running `load()` on every hit) while reading as a supported deployment topology. If revived, it needs an RPC protocol back into the app process (`Live.list` registers closures that can't cross a process boundary) — a designed feature, not a config string. Tracked in `roadmap.md` Phase 4 §2.
+
+### ADR-022: The Event Catch-Up Cursor Lives in Postgres, Shared by the Fleet
+*   **Status**: ACCEPTED 2026-08-04
+*   **Decision**: The catch-up cursor moves from a file on local disk to a single shared `kiln_fsr_cursor` row (`name` PK, `event_id`), advanced with `GREATEST(existing, incoming)` and read as the greatest of {in-memory mark, the row, a legacy file read once as an upgrade shim}.
+*   **Rationale**: a container with no persistent cache dir found no cursor on every restart and dropped the whole restart-sized gap — catch-up only worked on a machine that kept its own disk, i.e. development. Shared rather than per-instance because replay only mutates shared `kiln_fsr`/`kiln_fsr_lists` tables: once any instance applies an event, it's applied for the whole fleet, so a restarting instance should resume from the fleet's position, not its own last-seen id.
+
 ---
 
 ## Critical DX Rules & Conventions
