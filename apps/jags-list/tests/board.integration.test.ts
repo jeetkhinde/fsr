@@ -34,6 +34,35 @@ async function cookieFor(email: string, password: string): Promise<string> {
   return res.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
 }
 
+/** Reads SSE frames until `match` is satisfied or the deadline passes. */
+async function waitForSseFrame(
+  url: string,
+  match: (chunk: string) => boolean,
+  timeoutMs = 20_000,
+): Promise<string | null> {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      headers: { cookie, accept: 'text/event-stream' },
+      signal: ac.signal,
+    });
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return null;
+      buffer += decoder.decode(value, { stream: true });
+      if (match(buffer)) return buffer;
+    }
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function postMove(body: Record<string, string>): Promise<Response> {
   return fetch(`${BASE}/projects/${projectId}/board?/moveTask`, {
     method: 'POST',
@@ -170,5 +199,46 @@ describe.skipIf(!run)('board page — bakeable, versioned moves, live state', ()
     expect(html).toContain('data-kiln-island="BoardIsland"');
     // SSR'd inside the island, so the JS-free baseline still shows the board.
     expect(html).toContain('Drag me');
+    // The bake-time props the island hydrates against.
+    expect(html).toContain('data-kiln-props');
+    // Bootstrap script that finds islands and hydrates them.
+    expect(html).toContain('/_silcrow/islands.js');
   });
+
+  it('resolves the island to a chunk the browser can actually fetch', async () => {
+    // The full pipeline: `kiln build` bundles islands/BoardIsland.tsx, the
+    // manifest maps the NAME to a hashed chunk (so week-old baked HTML
+    // hydrates against today's build), and `kiln start` serves it.
+    const manifestRes = await fetch(`${BASE}/_kiln/islands.json`);
+    expect(manifestRes.status).toBe(200);
+    const manifest = await manifestRes.json() as { islands: Record<string, string> };
+    const chunkUrl = manifest.islands?.BoardIsland;
+    expect(chunkUrl).toBeTruthy();
+
+    const chunkRes = await fetch(BASE + chunkUrl);
+    expect(chunkRes.status).toBe(200);
+    const chunk = await chunkRes.text();
+    // preserveEntrySignatures:'exports-only' must keep the wrapper's export —
+    // without it the chunk is a hollow react-only bundle at runtime.
+    expect(chunk).toContain('hydrate');
+  });
+
+  it('pushes new board state to a subscriber when someone else moves a task', async () => {
+    // The whole point of the store-target field: a second member watching
+    // this board gets the move without reloading. Bake + register first, then
+    // subscribe, THEN write — so the patch cannot land before we listen.
+    const route = `/projects/${projectId}/board`;
+    await fetch(BASE + route, { headers: { cookie } });
+
+    const sseUrl = `${BASE}/__kiln/fsr?route=${encodeURIComponent(route)}&slots=boardState`;
+    const framePromise = waitForSseFrame(sseUrl, (buf) => buf.includes('Moved by someone else'));
+
+    await Bun.sleep(500); // let the subscription establish
+    await sql`UPDATE tasks SET title = 'Moved by someone else', column_id = ${doneColumnId},
+      version = version + 1 WHERE id = ${taskId}`;
+
+    // patchDebounceSecs is 5 in kiln.config.ts — do not shorten this timeout.
+    const frame = await framePromise;
+    expect(frame).not.toBeNull();
+  }, 45_000);
 });
