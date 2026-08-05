@@ -8,6 +8,7 @@
 // capture/trigger/watcher layer; no page in any app declared a live field,
 // so nothing exercised the whole chain. See .memory/bugs-active.md.
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { SPAWN_APP } from './spawn-app.js';
 import { fileURLToPath } from 'node:url';
 import { auth, createAppUser } from '../lib/auth.js';
 import { sql } from '../db/client.js';
@@ -88,7 +89,7 @@ describe.skipIf(!run)('live drill — activity insert reaches an SSE subscriber'
       INSERT INTO activity (project_id, actor_id, verb, payload)
       VALUES (${projectId}, ${memberId}, 'plan3a.seed', '{}'::jsonb)`;
 
-    proc = Bun.spawn(['bun', 'src/main.ts'], {
+    proc = Bun.spawn(SPAWN_APP, {
       cwd: appDir,
       env: { ...process.env, PORT: String(PORT) } as Record<string, string>,
       stdout: 'inherit',

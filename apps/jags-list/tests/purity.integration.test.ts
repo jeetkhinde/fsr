@@ -4,6 +4,7 @@
 // SSR" (resolved by ADR-016 bake classes): under promote-after-2, hit 3+ of
 // "/" served whichever user's render got baked to every subsequent viewer.
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { SPAWN_APP } from './spawn-app.js';
 import { fileURLToPath } from 'node:url';
 import { rm } from 'node:fs/promises';
 import { RedisClient } from 'bun';
@@ -42,7 +43,7 @@ describe.skipIf(!run)('cross-user render isolation', () => {
     for (const u of [TOM, ADAM]) await sql`DELETE FROM "user" WHERE email = ${u.email}`;
     await createAppUser({ ...TOM, name: 'Purity Tom', role: 'user' });
     await createAppUser({ ...ADAM, name: 'Purity Adam', role: 'user' });
-    proc = Bun.spawn(['bun', 'src/main.ts'], {
+    proc = Bun.spawn(SPAWN_APP, {
       cwd: fileURLToPath(new URL('..', import.meta.url)),
       env: { ...process.env, PORT: String(PORT), BETTER_AUTH_URL: BASE },
       stdout: 'inherit', stderr: 'inherit',

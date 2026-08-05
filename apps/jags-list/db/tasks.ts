@@ -80,11 +80,31 @@ export async function updateTaskFields(
   return t as Task;
 }
 
-export async function moveTask(id: number, toColumnId: number, position: number): Promise<Task> {
-  const [t] = await sql`
-    UPDATE tasks SET column_id = ${toColumnId}, position = ${position}, version = version + 1
-    WHERE id = ${id}
-    RETURNING id::int, project_id::int, column_id::int, title, description, assignee_id, priority,
-              to_char(due_date, 'YYYY-MM-DD') AS due_date, position, version, created_by`;
-  return t as Task;
+/**
+ * Move a task, optionally under optimistic concurrency.
+ *
+ * When the caller states the `version` it saw, the UPDATE only lands if the
+ * row still carries it; a `null` return means someone else moved this task
+ * first. Omitting it keeps the unconditional last-write-wins behaviour the
+ * JS-free `<select>`-and-submit form relies on — that form has no way to know
+ * a version, and a redirect-and-re-render already shows the true state.
+ */
+export async function moveTask(
+  id: number,
+  toColumnId: number,
+  position: number,
+  expectedVersion?: number,
+): Promise<Task | null> {
+  const rows = expectedVersion === undefined
+    ? await sql`
+        UPDATE tasks SET column_id = ${toColumnId}, position = ${position}, version = version + 1
+        WHERE id = ${id}
+        RETURNING id::int, project_id::int, column_id::int, title, description, assignee_id, priority,
+                  to_char(due_date, 'YYYY-MM-DD') AS due_date, position, version, created_by`
+    : await sql`
+        UPDATE tasks SET column_id = ${toColumnId}, position = ${position}, version = version + 1
+        WHERE id = ${id} AND version = ${expectedVersion}
+        RETURNING id::int, project_id::int, column_id::int, title, description, assignee_id, priority,
+                  to_char(due_date, 'YYYY-MM-DD') AS due_date, position, version, created_by`;
+  return (rows[0] as Task) ?? null;
 }

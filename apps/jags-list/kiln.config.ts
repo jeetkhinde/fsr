@@ -1,8 +1,46 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from '@kiln/core';
 
 export default defineConfig({
   port: Number(process.env.PORT ?? 3200),
   pagesDir: './pages',
+  // ADR-020. This app used to own `src/main.ts` purely because better-auth
+  // needs one raw catch-all route, and that cost it the whole CLI: no Vite,
+  // no islands, and a hand-copied FSR runtime that drifted from the CLI's
+  // (it had to re-add `pollIntervalMs ?? 1000` by hand after the NaN bug).
+  // `server.setup` mounts the same two things inside `kiln dev`/`kiln start`.
+  server: {
+    async setup({ adapter, config, mode }) {
+      // Imported lazily: config is loaded during CLI boot, and better-auth
+      // opens a DB pool at module scope. Only the running server needs it.
+      const { auth } = await import('./lib/auth.js');
+
+      if (!adapter.registerRaw) {
+        throw new Error(
+          `Adapter ${adapter.constructor.name} has no registerRaw(); Jag's List cannot mount better-auth without it.`,
+        );
+      }
+      // Raw, NOT a Kiln route: `hooks.ts` `handle` never runs for it, which is
+      // the point — you cannot require a session on the endpoint that creates
+      // one. Everything that should be gated is a page or an action instead.
+      adapter.registerRaw('/api/auth/*', (request) => auth.handler(request));
+
+      adapter.registerAsset(
+        '/assets/app.css',
+        fileURLToPath(new URL('./styles/app.css', import.meta.url)),
+      );
+
+      // App policy, not framework policy: a production deploy without both
+      // stores silently degrades to uncached SSR with no live updates.
+      if (mode === 'start' && process.env.NODE_ENV === 'production') {
+        if (!config.fsr?.postgresUrl || !config.fsr?.redisUrl) {
+          throw new Error(
+            "Jag's List production requires reachable PostgreSQL and Redis",
+          );
+        }
+      }
+    },
+  },
   fsr: {
     watcher: 'embedded',
     patchDebounceSecs: 5,

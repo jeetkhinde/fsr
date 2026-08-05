@@ -6,10 +6,12 @@ import { getSessionUser } from './lib/session.js';
 // promoted pages and /__kiln/fsr SSE — requires one. `handle` runs for every
 // Kiln-registered route (pages/actions/SSE), so these must be listed.
 //
-// NOTE: the better-auth handler (/api/auth/*) is a raw Elysia route registered
-// in src/main.ts, NOT a Kiln route, so `handle` never runs for it — it's public
-// by construction. Login/logout are Kiln actions on the /login page, so they
-// ARE gated by `handle` and depend on '/login' staying in this list.
+// NOTE: the better-auth handler (/api/auth/*) is a raw route registered via
+// `server.setup` in kiln.config.ts (ADR-020) with `adapter.registerRaw`, NOT a
+// Kiln route, so `handle` never runs for it — it's public by construction, and
+// listing it here is belt-and-braces rather than the actual mechanism. Login/
+// logout are Kiln actions on the /login page, so they ARE gated by `handle`
+// and depend on '/login' staying in this list.
 const PUBLIC_PREFIXES = [
   '/api/auth/',
   '/login',

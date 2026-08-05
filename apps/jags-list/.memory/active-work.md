@@ -2,7 +2,7 @@
 
 App work log only. Framework state → repo root [`../../.memory/active-work.md`](../../.memory/active-work.md).
 
-Last updated: 2026-07-28
+Last updated: 2026-08-05
 
 ## Current State
 
@@ -29,6 +29,37 @@ Last updated: 2026-07-28
   **This closed the framework's highest-value test gap** — ADR-018 auto-deps
   is now proven end-to-end through a real page, not just at the
   capture/trigger/watcher layer.
+
+- **CLI migration (2026-08-05)**: the app no longer owns an entry point.
+  `src/main.ts` is deleted; better-auth's `/api/auth/*` and the `app.css`
+  asset are mounted from `kiln.config.ts`'s `server.setup` (ADR-020), and
+  `dev`/`start`/`build` are the CLI. Integration suites boot `kiln start` via
+  `tests/spawn-app.ts`, so CLI boot is covered by the app's own tests. This is
+  what unlocked islands — see below.
+- **Plan 3b (board island) shipped 2026-08-05.** `/projects/:id/board` now
+  bakes (dropped its gate-only `requireUser` and both `req.query.error`
+  reads; the banner is filled client-side from `location.search`). Whole-board
+  state ships as one object-valued `Live.value` with `target: 'store'` and
+  deps `['tasks','columns']`, read in `islands/BoardIsland.tsx` via
+  `useLiveValue`. dnd-kit drag-drop with optimistic moves; `moveTask` takes an
+  optional `expectedVersion` and the action answers a real **409**
+  (`AppError.conflict`) on a stale one. The JS-free move/create forms stay
+  below the island and `test:crud` guards them. New suite: `test:board` (9).
+  **Two framework bugs fell out of this** — see below.
+
+## Framework bugs this app found (both fixed 2026-08-05)
+
+Filed in the repo-root [`../../.memory/bugs-active.md`](../../.memory/bugs-active.md) § 1; noted
+here because the app is the reason they were found.
+
+1. **Pages with scalar live fields never served their baked artifact.**
+   `hasRegisteredRoute` scanned live *lists* only, so an island-fed page
+   re-rendered on every request forever. Surfaced because a board test
+   asserted two requests return the identical artifact and dnd-kit stamps a
+   per-render counter. Affected `test-app/pages/islands-demo.tsx` too.
+2. **`kiln build` bundled page modules for the browser**, so it failed on the
+   first page importing server-only code — i.e. on any real app. jags-list
+   was the first app to run it.
 
 ## Auth / rendering note (in use)
 
@@ -66,9 +97,6 @@ left visible, struck through, rather than deleted, so it isn't re-filed.
 
 ## Next
 
-- **Plan 3b** (board island): dnd-kit kanban + the store-target `Live.list`
-  gap (spec §9 gap 1). Spike the object-valued `LiveProp` + `target: 'store'`
-  path first — it is unverified.
 - **`/projects` restructure** (deferred from 3a): the page renders an
   admin-only Archive button off `me.role`, so it cannot be baked shared until
   that authorization boundary moves out of the baked shell.

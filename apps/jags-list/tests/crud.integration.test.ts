@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { SPAWN_APP } from './spawn-app.js';
 import { fileURLToPath } from 'node:url';
 import { sql } from '../db/client.js';
 import { createAppUser } from '../lib/auth.js';
@@ -24,7 +25,7 @@ describe.skipIf(!run)('crud routes', () => {
     for (const u of [ADMIN, MEMBER]) await sql`DELETE FROM "user" WHERE email = ${u.email}`;
     await createAppUser({ ...ADMIN, name: 'Crud Admin', role: 'admin' });
     await createAppUser({ ...MEMBER, name: 'Crud Member', role: 'user' });
-    proc = Bun.spawn(['bun', 'src/main.ts'], {
+    proc = Bun.spawn(SPAWN_APP, {
       cwd: fileURLToPath(new URL('..', import.meta.url)),
       env: { ...process.env, PORT: String(PORT), BETTER_AUTH_URL: BASE },
       stdout: 'inherit', stderr: 'inherit',

@@ -133,7 +133,44 @@ here so they are tracked as defects rather than living only in a session transcr
     `store.test.ts` (`reExecuteQuery` with parameters), which had no coverage at all before because
     the only production caller passes a null query.
 
-*   **Nothing open in this section.** Every gap surveyed on 2026-07-31 is now closed; the sequence
+*   ~~**A page whose live fields are scalars never served its baked artifact**~~ — **FIXED
+    2026-08-05** on `feat/jags-list-cli-migration`. `FsrWatcher.hasRegisteredRoute` scanned
+    `liveListTargets` only, but scalar `LiveProp`s register through `registerLoader` into
+    `loaderTargets`. So a page with live fields and no `Live.list` never reported as registered, and
+    `page-render.ts`'s "serve the artifact only if the watcher already holds this route's closures"
+    check fell through to a **full re-render on every request, forever** — the artifact was baked
+    and then ignored. That code's own comment claims the check "short-circuits every later request";
+    for these pages it never did.
+
+    **Scope is the headline feature.** `target: 'store'` is the only supported way to get live data
+    into an island (ADR-014), and such a field is always a scalar `LiveProp` — so *every* island-fed
+    page was uncached. Reproduced on `test-app`'s own `/islands-demo`, whose `bakedAt` timestamp
+    changed on four of four requests before the fix and is frozen across them after.
+
+    The fix matches loaders by exact `(route, userKey)`, not route alone: `bake='user'` routes
+    register one loader per user, and a route-level match would let user A's registration vouch for
+    user B — serving B a cached artifact while never registering B's loader to revalidate it. Unit
+    test: `packages/engine/src/has-registered-route.test.ts` (3 of 5 cases fail on the old code).
+
+    **Found by dogfooding, not by audit.** It surfaced only because a jags-list test asserted two
+    requests return the identical artifact, and dnd-kit's per-render `aria-describedby` counter made
+    the re-render visible. Nothing in the framework's own suites noticed, because none of them
+    assert that a second request *doesn't* re-render.
+
+*   ~~**`kiln build` fed every page module to Vite as a browser entry**~~ — **FIXED 2026-08-05** on
+    `feat/jags-list-cli-migration`. `findClientEntries` globbed all `.ts`/`.tsx` under `pagesDir`
+    into rollup's `input`. Kiln has no page-level hydration (ADR-014) and the runtime resolves island
+    names through `/_kiln/islands.json` with no notion of a page bundle, so those chunks were
+    unreachable dead output — and any page reaching a server-only import failed the build outright.
+    jags-list hit it on its first `kiln build`: *"AsyncLocalStorage is not exported by
+    `__vite-browser-external`, imported by `packages/core/dist/sql.js`"*. `kiln build` therefore
+    worked only for apps whose pages import nothing server-side, which `test-app` happens to satisfy
+    and no real app does. `kilnIslandsPlugin` already appends one virtual entry per island in its own
+    `config()` hook, so the glob was redundant even when it worked. Entry resolution now lives in
+    `packages/cli/src/client-build.ts`, which passes no explicit `input`. Regression test builds a
+    fixture app whose page imports `node:async_hooks`.
+
+*   **Nothing else open in this section.** Every gap surveyed on 2026-07-31 is closed; the sequence
     that ordered them is `docs/superpowers/plans/2026-07-31-framework-fix-sequencing.md`.
 
 ## 2. Infrastructure & Integration Test Issues
@@ -193,3 +230,10 @@ Recorded so they aren't re-filed as bugs. Full rationale in `.codebase-memory/ad
 *   The dormant check costs one awaited Postgres SELECT per validated cache hit on routes with no
     local SSE-active mark. **Decision 2026-07-27: leave as-is** — correctness over a sub-ms indexed
     read; revisit only with profiling evidence.
+
+*   **`apps/jags-list` `test:freshness` is flaky at roughly 1 run in 3** — the owner-scoped
+    notifications case fails on a 5s deadline. **Pre-existing, not branch-related**: measured
+    2026-08-05 at 1/3 failures on `feat/jags-list-cli-migration` AND 1/3 on `main` with the same
+    command, so it is characterised rather than fixed here. Likely the same timing sensitivity as
+    roadmap Phase 6 item 7 (fleet-shared event cursor), but that is a hypothesis — it has not been
+    traced. Do not read a red `test:freshness` as a regression without re-running it.

@@ -3,6 +3,7 @@
 // The gate now lives ONLY in hooks.ts `handle`. This suite is the proof that
 // removing it lost no protection.
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { SPAWN_APP } from './spawn-app.js';
 import { auth, createAppUser } from '../lib/auth.js';
 import { sql } from '../db/client.js';
 
@@ -51,7 +52,7 @@ describe.skipIf(!run)('auth gate holds without requireUser in load()', () => {
       INSERT INTO activity (project_id, actor_id, verb, payload)
       VALUES (${projectId}, ${memberId}, 'plan3a.marker', '{}'::jsonb)`;
 
-    proc = Bun.spawn(['bun', 'src/main.ts'], {
+    proc = Bun.spawn(SPAWN_APP, {
       cwd: new URL('..', import.meta.url).pathname,
       env: { ...process.env, PORT: String(PORT) } as Record<string, string>,
       stdout: 'inherit',

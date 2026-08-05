@@ -211,7 +211,24 @@ export class FsrWatcher {
     });
   }
 
-  hasRegisteredRoute(route: string): boolean {
+  /**
+   * Does this process already hold the closures that keep (route, userKey)
+   * fresh? The read path asks before serving a baked artifact — a `false`
+   * answer costs a full re-render to build those closures.
+   *
+   * Loaders are checked by exact key, not by route: `bake='user'` routes
+   * register one loader per user, and answering `true` for a user who has
+   * none would serve them a cached artifact and never register them, leaving
+   * their variant unrevalidated. Live lists stay a route-level scan because
+   * that is how they are registered.
+   *
+   * Scanning live lists ALONE was a bug: a page whose live fields are scalar
+   * LiveProps — which is every page feeding an island through a
+   * `target: 'store'` field — never reported as registered, so it re-rendered
+   * on every request and its artifact was written and then ignored.
+   */
+  hasRegisteredRoute(route: string, userKey?: string): boolean {
+    if (this.loaderTargets.has(loaderKey(route, userKey))) return true;
     for (const target of this.liveListTargets.values()) {
       if (target.route === route) return true;
     }

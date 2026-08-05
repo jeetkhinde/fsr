@@ -1,5 +1,31 @@
 # Jag's List Plan 3b — Board Island (dnd-kit + store-target live state)
 
+> **SHIPPED 2026-08-05, but NOT as written. Read this box before the plan.**
+>
+> The plan was written 2026-07-29. Two ADRs landed on 2026-07-31 and invalidated its two
+> load-bearing constraints, so the executed work differs from the text below. The plan is kept
+> for its reasoning, not as instructions.
+>
+> - **Critical background #2 is obsolete.** It says jags-list "cannot simply adopt `kiln dev` /
+>   `kiln start`" and that switching "would delete authentication from the app", making Task 2 —
+>   replicating the CLI's asset serving inside `src/main.ts` — the plan's riskiest work.
+>   **ADR-020 (`config.server.setup` + `adapter.registerRaw`) exists precisely for better-auth's
+>   catch-all.** jags-list was migrated onto the CLI instead, `src/main.ts` is deleted, and Task 2
+>   evaporated. Islands came for free.
+> - **Critical background #7 is obsolete.** It says a 409 is unreachable — `AppError` has no
+>   conflict member and actions get no `res` — and mandates a 422 workaround. **ADR-019 added
+>   `AppError.conflict()` (409) and `(req, res)` actions.** The shipped action answers a real 409.
+> - **Task 2's manifest details were wrong even at the time.** The manifest endpoint is
+>   `/_kiln/islands.json`, served by `startKiln`, which already falls back to reading
+>   `dist/client/kiln-islands.json` — no `islandsManifestUrl` needs passing under `kiln start`.
+> - **Two framework bugs the plan could not have known about** blocked it anyway, and were fixed:
+>   `kiln build` bundled page modules for the browser, and `hasRegisteredRoute` ignored scalar
+>   live fields so island-fed pages never served their artifact. See repo-root
+>   `.memory/bugs-active.md` § 1.
+>
+> What survived intact: the "Why not `Live.list`" analysis, the object-valued store-field design,
+> and the optimistic-concurrency shape of Task 3.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the kanban board a hydrated React island with dnd-kit drag-drop and optimistic moves, whose live state arrives through the Silcrow store — so two members watching the same board see each other's moves without a reload.
