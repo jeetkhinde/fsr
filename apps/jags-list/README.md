@@ -16,6 +16,11 @@ Requires local Postgres and Redis.
     bun run bootstrap-superadmin -- you@example.com <password> "Your Name" <handle>
     bun run dev                # http://localhost:3200
 
+Forgotten the bootstrap password? Public sign-up is disabled and
+`bootstrap-superadmin` refuses once a superadmin exists, so use:
+
+    bun --env-file=.env scripts/set-password.ts you@example.com <new-password>
+
 Run `db:sync-triggers` again after any migration that adds/renames a table
 listed in `kiln.config.ts`'s `fsr.triggerTables` — it's idempotent (safe to
 re-run; a table whose trigger already exists is a no-op).
