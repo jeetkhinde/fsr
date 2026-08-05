@@ -7,10 +7,10 @@ import { ElysiaAdapter } from '@kiln/adapter-elysia';
 import { startKiln } from '@kiln/routekit';
 import { FsrStore, FsrWatcher, RedisCache, startDbNotificationPipeline } from '@kiln/engine';
 import { SQL } from 'bun';
-import { Glob } from 'bun';
-import { createServer, build as viteBuild } from 'vite';
+import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
-import { kilnVitePlugin, kilnIslandsPlugin, listIslands } from '@kiln/routekit';
+import { kilnVitePlugin, kilnIslandsPlugin } from '@kiln/routekit';
+import { buildClientAssets } from './client-build.js';
 import { runServerSetup } from './server-setup.js';
 import * as path from 'path';
 
@@ -240,17 +240,6 @@ const startCommand = defineCommand({
   },
 });
 
-async function findClientEntries(dir: string): Promise<string[]> {
-  const glob = new Glob('**/*.{ts,tsx,js,jsx}');
-  const results: string[] = [];
-  for await (const file of glob.scan({ cwd: dir, onlyFiles: true })) {
-    if (!file.startsWith('node_modules/') && !file.startsWith('.git/') && !file.startsWith('dist/')) {
-      results.push(path.join(dir, file));
-    }
-  }
-  return results;
-}
-
 const buildCommand = defineCommand({
   meta: {
     name: 'build',
@@ -258,15 +247,7 @@ const buildCommand = defineCommand({
   },
   async run() {
     consola.info('Building Kiln.js application for production...');
-    const config = await loadKilnConfig();
-
-    const pagesDir = config.pagesDir || './pages';
-    const entries = await findClientEntries(path.resolve(process.cwd(), pagesDir));
-    // kilnIslandsPlugin registers island entries itself (via its own
-    // listIslands() scan) independent of `entries` — checking only
-    // entries.length below would skip the whole Vite build, and every
-    // island with it, for an app with islands but no other client files.
-    const hasIslands = listIslands(path.join(process.cwd(), 'islands')).length > 0;
+    await loadKilnConfig();
 
     // 1. Compile TS modules
     consola.info('Compiling server TypeScript modules...');
@@ -277,28 +258,15 @@ const buildCommand = defineCommand({
     }
     consola.success('TypeScript compilation completed successfully.');
 
-    if (entries.length === 0 && !hasIslands) {
-      consola.warn('No client-side files found. Skipping client asset build.');
-      consola.success('Build completed successfully! Outputs are in dist/');
-      return;
-    }
-
-    // 2. Compile Vite production assets
-    consola.info(`Bundling ${entries.length} client-side React assets...`);
+    // 2. Compile Vite production assets. Islands are the only client entries
+    // an app has — see client-build.ts for why pages must never be among them.
     try {
-      await viteBuild({
-        base: '/_kiln/client/',
-        root: process.cwd(),
-        plugins: [react(), kilnIslandsPlugin({ appRoot: process.cwd() })],
-        build: {
-          outDir: 'dist/client',
-          emptyOutDir: true,
-          rollupOptions: {
-            input: entries,
-          },
-        },
-      });
-      consola.success('Vite client-side bundles compiled.');
+      const built = await buildClientAssets(process.cwd());
+      if (built === null) {
+        consola.warn('No islands found. Skipping client asset build.');
+      } else {
+        consola.success(`Vite client-side bundles compiled (${built.length} island(s)).`);
+      }
     } catch (err: any) {
       consola.error(`Vite compilation failed: ${err.message}`);
       process.exit(1);
