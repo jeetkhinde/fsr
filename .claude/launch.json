@@ -2,16 +2,11 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "kiln-dev",
+      "name": "jags-list-dev",
       "runtimeExecutable": "bun",
-      "runtimeArgs": ["run", "--cwd", "test-app", "dev"],
-      "port": 3000
-    },
-    {
-      "name": "kiln-start",
-      "runtimeExecutable": "sh",
-      "runtimeArgs": ["-c", "cd test-app && bunx kiln start"],
-      "port": 3000
+      "runtimeArgs": ["--env-file=.env", "../../packages/cli/dist/cli.js", "dev"],
+      "cwd": "apps/jags-list",
+      "port": 3200
     }
   ]
 }
