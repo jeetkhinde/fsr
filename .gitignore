@@ -3,6 +3,7 @@ dist/
 *.tsbuildinfo
 .DS_Store
 *.env
+.env.integration
 *.local
 # Added by code-review-graph
 .code-review-graph/

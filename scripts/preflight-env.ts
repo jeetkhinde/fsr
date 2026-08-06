@@ -3,10 +3,23 @@
  * Preflight for the integration suites.
  *
  * `bun --env-file=<path>` silently ignores a missing file, so a fresh clone or
- * a new git worktree — where the gitignored `test-app/.env` does not exist —
+ * a new git worktree — where the gitignored `.env.integration` does not exist —
  * runs the whole integration run with no DATABASE_URL and fails deep inside a
  * suite with `database "<unix-user>" does not exist`. Check up front instead
  * and say exactly what to do.
+ *
+ * The file lived at `test-app/.env` until test-app was removed, at which point
+ * the whole integration suite became unrunnable: preflight demanded a copy of
+ * `test-app/.env.example`, which had been deleted along with it. It is
+ * repo-level now because it always described the FRAMEWORK's test services,
+ * not any one app's.
+ *
+ * DO NOT rename this to `.env.test`. `bun test` sets NODE_ENV=test and Bun
+ * auto-loads `.env.test` from the cwd, so that name leaks DATABASE_URL into
+ * `bun run test:unit` — which un-skips 16 of apps/jags-list's DB suites and
+ * points them at the framework's test database, where the app's schema does
+ * not exist. Measured: 344 pass / 16 fail with the file named `.env.test`,
+ * 343 pass / 0 fail with it named anything Bun does not auto-load.
  *
  * Exit codes:
  *   0 — env file present with every required key set (services may still be down)
@@ -19,8 +32,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const ENV_FILE = 'test-app/.env';
-const EXAMPLE_FILE = 'test-app/.env.example';
+const ENV_FILE = '.env.integration';
+const EXAMPLE_FILE = '.env.integration.example';
 const REQUIRED = ['DATABASE_URL', 'REDIS_URL'] as const;
 
 /** Minimal dotenv reader — only what the check needs: KEY=value, `#` comments. */
@@ -114,4 +127,4 @@ try {
 }
 
 for (const warning of warnings) console.warn(`⚠ preflight: ${warning}`);
-if (warnings.length === 0) console.log('✔ preflight: test-app/.env present, Postgres and Redis reachable.');
+if (warnings.length === 0) console.log(`✔ preflight: ${ENV_FILE} present, Postgres and Redis reachable.`);

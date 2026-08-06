@@ -133,6 +133,35 @@ here so they are tracked as defects rather than living only in a session transcr
     `store.test.ts` (`reExecuteQuery` with parameters), which had no coverage at all before because
     the only production caller passes a null query.
 
+*   ~~**Deleting `test-app` broke `bun install`, `test:integration`, and the documented setup path**~~ —
+    **FIXED 2026-08-06** on `fix/integration-env-after-test-app-removal`. Commit `5cc48c6`
+    ("chore: remove unused files and configurations from test-app") deleted the directory but left
+    every reference to it in place:
+
+    - `package.json` still listed `test-app` in `workspaces`, so **`bun install` failed outright**
+      with `Workspace not found "test-app"` — a fresh clone or new worktree could not be set up at
+      all. This is the severe one; everything else is downstream of it.
+    - `test:integration` passed `--env-file=test-app/.env` to 9 of its 12 suites, and
+      `scripts/preflight-env.ts` hard-failed telling you to `cp test-app/.env.example
+      test-app/.env` — a file deleted in the same commit. The framework's entire DB-backed suite
+      was unrunnable, with instructions that could not be followed.
+    - `CONTRIBUTING.md`'s Setup gave that same impossible command, and `.claude/launch.json`
+      pointed both run configurations at the deleted directory.
+
+    The env file is now repo-level (`.env.integration` + `.env.integration.example`), which is
+    where it belonged all along: it always described the FRAMEWORK's test services, so tying it to
+    an app that could be deleted was the latent fault the chore commit merely exposed.
+
+    **Do not rename it to `.env.test`.** That was the first attempt here, and it silently broke
+    `test:unit`: `bun test` sets `NODE_ENV=test` and Bun auto-loads `.env.test` from the cwd, which
+    leaked `DATABASE_URL` into the unit run, un-skipped 16 of `apps/jags-list`'s DB suites and
+    pointed them at the framework's test database. Measured 344 pass / **16 fail** under that name
+    versus 343 pass / 0 fail under a name Bun does not auto-load. Recorded in both
+    `preflight-env.ts` and `.env.integration.example` so it is not re-introduced.
+
+    **The lesson:** a deletion is a refactor. Nothing verified the repo still installed afterwards —
+    `bun install` is the one command no suite covers, because every suite presumes it already ran.
+
 *   **Nothing open in this section.** Every gap surveyed on 2026-07-31 is now closed; the sequence
     that ordered them is `docs/superpowers/plans/2026-07-31-framework-fix-sequencing.md`.
 
